@@ -63,10 +63,22 @@ public sealed class GatewayServer
                 await WriteAsync(output, JsonRpc.Fail(null, JsonRpc.ParseError, $"解析失败: {e.Message}"), ct);
                 continue;
             }
+            // Register the cancellation scope BEFORE dispatch so a `cancel`
+            // arriving right after the request always finds it (spec §5.2).
+            long requestId = request.Id is { } idEl && idEl.ValueKind == JsonValueKind.Number
+                ? idEl.GetInt64()
+                : 0;
+            CancellationTokenSource? requestCts = null;
+            if (!request.IsNotification && requestId != 0)
+            {
+                requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                lock (_pending) _pending[requestId] = requestCts;
+            }
+
             // One task per request so streaming notifications and cancels
             // interleave freely; writes stay serialized. Tracked so RunAsync
             // can drain before returning (keeps contract tests deterministic).
-            handlers.Add(Task.Run(() => HandleAsync(output, request, ct), CancellationToken.None));
+            handlers.Add(Task.Run(() => HandleAsync(output, request, requestId, requestCts, ct), CancellationToken.None));
         }
         try
         {
@@ -79,11 +91,14 @@ public sealed class GatewayServer
         _log.Info("gateway exiting");
     }
 
-    private async Task HandleAsync(Stream output, JsonRpcRequest request, CancellationToken ct)
+    private async Task HandleAsync(
+        Stream output,
+        JsonRpcRequest request,
+        long requestId,
+        CancellationTokenSource? requestCts,
+        CancellationToken globalCt)
     {
-        long requestId = request.Id is { } idElem && idElem.ValueKind == JsonValueKind.Number
-            ? idElem.GetInt64()
-            : 0;
+        var ct = requestCts?.Token ?? globalCt;
         try
         {
             var response = await DispatchAsync(request, requestId, output, ct);
@@ -118,7 +133,11 @@ public sealed class GatewayServer
         }
         finally
         {
-            lock (_pending) _pending.Remove(requestId);
+            if (requestCts is not null)
+            {
+                lock (_pending) _pending.Remove(requestId);
+                requestCts.Dispose();
+            }
         }
     }
 
@@ -215,11 +234,8 @@ public sealed class GatewayServer
 
         ValidateBatch(backend, texts);
 
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        lock (_pending) _pending[requestId] = requestCts;
-
         var ctx = new TranslateContext(source, target);
-        var translated = await backend.TranslateAsync(texts, ctx, requestCts.Token);
+        var translated = await backend.TranslateAsync(texts, ctx, ct);
         return JsonRpc.Ok(request.Id, new { translations = translated, backend = backend.Id });
     }
 
@@ -232,22 +248,19 @@ public sealed class GatewayServer
         var source = GetString(request.Params, "source") ?? "auto";
         var target = GetString(request.Params, "target") ?? "zh-CN";
 
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        lock (_pending) _pending[requestId] = requestCts;
-
         var ctx = new TranslateContext(source, target);
-        var stream = backend.StreamAsync(text, ctx, requestCts.Token);
+        var stream = backend.StreamAsync(text, ctx, ct);
         if (stream is null)
         {
             // Fallback: one-shot translate returned as a single delta.
-            var single = await backend.TranslateAsync(new[] { text }, ctx, requestCts.Token);
+            var single = await backend.TranslateAsync(new[] { text }, ctx, ct);
             var full = single.Length > 0 ? single[0] : "";
             await WriteAsync(output, null, ct, notification: ("translate.delta", new { id = requestId, delta = full }));
             return JsonRpc.Ok(request.Id, new { translation = full, backend = backend.Id });
         }
 
         var accumulated = new StringBuilder();
-        await foreach (var delta in stream.WithCancellation(requestCts.Token))
+        await foreach (var delta in stream.WithCancellation(ct))
         {
             accumulated.Append(delta);
             await WriteAsync(output, null, ct, notification: ("translate.delta", new { id = requestId, delta }));

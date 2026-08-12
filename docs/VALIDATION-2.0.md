@@ -13,25 +13,26 @@ localhost:11434（qwen3-14b-64k）。
 | 项 | 1.0 基线 | 2.0 结果 |
 |---|---|---|
 | strict TypeScript | 0 错误 | **0 错误** |
-| 1.0 单元测试 | 33 通过 | **33/33 保留通过**（合计 78） |
-| 1.0 冒烟断言 | 21 通过 | **21/21 保留通过**（合计 56） |
+| 1.0 单元测试 | 33 通过 | **33/33 保留通过**（合计 83） |
+| 1.0 冒烟断言 | 21 通过 | **21/21 保留通过**（合计 61） |
 
-## 2. 单元测试（§12.1）— 78 个全部通过
+## 2. 单元测试（§12.1）— 83 个全部通过
 
 - `tests/utils.test.ts` / `textFilters.test.ts` / `settings.test.ts`：1.0 原有 33 个；
 - `tests/frames.test.ts`（9）：JSON-RPC 帧编解码、分块重组、UTF-8 多字节、
   **1MB 边界（恰好 1MB 通过 / 超限拒绝）**、错误码映射；
 - `tests/rules.test.ts`（13）：域名/通配符匹配、精确优先排序、显式>默认合并、
   规则规范化、术语表渲染；
-- `tests/inline.test.ts`（6，happy-dom）：inline 文本节点分段（内联标记合并、
-  块级边界拆分）、src/dst 结构渲染、`<strong>` 标记保留、原文完整恢复；
+- `tests/inline.test.ts`（11，happy-dom）：inline 文本节点分段（内联标记合并、
+  块级边界拆分）、src/dst 结构渲染、`<strong>` 标记保留、原文完整恢复、
+  **inline 页面预算分配（超预算降级/恰好耗尽/零段降级）**；
 - `tests/migration.test.ts`（8）：schema v1→v2 迁移（只补默认值、逐字段保留）、
   **v2 文档可被 1.0 式归一化安全读取**、新 Provider 类型字段归一化、
   failoverChain 去重去幽灵、术语表归一化；
 - `tests/providers.test.ts`（9）：DeepL/Azure/Google 对固定报文的请求构造
   （端点/认证头/请求体）与响应解析、HTTP 状态→ErrorKind 映射、语言代码映射。
 
-## 3. 冒烟测试（§12.2）— 56 项断言全部通过
+## 3. 冒烟测试（§12.2）— 61 项断言全部通过
 
 `npm run smoke`（无头 Edge + mock API + 真实网关）：
 
@@ -46,16 +47,19 @@ localhost:11434（qwen3-14b-64k）。
 - **划词翻译**：悬浮按钮出现、面板译文、面板不入页面 DOM 3 项；
 - **SSE 流式**：流式端点命中、多增量到达、最终一致 3 项 + 动态节点悬停译文 2 项；
 - **导出**：双语文本载荷 1 项；
+- **取消语义（§5.3 第 5 条）**：对 2 秒慢速端点发起翻译后 400ms 恢复原文——
+  整个慢速窗口内零双语块渲染、页面保持 idle 无 pending、原文完好 4 项；
 - **网关与故障转移**：host-status 检测、native-host 经真实 .NET 网关翻译
   （`[gw]` 报文）、无失败、故障转移（未安装 host → 回退 mock 成功）、
   错误日志记录、Popup 实际提供方提示 8 项。
 
-## 4. 网关契约测试（§12.1/§12.3）— 27 + 9 通过
+## 4. 网关契约测试（§12.1/§12.3）— 28 + 9 通过
 
-- `dotnet test native-host/PolyPage.slnx`：27 个 xunit 契约测试（帧编解码含
+- `dotnet test native-host/PolyPage.slnx`：28 个 xunit 契约测试（帧编解码含
   1MB 边界、ping/capabilities/translate/backends.list/health 路由、错误码映射、
-  批量上限拒绝、未知后端/未知方法、流式 delta 通知序列、HttpBackend 对
-  HttpListener 桩的报文构造/路径解析/500→server 映射）；
+  批量上限拒绝、未知后端/未知方法、流式 delta 通知序列、**cancel 中止进行中
+  请求（后端 CancellationToken 真实触发）**、HttpBackend 对 HttpListener 桩的
+  报文构造/路径解析/500→server 映射）；
 - `node scripts/gateway-contract-test.mjs`：启动**真实发布的单文件网关进程**，
   经真实 stdio Native Messaging 帧验证 ping / capabilities / translate /
   backends.list / health / 超批拒绝 / 未知方法 共 **9 项通过**。
@@ -107,4 +111,11 @@ root 时等价于一次 querySelectorAll），1.0 全部扫描/翻译断言在�
    （detectRecycledNodes / applyViewportBudget），未纳入无头冒烟（需要可滚动
    长页与真实 IntersectionObserver 时序，属手动验证项）；
 2. Firefox/Safari、PDF/OCR/字幕按 2.0 非目标不实现（§4）；
-3. 分块幂等续译（SW 休眠场景）按 §13 记为 2.1 备选，2.0 以端口保活覆盖。
+3. 分块幂等续译（SW 休眠场景）按 §13 记为 2.1 备选，2.0 以端口保活覆盖；
+4. 取消语义（§5.3 第 5 条）：恢复原文/模式切换时内容脚本发送
+   `cancel-translations`，后台按 tab 中止在途批次（批次按 provider+tab 分组，
+   不波及其他标签页），native-host Provider 将 abort 转为网关 `cancel`
+   通知；由冒烟「取消语义」阶段与网关契约 cancel 用例共同覆盖；
+5. P2（尽力）完成情况：站点规则导入/导出 ✔、划词复制到剪贴板 ✔；划词发音、
+   快捷键重复上一次划词、页面语言自动检测、质量反馈入口、llama.cpp 专属样例
+   未实现（llama.cpp server 可用现成 HttpBackend 以模板方式接入）。

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { INLINE_DST_CLASS, INLINE_SRC_CLASS } from '../src/shared/constants';
-import { collectInlineSegments, renderInlineSegment } from '../src/content/inline';
+import { allocateInlineBudget, collectInlineSegments, renderInlineSegment } from '../src/content/inline';
 
 function makeContainer(html: string): HTMLElement {
   const host = document.createElement('div');
@@ -92,5 +92,36 @@ describe('renderInlineSegment', () => {
     p.replaceChildren(...saved);
     expect(p.textContent).toBe('Some original content here.');
     expect(p.querySelectorAll('span')).toHaveLength(0);
+  });
+});
+describe('allocateInlineBudget (spec 2.0 §7.2 item 3)', () => {
+  it('accepts everything when the budget is large enough', () => {
+    const plan = allocateInlineBudget([1, 2, 3], 300);
+    expect(plan.accepted).toEqual([true, true, true]);
+    expect(plan.downgraded).toBe(false);
+  });
+
+  it('degrades the first entry that exceeds the remaining budget', () => {
+    const plan = allocateInlineBudget([2, 5, 1], 6);
+    expect(plan.accepted).toEqual([true, false, true]);
+    expect(plan.downgraded).toBe(true);
+  });
+
+  it('later entries still fit after an earlier degrade', () => {
+    const plan = allocateInlineBudget([10, 1], 5);
+    expect(plan.accepted).toEqual([false, true]);
+    expect(plan.downgraded).toBe(true);
+  });
+
+  it('treats zero-segment entries as degraded without the over-budget hint', () => {
+    const plan = allocateInlineBudget([0, 1], 300);
+    expect(plan.accepted).toEqual([false, true]);
+    expect(plan.downgraded).toBe(false);
+  });
+
+  it('accepts an entry that exactly exhausts the budget', () => {
+    const plan = allocateInlineBudget([3, 1], 3);
+    expect(plan.accepted).toEqual([true, false]);
+    expect(plan.downgraded).toBe(true);
   });
 });

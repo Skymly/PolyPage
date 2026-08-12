@@ -43,6 +43,8 @@ export type RuntimeMessage =
   | { type: 'clear-error-log'; v?: number }
   /** 2.0: content script reports its frame's page state. */
   | { type: 'report-frame-state'; v?: number; state: PageState }
+  /** 2.0 (spec §5.3 item 5): abort in-flight translations for this tab. */
+  | { type: 'cancel-translations'; v?: number }
   /** 2.0: popup asks for aggregated per-frame states of a tab. */
   | { type: 'get-frame-states'; v?: number; tabId?: number }
   /** 2.0: gateway installation/health probe. */
@@ -65,6 +67,7 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'get-error-log' } ? { entries: ErrorLogEntry[] } :
   M extends { type: 'clear-error-log' } ? { ok: true } :
   M extends { type: 'report-frame-state' } ? { ok: true } :
+  M extends { type: 'cancel-translations' } ? { ok: true } :
   M extends { type: 'get-frame-states' } ? { frames: FrameStateEntry[] } :
   M extends { type: 'host-status' } ? { installed: boolean; version?: string; error?: string } :
   M extends { type: 'get-provider-stats' } ? { stats: Record<string, ProviderStats> } :

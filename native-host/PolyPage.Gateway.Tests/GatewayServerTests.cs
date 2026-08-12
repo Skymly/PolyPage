@@ -36,6 +36,34 @@ internal sealed class FakeBackend : IGatewayBackend
         => Task.FromResult(new BackendHealth(true, "fake ok"));
 }
 
+/// <summary>Backend that blocks until cancelled (for cancel-semantics tests).</summary>
+internal sealed class BlockingBackend : IGatewayBackend
+{
+    public string Id => "blocking";
+    public string Name => "Blocking backend";
+    public string Kind => "blocking";
+    public BackendCapabilities Capabilities => new(false, 10, 6000);
+    public bool WasCancelled { get; private set; }
+
+    public async Task<string[]> TranslateAsync(IReadOnlyList<string> texts, TranslateContext ctx, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(30000, ct);
+            return texts.ToArray();
+        }
+        catch (OperationCanceledException)
+        {
+            WasCancelled = true;
+            throw;
+        }
+    }
+
+    public IAsyncEnumerable<string>? StreamAsync(string text, TranslateContext ctx, CancellationToken ct) => null;
+
+    public Task<BackendHealth> ProbeAsync(CancellationToken ct) => Task.FromResult(new BackendHealth(true, "ok"));
+}
+
 internal static class Pipe
 {
     public static byte[] Frame(object message)
@@ -180,6 +208,38 @@ public class GatewayServerTests
         var final = responses.Single(
             r => r.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number && id.GetInt32() == 9);
         Assert.Equal("aa bb ", final.GetProperty("result").GetProperty("translation").GetString());
+    }
+
+    [Fact]
+    public async Task CancelAbortsAnInProgressTranslate()
+    {
+        // A backend that blocks until its cancellation token fires.
+        var blocking = new BlockingBackend();
+        using var log = new GatewayLog();
+        var server = new GatewayServer(new IGatewayBackend[] { blocking }, blocking.Id, log);
+
+        var input = new MemoryStream();
+        input.Write(Pipe.Frame(new { jsonrpc = "2.0", id = 21, method = "translate", @params = new { texts = new[] { "x" } } }));
+        input.Write(Pipe.Frame(new { jsonrpc = "2.0", id = 22, method = "cancel", @params = new { id = 21 } }));
+        input.Position = 0;
+        var output = new MemoryStream();
+
+        await server.RunAsync(input, output, CancellationToken.None);
+
+        output.Position = 0;
+        var responses = new List<System.Text.Json.JsonElement>();
+        for (; ; )
+        {
+            var frame = await NativeMessaging.ReadFrameAsync(output, CancellationToken.None);
+            if (frame is null) break;
+            responses.Add(System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(frame));
+        }
+
+        var cancelled = responses.FirstOrDefault(
+            r => r.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.Number && id.GetInt32() == 21);
+        Assert.True(cancelled.TryGetProperty("error", out var error), "translate #21 should have been cancelled");
+        Assert.Equal(RpcCodes.Timeout, error.GetProperty("code").GetInt32());
+        Assert.True(blocking.WasCancelled, "backend cancellation token must fire");
     }
 
     [Fact]

@@ -120,3 +120,29 @@ export function renderInlineSegment(segment: InlineSegment, doc: Document = docu
   spans[spans.length - 1].insertAdjacentElement('afterend', dst);
   return { key: segment.key, dstEl: dst };
 }
+export interface InlineBudgetPlan {
+  /** Per entry (document order): true = inline allowed, false = degrade. */
+  accepted: boolean[];
+  /** True when at least one over-budget entry was degraded (popup hint). */
+  downgraded: boolean;
+}
+
+/**
+ * Allocate the per-page inline budget across entries (spec 2.0 §7.2 item 3).
+ * Entries are processed in document order; an entry whose segment count does
+ * not fit the remaining budget degrades to paragraph-level bilingual. Zero
+ * segment entries always degrade (without counting as "over budget").
+ */
+export function allocateInlineBudget(segmentCounts: number[], budget: number): InlineBudgetPlan {
+  let remaining = budget;
+  let downgraded = false;
+  const accepted = segmentCounts.map((count) => {
+    if (count > 0 && count <= remaining) {
+      remaining -= count;
+      return true;
+    }
+    if (count > 0) downgraded = true;
+    return false;
+  });
+  return { accepted, downgraded };
+}

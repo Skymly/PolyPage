@@ -27,7 +27,7 @@ import type {
 } from '../shared/types';
 import { hashText } from '../shared/utils';
 import type { ExportEntry } from '../messaging/messages';
-import { renderInlineSegment, collectInlineSegments } from './inline';
+import { allocateInlineBudget, collectInlineSegments, renderInlineSegment } from './inline';
 import { ensureStylesFor, renderEntry } from './renderer';
 import { scanTranslatableNodesWithRule } from './scanner';
 import { Tooltip } from './tooltip';
@@ -233,6 +233,20 @@ export class PageTranslator {
       return;
     }
     const previous = this._mode;
+    // Mode switches abort unfinished batches (spec 2.0 §5.3 item 5); pending
+    // entries become idle again and are re-fetched below.
+    this.cancelInflight();
+    for (const entry of this.entries.values()) {
+      if (entry.status === 'pending') {
+        entry.status = 'idle';
+        entry.error = null;
+      }
+      if (entry.inlineSegments) {
+        for (const seg of entry.inlineSegments) {
+          if (seg.status === 'pending') seg.status = 'idle';
+        }
+      }
+    }
     this._mode = mode;
     if (mode === 'inline') {
       await this.translateInline();
@@ -259,12 +273,34 @@ export class PageTranslator {
     this._mode = null;
     this._inlineDowngraded = false;
     this.tooltip.hideNow();
+    this.cancelInflight();
     for (const entry of this.entries.values()) {
       entry.inlineSegments = null;
       entry.inlineDegraded = false;
+      if (entry.status === 'pending') {
+        entry.status = 'idle';
+        entry.error = null;
+      }
     }
     this.renderAll();
     this.report();
+  }
+
+  /**
+   * Ask the background to abort this tab's unfinished translation batches
+   * (spec 2.0 §5.3 item 5). The native-host provider turns the abort into a
+   * gateway `cancel`; HTTP providers abort the fetch.
+   */
+  private cancelInflight(): void {
+    const hasPending = [...this.entries.values()].some(
+      (e) =>
+        e.status === 'pending' ||
+        (e.inlineSegments ?? []).some((s) => s.status === 'pending'),
+    );
+    if (!hasPending) return;
+    sendRuntime({ type: 'cancel-translations' }).catch(() => {
+      /* background may be restarting; requests time out on their own */
+    });
   }
 
   async retryFailed(): Promise<void> {
@@ -336,25 +372,31 @@ export class PageTranslator {
 
   private async translateInline(): Promise<void> {
     this._mode = 'inline';
-    let budget = this.config.inlineBudget;
 
+    // Phase 1: compute segments for entries not yet segmented.
+    const pendingEntries: { entry: NodeEntry; segments: ReturnType<typeof collectInlineSegments> }[] = [];
     for (const entry of this.entries.values()) {
       if (entry.inlineSegments || entry.inlineDegraded) continue;
-      const segments = collectInlineSegments(entry.el, entry.id);
-      if (segments.length === 0) {
+      pendingEntries.push({ entry, segments: collectInlineSegments(entry.el, entry.id) });
+    }
+
+    // Phase 2: allocate the page inline budget (spec 2.0 §7.2 item 3).
+    const plan = allocateInlineBudget(
+      pendingEntries.map((p) => p.segments.length),
+      this.config.inlineBudget,
+    );
+    if (plan.downgraded) this._inlineDowngraded = true;
+
+    pendingEntries.forEach(({ entry, segments }, index) => {
+      if (!plan.accepted[index]) {
         entry.inlineDegraded = true;
-        continue;
+        return;
       }
-      if (segments.length > budget) {
-        entry.inlineDegraded = true;
-        this._inlineDowngraded = true;
-        continue;
-      }
-      budget -= segments.length;
       // Deep clone: inline rendering mutates text nodes INSIDE nested inline
       // elements (strong/a/...), so shallow node references would restore
       // mutated content. Clones keep the pristine original tree.
-      entry.originalNodes = entry.originalNodes ?? Array.from(entry.el.childNodes, (n) => n.cloneNode(true) as ChildNode);
+      entry.originalNodes =
+        entry.originalNodes ?? Array.from(entry.el.childNodes, (n) => n.cloneNode(true) as ChildNode);
       entry.inlineSegments = segments.map((s) => ({
         key: s.key,
         text: s.text,
@@ -367,10 +409,9 @@ export class PageTranslator {
       ensureStylesFor(entry.el);
       segments.forEach((segment, i) => {
         const rendered = renderInlineSegment(segment);
-        const state = entry.inlineSegments![i];
-        state.dstEl = rendered.dstEl;
+        entry.inlineSegments![i].dstEl = rendered.dstEl;
       });
-    }
+    });
 
     this.renderAll();
 
@@ -413,6 +454,7 @@ export class PageTranslator {
           items,
           domain: location.hostname,
         });
+        if (!this._active) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;
         for (const task of chunk) {
           const text = response.results[task.segment.key];
@@ -434,6 +476,7 @@ export class PageTranslator {
         }
         this.lastError = message;
       }
+      if (!this._active) return;
       this.renderAll();
     }
   }
@@ -482,6 +525,7 @@ export class PageTranslator {
           items,
           domain: location.hostname,
         });
+        if (!this._active) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;
         for (const entry of chunk) {
           const text = response.results[entry.id];
@@ -503,6 +547,9 @@ export class PageTranslator {
         }
         this.lastError = message;
       }
+      // The page may have been restored (batches cancelled) while awaiting;
+      // never apply stale results to an inactive page.
+      if (!this._active) return;
       this.renderAll();
       this.refreshTooltipForChunk(chunk);
       this.report();

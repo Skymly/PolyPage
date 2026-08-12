@@ -147,6 +147,16 @@ function startMockApi() {
         return res.end('{}');
       }
 
+      // 2.0: deliberately slow endpoint for the cancel-on-restore phase.
+      if ((req.url ?? '').startsWith('/slow-translate')) {
+        const slowTexts = Array.isArray(parsed.q) ? parsed.q : [];
+        await sleep(2000);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(
+          JSON.stringify({ data: { translations: slowTexts.map((t) => `[slow] ${t}`) } }),
+        );
+      }
+
       // 2.0: gateway HttpBackend endpoint (custom JSON shape).
       if ((req.url ?? '').startsWith('/custom-translate')) {
         const texts = Array.isArray(parsed.q) ? parsed.q : [];
@@ -1056,6 +1066,67 @@ try {
     `entries=${exportEntries.length}`,
   );
   await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:restore' }`), 5000);
+  /* ================ 2.0 cancel on restore (spec §5.3 item 5) ================= */
+
+  const slowSettings = settingsPayload({
+    activeProviderId: 'slow',
+    providers: [
+      {
+        id: 'slow',
+        name: 'Slow HTTP',
+        type: 'custom-http',
+        baseUrl: `http://127.0.0.1:${PORT_API}/slow-translate`,
+        apiKey: '',
+        model: '',
+        sourceLanguage: 'English',
+        targetLanguage: 'Chinese',
+        timeoutMs: 15000,
+        maxBatchItems: 10,
+        maxBatchChars: 6000,
+        systemPrompt: '',
+        userPromptTemplate: '',
+        temperature: 0.2,
+        maxTokens: 4096,
+        headers: {},
+        enabled: true,
+        method: 'POST',
+        bodyTemplate: '{ "q": {{texts}}, "from": "{{sourceLanguage}}", "to": "{{targetLanguage}}" }',
+        responsePath: 'data.translations',
+        apiKeyPlacement: 'header',
+        apiKeyParamName: 'Authorization',
+      },
+    ],
+  });
+  check('slow provider saved', await saveSettingsThroughExtension(slowSettings));
+  await page.eval(`location.reload()`);
+  await sleep(1200);
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:translate' }`), 5000);
+  await sleep(400); // batch now in flight against the 2s-slow endpoint
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:restore' }`), 5000);
+
+  // Watch the whole slow window: no bilingual block may ever appear.
+  let maxBlocksDuringSlowWindow = 0;
+  const slowDeadline = Date.now() + 3500;
+  while (Date.now() < slowDeadline) {
+    const n = await page.eval(`document.querySelectorAll('.wt-bilingual-block').length`);
+    maxBlocksDuringSlowWindow = Math.max(maxBlocksDuringSlowWindow, n);
+    await sleep(150);
+  }
+  check(
+    'restore cancels in-flight translation (no blocks ever rendered)',
+    maxBlocksDuringSlowWindow === 0,
+    `max=${maxBlocksDuringSlowWindow}`,
+  );
+  const cancelledState = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`));
+  check(
+    'cancelled page stays idle with no pending',
+    cancelledState?.active === false && (cancelledState?.pending ?? 1) === 0,
+    JSON.stringify(cancelledState),
+  );
+  const bodyAfterCancel = await page.eval(`document.getElementById('p1').textContent`);
+  check('original text intact after cancel', bodyAfterCancel === P1, JSON.stringify(bodyAfterCancel));
+  check('settings restored', await saveSettingsThroughExtension(settingsPayload({})));
+
   /* ====================== 2.0 native-host gateway + failover ================= */
 
   if (gatewayInstalled) {

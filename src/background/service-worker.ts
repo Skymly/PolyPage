@@ -140,7 +140,43 @@ interface QueueItem {
   text: string;
   providerId: string;
   domain?: string;
+  /** Originating tab (used for cancel semantics, spec 2.0 §5.3 item 5). */
+  tabId?: number;
   resolve: (r: { translated?: string; error?: { kind: ErrorKind; message: string } }) => void;
+}
+
+/** In-flight batch controllers per tab so restore/mode-switch can cancel. */
+const inflightByTab = new Map<number, Set<AbortController>>();
+
+function registerInflight(tabId: number | undefined, controller: AbortController): void {
+  if (tabId === undefined) return;
+  let set = inflightByTab.get(tabId);
+  if (!set) {
+    set = new Set();
+    inflightByTab.set(tabId, set);
+  }
+  set.add(controller);
+}
+
+function unregisterInflight(tabId: number | undefined, controller: AbortController): void {
+  if (tabId === undefined) return;
+  const set = inflightByTab.get(tabId);
+  if (!set) return;
+  set.delete(controller);
+  if (set.size === 0) inflightByTab.delete(tabId);
+}
+
+function cancelTabTranslations(tabId: number): void {
+  const set = inflightByTab.get(tabId);
+  if (!set) return;
+  inflightByTab.delete(tabId);
+  for (const controller of set) {
+    try {
+      controller.abort();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 
@@ -153,9 +189,10 @@ function enqueue(
   providerId: string,
   text: string,
   domain?: string,
+  tabId?: number,
 ): Promise<{ translated?: string; error?: { kind: ErrorKind; message: string } }> {
   return new Promise((resolve) => {
-    queue.push({ text, providerId, domain, resolve });
+    queue.push({ text, providerId, domain, tabId, resolve });
     if (!flushTimer) {
       flushTimer = setTimeout(() => {
         flushTimer = null;
@@ -199,16 +236,20 @@ async function flushQueue(): Promise<void> {
   if (items.length === 0) return;
   const settings = await getSettings(true);
 
-  // Group by provider so each provider gets its own batches.
+  // Group by provider AND tab so each batch belongs to exactly one cancel
+  // scope (spec 2.0 §5.3 item 5: cancel must not hit unrelated tabs).
   const groups = new Map<string, QueueItem[]>();
   for (const item of items) {
-    const list = groups.get(item.providerId) ?? [];
+    const key = `${item.providerId}|${item.tabId ?? -1}`;
+    const list = groups.get(key) ?? [];
     list.push(item);
-    groups.set(item.providerId, list);
+    groups.set(key, list);
   }
 
   const jobs: Promise<void>[] = [];
-  for (const [providerId, group] of groups) {
+  for (const group of groups.values()) {
+    const providerId = group[0].providerId;
+    const groupTabId = group[0].tabId;
     const provider = settings.providers.find((p) => p.id === providerId);
     if (!provider || !isProviderConfigured(provider)) {
       const message = !provider
@@ -266,7 +307,7 @@ async function flushQueue(): Promise<void> {
     if (batch.length > 0) batches.push(batch);
 
     for (const b of batches) {
-      jobs.push(runBatchWithFailover(settings, provider, b));
+      jobs.push(runBatchWithFailover(settings, provider, b, groupTabId));
     }
   }
 
@@ -289,6 +330,7 @@ async function runBatchWithFailover(
   settings: Settings,
   primary: ProviderConfig,
   batch: QueueItem[],
+  tabId?: number,
 ): Promise<void> {
   const chain = buildFailoverChain(settings, primary.id);
   const attempts: ProviderConfig[] = [primary];
@@ -299,7 +341,7 @@ async function runBatchWithFailover(
 
   for (let i = 0; i < attempts.length; i++) {
     const provider = attempts[i];
-    const error = await runBatch(settings, provider, batch);
+    const error = await runBatch(settings, provider, batch, tabId);
     if (!error) {
       if (i > 0) {
         lastFailoverInfo = { providerName: provider.name };
@@ -335,6 +377,7 @@ async function runBatch(
   settings: Settings,
   providerConfig: ProviderConfig,
   batch: QueueItem[],
+  tabId?: number,
 ): Promise<{ kind: ErrorKind; message: string } | null> {
   let instance: TranslationProvider;
   try {
@@ -346,11 +389,13 @@ async function runBatch(
     return null;
   }
   const started = Date.now();
+  const controller = new AbortController();
+  registerInflight(tabId, controller);
   try {
     const texts = batch.map((b) => b.text);
     const ctx = buildContext(settings, providerConfig, batch[0]?.domain);
     const { source, target } = effectiveLanguages(settings, providerConfig);
-    const translated = await instance.translateTexts(texts, ctx, new AbortController().signal);
+    const translated = await instance.translateTexts(texts, ctx, controller.signal);
     const successes: { text: string; translated: string }[] = [];
     batch.forEach((item, i) => {
       const t = translated[i];
@@ -374,17 +419,23 @@ async function runBatch(
     const err = toProviderError(e) as ProviderError;
     recordStat(providerConfig.id, false, Date.now() - started, err.message);
     return { kind: err.kind, message: err.message };
+  } finally {
+    unregisterInflight(tabId, controller);
   }
 }
 
 /* ------------------------------- message router ------------------------------ */
 
-async function handleTranslate(items: TranslationItem[], domain?: string): Promise<TranslateResults> {
+async function handleTranslate(
+  items: TranslationItem[],
+  domain?: string,
+  tabId?: number,
+): Promise<TranslateResults> {
   const settings = await getSettings();
   const activeProviderId = settings.activeProviderId;
   const settled = await Promise.all(
     items.map(async (item) => {
-      const outcome = await enqueue(activeProviderId, item.text, domain);
+      const outcome = await enqueue(activeProviderId, item.text, domain, tabId);
       return { key: item.key, outcome };
     }),
   );
@@ -437,6 +488,7 @@ function recordFrameState(tabId: number | undefined, frameId: number | undefined
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   frameStates.delete(tabId);
+  cancelTabTranslations(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -593,11 +645,20 @@ chrome.runtime.onMessage.addListener(
       try {
         switch (message.type) {
           case 'translate':
-            sendResponse(await handleTranslate(message.items, message.domain));
+            sendResponse(await handleTranslate(message.items, message.domain, sender.tab?.id));
+            break;
+          case 'cancel-translations':
+            if (sender.tab?.id !== undefined) cancelTabTranslations(sender.tab.id);
+            sendResponse({ ok: true });
             break;
           case 'translate-selection': {
             const settings = await getSettings();
-            const outcome = await enqueue(settings.activeProviderId, message.text, message.domain);
+            const outcome = await enqueue(
+              settings.activeProviderId,
+              message.text,
+              message.domain,
+              sender.tab?.id,
+            );
             if (outcome.translated !== undefined) {
               sendResponse({ ok: true, translated: outcome.translated });
             } else {

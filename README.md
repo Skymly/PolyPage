@@ -52,10 +52,10 @@
 ├── scripts/
 │   ├── build.mjs               # 4 段 vite 构建 + dist 校验
 │   ├── generate-icons.mjs      # 零依赖 PNG 图标生成
-│   ├── smoke-test.mjs          # 无头 Edge 端到端冒烟（56 项断言）
+│   ├── smoke-test.mjs          # 无头 Edge 端到端冒烟（61 项断言）
 │   ├── gateway-contract-test.mjs   # 真实网关 stdio 契约测试
 │   └── gateway-ollama-check.mjs    # 真实 Ollama 经网关联调
-├── tests/                      # vitest 单元测试（78 个）
+├── tests/                      # vitest 单元测试（83 个）
 └── docs/VALIDATION-2.0.md      # 里程碑验证记录
 ```
 
@@ -71,7 +71,7 @@ npm run verify       # typecheck + test + build
 
 # 网关
 dotnet build native-host/PolyPage.slnx
-dotnet test  native-host/PolyPage.slnx                     # 27 个契约测试
+dotnet test  native-host/PolyPage.slnx                     # 28 个契约测试
 dotnet publish native-host/PolyPage.Gateway -c Release -r win-x64
 node scripts/gateway-contract-test.mjs                     # 真实进程 stdio 协议测试
 ```

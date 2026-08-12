@@ -303,6 +303,32 @@ try {
     `chrome.runtime.sendMessage({ type: 'save-settings', settings: ${settingsJson} })`,
   );
   check('save-settings accepted', saveRes?.ok === true, JSON.stringify(saveRes));
+
+  // Boot the popup page inside the extension and verify its UI initializes.
+  const popupUrl = `chrome-extension://${extensionId}/popup/popup.html`;
+  const versionForPopup = await fetchJson('http://127.0.0.1:9222/json/version');
+  const browserCdp2 = await CDP.connect(versionForPopup.webSocketDebuggerUrl);
+  await browserCdp2.send('Target.createTarget', { url: popupUrl });
+  browserCdp2.close();
+  const popupTarget = await waitForTarget(
+    9222,
+    (t) => t.type === 'page' && t.url.startsWith(popupUrl),
+    'popup page',
+  );
+  const popup = await CDP.connect(popupTarget.webSocketDebuggerUrl);
+  await popup.send('Runtime.enable');
+  let popupModes = 0;
+  for (let i = 0; i < 20; i++) {
+    popupModes = await popup.eval(`document.querySelectorAll('.mode-item').length`);
+    if (popupModes === 5) break;
+    await sleep(300);
+  }
+  check('popup UI initialized (5 display modes rendered)', popupModes === 5, `modes=${popupModes}`);
+  const popupProvider = await popup.eval(
+    `document.getElementById('info-provider')?.textContent ?? ''`,
+  );
+  check('popup shows active provider', popupProvider.includes('Mock LLM'), popupProvider);
+  popup.close();
   const summary = await ext.eval(
     `chrome.runtime.sendMessage({ type: 'get-settings-summary' })`,
   );

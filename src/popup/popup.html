@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PolyPage</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name">PolyPage</span>
+      </div>
+      <span id="status-pill" class="pill pill-idle">未翻译</span>
+    </header>
+
+    <div id="unsupported" class="notice hidden">
+      此页面不支持翻译（浏览器内部页面或文件页面）。
+    </div>
+    <div id="blacklisted" class="notice hidden">此网站已被加入翻译黑名单。</div>
+
+    <main id="main">
+      <div class="actions">
+        <button id="btn-translate" class="btn btn-primary">翻译此页</button>
+        <button id="btn-restore" class="btn">恢复原文</button>
+      </div>
+
+      <section class="section">
+        <div class="section-title">显示模式</div>
+        <div id="mode-list" class="mode-list"></div>
+      </section>
+
+      <div class="actions actions-secondary">
+        <button id="btn-retry" class="btn btn-small">重试失败</button>
+        <button id="btn-rescan" class="btn btn-small">重新扫描</button>
+      </div>
+
+      <section class="section info">
+        <div class="info-row"><span>翻译服务</span><b id="info-provider">—</b></div>
+        <div class="info-row"><span>目标语言</span><b id="info-target">—</b></div>
+        <div class="info-row"><span>进度</span><b id="info-progress">—</b></div>
+        <div id="info-error" class="info-error hidden"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a href="#" id="open-options">打开设置</a>
+      <span class="version">v1.0.0</span>
+    </footer>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

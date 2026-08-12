@@ -1,0 +1,50 @@
+/* Styles for nodes the extension inserts into / marks on the page.
+   All selectors are namespaced to avoid affecting page styles. */
+
+/* Bilingual translation block inserted next to the original (spec §7.5). */
+.wt-bilingual-block {
+  display: block;
+  margin: 0.35em 0 0.55em;
+  padding: 0.15em 0.6em;
+  border-left: 3px solid rgba(79, 70, 229, 0.55);
+  color: rgba(30, 32, 40, 0.92);
+  font-size: 0.95em;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(79, 70, 229, 0.05);
+  border-radius: 2px;
+}
+
+/* Translate-in-progress states. */
+.wt-pending {
+  opacity: 0.65;
+}
+.wt-bilingual-block.wt-bilingual-pending {
+  color: rgba(100, 105, 120, 0.85);
+  font-style: italic;
+}
+
+/* Failed states. */
+.wt-error {
+  outline: 1px dashed rgba(220, 80, 80, 0.55);
+  outline-offset: 2px;
+}
+.wt-bilingual-block.wt-bilingual-error {
+  border-left-color: rgba(220, 80, 80, 0.75);
+  background: rgba(220, 80, 80, 0.06);
+  color: #b23b3b;
+  cursor: pointer;
+}
+
+/* Dark pages: keep inserted blocks readable. */
+@media (prefers-color-scheme: dark) {
+  .wt-bilingual-block {
+    color: rgba(228, 230, 235, 0.92);
+    background: rgba(129, 121, 255, 0.09);
+  }
+  .wt-bilingual-block.wt-bilingual-error {
+    color: #ff9c9c;
+    background: rgba(220, 80, 80, 0.1);
+  }
+}

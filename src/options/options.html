@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PolyPage 设置</title>
+    <link rel="stylesheet" href="./options.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-dot"></span> PolyPage</div>
+        <nav>
+          <a href="#general" class="nav-link">常规</a>
+          <a href="#providers" class="nav-link">翻译服务</a>
+          <a href="#blacklist" class="nav-link">黑名单</a>
+          <a href="#cache" class="nav-link">缓存</a>
+          <a href="#errorlog" class="nav-link">错误日志</a>
+          <a href="#backup" class="nav-link">导入 / 导出</a>
+          <a href="#shortcuts" class="nav-link">快捷键</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <div id="toast" class="toast hidden"></div>
+
+        <section id="general" class="card">
+          <h2>常规</h2>
+          <div class="field-row">
+            <label for="default-mode">默认显示模式</label>
+            <select id="default-mode">
+              <option value="bilingual">双语对照（原文下方插入译文）</option>
+              <option value="translated">译文模式</option>
+              <option value="translated_hover_original">译文 + 悬停原文</option>
+              <option value="original_hover_translated">原文 + 悬停译文</option>
+              <option value="original">原文模式</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="auto-translate" />
+              打开页面时自动翻译（黑名单网站除外）
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="cache-enabled" />
+              启用翻译缓存（相同内容不重复请求）
+            </label>
+          </div>
+          <div class="field-row">
+            <label for="default-source">默认源语言</label>
+            <input id="default-source" type="text" placeholder="auto" />
+          </div>
+          <div class="field-row">
+            <label for="default-target">默认目标语言</label>
+            <input id="default-target" type="text" placeholder="简体中文" />
+          </div>
+          <div class="field-row">
+            <label for="min-text-length">最短翻译文本长度（字符）</label>
+            <input id="min-text-length" type="number" min="1" max="200" step="1" />
+          </div>
+        </section>
+
+        <section id="providers" class="card">
+          <h2>翻译服务（Provider）</h2>
+          <p class="hint">
+            支持 OpenAI-compatible LLM 与通用自定义 HTTP JSON API。翻译请求由后台统一发出，API Key
+            不会暴露给页面脚本。
+          </p>
+          <div id="provider-list" class="provider-list"></div>
+          <div class="btn-row">
+            <button id="add-openai" class="btn">+ OpenAI-compatible</button>
+            <button id="add-custom" class="btn">+ 自定义 HTTP API</button>
+          </div>
+
+          <div id="editor" class="editor hidden">
+            <h3 id="editor-title">编辑 Provider</h3>
+            <div class="grid">
+              <div class="field">
+                <label>名称</label>
+                <input id="f-name" type="text" />
+              </div>
+              <div class="field">
+                <label>类型</label>
+                <select id="f-type">
+                  <option value="openai-compatible">openai-compatible</option>
+                  <option value="custom-http">custom-http</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Base URL</label>
+                <input id="f-baseurl" type="text" placeholder="https://api.openai.com/v1" />
+              </div>
+              <div class="field">
+                <label>API Key</label>
+                <input id="f-apikey" type="password" placeholder="sk-..." />
+              </div>
+              <div class="field" id="field-model">
+                <label>模型</label>
+                <input id="f-model" type="text" placeholder="gpt-4o-mini" />
+              </div>
+              <div class="field">
+                <label>源语言（留空用默认）</label>
+                <input id="f-source" type="text" placeholder="auto" />
+              </div>
+              <div class="field">
+                <label>目标语言（留空用默认）</label>
+                <input id="f-target" type="text" placeholder="简体中文" />
+              </div>
+              <div class="field">
+                <label>超时（毫秒）</label>
+                <input id="f-timeout" type="number" min="1000" max="600000" step="1000" />
+              </div>
+              <div class="field">
+                <label>批量最大条数</label>
+                <input id="f-batch-items" type="number" min="1" max="100" step="1" />
+              </div>
+              <div class="field">
+                <label>批量最大字符数</label>
+                <input id="f-batch-chars" type="number" min="100" max="100000" step="100" />
+              </div>
+              <div class="field" id="field-temperature">
+                <label>temperature</label>
+                <input id="f-temperature" type="number" min="0" max="2" step="0.1" />
+              </div>
+              <div class="field" id="field-maxtokens">
+                <label>max tokens</label>
+                <input id="f-maxtokens" type="number" min="1" max="200000" step="1" />
+              </div>
+            </div>
+
+            <div class="field" id="field-system-prompt">
+              <label>System Prompt（可用变量：{{sourceLanguage}} {{targetLanguage}} {{domain}} {{glossary}}）</label>
+              <textarea id="f-system-prompt" rows="6"></textarea>
+            </div>
+            <div class="field" id="field-user-prompt">
+              <label>User Prompt 模板（变量：{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}}）</label>
+              <textarea id="f-user-prompt" rows="4"></textarea>
+            </div>
+            <div class="field">
+              <label>自定义请求头（JSON，可选）</label>
+              <textarea id="f-headers" rows="2" placeholder='{"X-Custom-Header": "value"}'></textarea>
+              <div id="headers-error" class="field-error hidden"></div>
+            </div>
+            <div class="field-row">
+              <label class="checkbox"><input type="checkbox" id="f-enabled" /> 启用</label>
+            </div>
+
+            <div id="custom-http-fields" class="hidden">
+              <h4>custom-http 专属配置</h4>
+              <div class="grid">
+                <div class="field">
+                  <label>HTTP Method</label>
+                  <select id="f-method">
+                    <option>POST</option>
+                    <option>GET</option>
+                    <option>PUT</option>
+                    <option>PATCH</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>API Key 位置</label>
+                  <select id="f-key-placement">
+                    <option value="header">Header</option>
+                    <option value="query">Query 参数</option>
+                    <option value="body">Body 字段</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>API Key 字段名</label>
+                  <input id="f-key-name" type="text" placeholder="Authorization" />
+                </div>
+                <div class="field">
+                  <label>响应字段路径（如 data.translations）</label>
+                  <input id="f-response-path" type="text" placeholder="data.translations" />
+                </div>
+              </div>
+              <div class="field">
+                <label
+                  >Body 模板（JSON；变量：{{texts}} 数组 / {{text}} 单条 / {{sourceLanguage}}
+                  {{targetLanguage}} {{model}} {{apiKey}}）</label
+                >
+                <textarea id="f-body-template" rows="5"></textarea>
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button id="test-provider" class="btn">测试连接</button>
+              <span id="test-result" class="test-result"></span>
+            </div>
+          </div>
+        </section>
+
+        <section id="blacklist" class="card">
+          <h2>敏感网站黑名单</h2>
+          <p class="hint">每行一个域名（如 mail.example.com），这些网站上不会执行翻译。</p>
+          <textarea id="blacklist-input" rows="5" placeholder="bank.example.com&#10;mail.example.com"></textarea>
+        </section>
+
+        <div class="save-bar">
+          <button id="save" class="btn btn-primary">保存全部设置</button>
+          <span id="save-hint" class="hint"></span>
+        </div>
+
+        <section id="cache" class="card">
+          <h2>翻译缓存</h2>
+          <p class="hint">缓存按「Provider + 语言 + 文本」存储在本机 chrome.storage.local。</p>
+          <div class="btn-row">
+            <span id="cache-count" class="cache-count">—</span>
+            <button id="clear-cache" class="btn btn-danger">清空缓存</button>
+          </div>
+        </section>
+
+        <section id="errorlog" class="card">
+          <h2>错误日志</h2>
+          <div class="btn-row">
+            <button id="refresh-log" class="btn">刷新</button>
+            <button id="clear-log" class="btn btn-danger">清空</button>
+          </div>
+          <div id="error-log" class="error-log"></div>
+        </section>
+
+        <section id="backup" class="card">
+          <h2>导入 / 导出配置</h2>
+          <div class="btn-row">
+            <button id="export" class="btn">导出 JSON</button>
+            <button id="import" class="btn">导入 JSON</button>
+            <input id="import-file" type="file" accept="application/json,.json" class="hidden" />
+          </div>
+        </section>
+
+        <section id="shortcuts" class="card">
+          <h2>快捷键</h2>
+          <div id="shortcut-list" class="shortcut-list"></div>
+          <p class="hint">可在浏览器扩展快捷键设置页（chrome://extensions/shortcuts）中修改。</p>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -35,17 +35,32 @@
         <button id="btn-rescan" class="btn btn-small">重新扫描</button>
       </div>
 
+      <div class="actions actions-secondary">
+        <button id="btn-export-html" class="btn btn-small">导出双语 HTML</button>
+        <button id="btn-export-md" class="btn btn-small">导出 Markdown</button>
+      </div>
+
+      <section class="section toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="toggle-selection" />
+          <span>划词翻译（选中文字出译文）</span>
+        </label>
+      </section>
+
       <section class="section info">
         <div class="info-row"><span>翻译服务</span><b id="info-provider">—</b></div>
         <div class="info-row"><span>目标语言</span><b id="info-target">—</b></div>
         <div class="info-row"><span>进度</span><b id="info-progress">—</b></div>
+        <div class="info-row hidden" id="row-frames"><span>页面框架</span><b id="info-frames">—</b></div>
+        <div class="info-row hidden" id="row-actual"><span>实际提供方</span><b id="info-actual">—</b></div>
+        <div id="info-hints" class="info-hints hidden"></div>
         <div id="info-error" class="info-error hidden"></div>
       </section>
     </main>
 
     <footer class="footer">
       <a href="#" id="open-options">打开设置</a>
-      <span class="version">v1.0.0</span>
+      <span class="version">v2.0.0</span>
     </footer>
 
     <script type="module" src="./main.ts"></script>

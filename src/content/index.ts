@@ -1,41 +1,82 @@
 /**
- * Content script bootstrap.
- * Wires the PageTranslator, DOM observer and the popup/background commands.
+ * Content script bootstrap (2.0, spec 2.0 §9).
+ * Wires the PageTranslator, DOM observer, selection translator, site rules
+ * and the popup/background commands. Runs in every frame (all_frames).
  */
 import { sendRuntime } from '../messaging/messages';
 import type { TabCommand } from '../messaging/messages';
-import { BILINGUAL_CLASS } from '../shared/constants';
-import type { ContentSettings } from '../shared/types';
+import {
+  BILINGUAL_CLASS,
+  INLINE_DST_CLASS,
+  INLINE_SRC_CLASS,
+  SHADOW_STYLE_ATTR,
+} from '../shared/constants';
+import type { ContentSettings, EffectiveRule } from '../shared/types';
 import { DomObserver } from './observer';
+import { effectiveRuleForHost, hostBlacklisted, topLevelHostname } from './rules';
+import { SelectionTranslator } from './selection';
 import { PageTranslator } from './translator';
 
 const translator = new PageTranslator();
 translator.init();
 
+const selectionTranslator = new SelectionTranslator();
+
 let contentSettings: ContentSettings | null = null;
+let effectiveRule: EffectiveRule | null = null;
 
 function isOwnNode(node: Node): boolean {
-  if (!(node instanceof Element)) return false;
-  if (node.classList.contains(BILINGUAL_CLASS) || node.classList.contains('wt-tooltip-host')) {
+  if (!(node instanceof Element)) {
+    // Text nodes: owned when their parent is one of our elements.
+    const parent = node.parentElement;
+    if (!parent) return false;
+    return isOwnNode(parent);
+  }
+  if (node.hasAttribute?.(SHADOW_STYLE_ATTR)) return true;
+  if (
+    node.classList.contains(BILINGUAL_CLASS) ||
+    node.classList.contains('wt-tooltip-host') ||
+    node.classList.contains('wt-selection-host') ||
+    node.classList.contains(INLINE_SRC_CLASS) ||
+    node.classList.contains(INLINE_DST_CLASS)
+  ) {
     return true;
   }
-  return node.closest(`.${BILINGUAL_CLASS}, .wt-tooltip-host`) !== null;
+  return (
+    node.closest(
+      `.${BILINGUAL_CLASS}, .wt-tooltip-host, .${INLINE_SRC_CLASS}, .${INLINE_DST_CLASS}`,
+    ) !== null
+  );
 }
 
 const observer = new DomObserver(
   () => {
-    if (translator.active) translator.rescan();
+    observer.scanForShadowRoots(document.body);
+    if (translator.active) {
+      translator.detectRecycledNodes();
+      translator.rescan();
+    }
   },
   isOwnNode,
 );
 
-function hostBlacklisted(hostname: string, blacklist: string[]): boolean {
-  const host = hostname.toLowerCase();
-  return blacklist.some((entry) => {
-    const domain = entry.trim().toLowerCase();
-    if (domain === '') return false;
-    return host === domain || host.endsWith(`.${domain}`);
-  });
+/* ---------------------------- frame state reporting --------------------------- */
+
+let reportTimer: number | null = null;
+translator.onStateChange = () => {
+  if (reportTimer !== null) return;
+  reportTimer = window.setTimeout(() => {
+    reportTimer = null;
+    sendRuntime({ type: 'report-frame-state', state: translator.state() }).catch(() => {
+      /* background may be restarting; popup polls again later */
+    });
+  }, 300);
+};
+
+/* --------------------------------- commands ---------------------------------- */
+
+function defaultMode(): ContentSettings['defaultDisplayMode'] {
+  return effectiveRule?.defaultMode ?? contentSettings?.defaultDisplayMode ?? 'bilingual';
 }
 
 async function handleCommand(cmd: TabCommand): Promise<unknown> {
@@ -43,7 +84,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:get-state':
       return translator.state();
     case 'wt:translate': {
-      const mode = cmd.mode ?? contentSettings?.defaultDisplayMode ?? 'bilingual';
+      const mode = cmd.mode ?? defaultMode();
       void translator.translate(mode);
       return { ok: true };
     }
@@ -54,8 +95,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       if (translator.active) {
         translator.restore();
       } else {
-        const mode = contentSettings?.defaultDisplayMode ?? 'bilingual';
-        void translator.translate(mode);
+        void translator.translate(defaultMode());
       }
       return { ok: true };
     }
@@ -68,6 +108,10 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:rescan':
       translator.rescan();
       return { ok: true };
+    case 'wt:translate-selection':
+      return { ok: selectionTranslator.translateCurrentSelection() };
+    case 'wt:collect-export':
+      return translator.collectExport();
     default:
       return { ok: false };
   }
@@ -79,23 +123,52 @@ chrome.runtime.onMessage.addListener((message: TabCommand, _sender, sendResponse
   return true; // async response
 });
 
+/* ----------------------------------- init ------------------------------------ */
+
 async function init(): Promise<void> {
+  let summary: { providerType?: string } | null = null;
   try {
-    contentSettings = await sendRuntime({ type: 'get-content-settings' });
+    const [settings, settingsSummary] = await Promise.all([
+      sendRuntime({ type: 'get-content-settings' }),
+      sendRuntime({ type: 'get-settings-summary' }).catch(() => null),
+    ]);
+    contentSettings = settings;
+    summary = settingsSummary;
   } catch {
     return; // background unavailable; popup actions will still work when it wakes up
   }
-  translator.minTextLength = contentSettings.minTextLength;
-  if (hostBlacklisted(location.hostname, contentSettings.blacklist)) {
+
+  // Site rules for this frame's host (spec 2.0 §6.4).
+  effectiveRule = effectiveRuleForHost(location.hostname, contentSettings.siteRules);
+
+  translator.configure({
+    minTextLength: effectiveRule.minTextLength ?? contentSettings.minTextLength,
+    rule: effectiveRule,
+    inlineBudget: contentSettings.inlineBudget,
+    viewportBudget: contentSettings.viewportBudget,
+    streamingAvailable: summary?.providerType === 'openai-compatible',
+  });
+
+  // Blacklist applies by top-level domain; frames follow the top page
+  // (spec 2.0 §6.2 item 7).
+  const topHost = topLevelHostname();
+  if (hostBlacklisted(topHost || location.hostname, contentSettings.blacklist)) {
     translator.blacklisted = true;
     return;
   }
+
+  // Selection translate (spec 2.0 §7.1) — disabled on blacklisted sites.
+  selectionTranslator.setMode(contentSettings.selectionTranslate);
+  if (contentSettings.selectionTranslate !== 'off') {
+    selectionTranslator.start();
+  }
+
   // Initial scan so the popup can report how many paragraphs were found
   // before the user triggers any translation.
   translator.scan();
   observer.start();
   if (contentSettings.autoTranslate) {
-    void translator.translate(contentSettings.defaultDisplayMode);
+    void translator.translate(defaultMode());
   }
 }
 

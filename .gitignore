@@ -2,3 +2,8 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# .NET (native-host gateway)
+native-host/**/bin/
+native-host/**/obj/
+*.user

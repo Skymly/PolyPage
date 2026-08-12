@@ -1,10 +1,31 @@
 /**
  * Settings persistence (chrome.storage.local) with normalization/migration.
  * Runs in background, popup and options pages (never in content scripts).
+ *
+ * 2.0: schema v2. Migration v1 -> v2 only adds defaults and never clears
+ * existing fields (spec 2.0 §9.3). v2 settings remain readable by 1.0 code
+ * because unknown fields are ignored during normalization.
  */
-import { SETTINGS_STORAGE_KEY, defaultSettings } from '../shared/constants';
+import {
+  BUILTIN_SITE_RULES,
+  DEFAULT_INLINE_BUDGET,
+  DEFAULT_NATIVE_HOST_NAME,
+  DEFAULT_VIEWPORT_BUDGET,
+  SCHEMA_VERSION,
+  SETTINGS_STORAGE_KEY,
+  defaultSettings,
+} from '../shared/constants';
 import { DISPLAY_MODES } from '../shared/types';
-import type { DisplayMode, ProviderConfig, Settings } from '../shared/types';
+import type {
+  DisplayMode,
+  GlossaryEntry,
+  ProviderConfig,
+  ProviderType,
+  SelectionTranslateMode,
+  Settings,
+  SiteRule,
+} from '../shared/types';
+import { normalizeSiteRule } from '../shared/siteRules';
 import { clamp } from '../shared/utils';
 
 export async function loadSettings(): Promise<Settings> {
@@ -16,7 +37,16 @@ export async function saveSettings(settings: Settings): Promise<void> {
   await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: settings });
 }
 
-/** Coerce arbitrary stored data into a valid Settings object. */
+const PROVIDER_TYPES: ProviderType[] = [
+  'openai-compatible',
+  'custom-http',
+  'deepl',
+  'azure-translator',
+  'google-translate',
+  'native-host',
+];
+
+/** Coerce arbitrary stored data (schema v1 or v2) into a valid v2 Settings. */
 export function normalizeSettings(raw: unknown): Settings {
   const defaults = defaultSettings();
   if (raw === null || typeof raw !== 'object') return defaults;
@@ -32,8 +62,52 @@ export function normalizeSettings(raw: unknown): Settings {
       ? r.activeProviderId
       : providers[0].id;
 
+  // Glossary normalization (2.0).
+  const glossary: GlossaryEntry[] = Array.isArray(r.glossary)
+    ? r.glossary
+        .filter((e): e is GlossaryEntry => e !== null && typeof e === 'object')
+        .map((e) => ({
+          source: typeof e.source === 'string' ? e.source.trim() : '',
+          target: typeof e.target === 'string' ? e.target.trim() : '',
+          ...(typeof e.note === 'string' && e.note.trim() !== '' ? { note: e.note.trim() } : {}),
+        }))
+        .filter((e) => e.source !== '' && e.target !== '')
+    : [];
+
+  // Site rules: keep valid user rules; re-add any missing built-ins so a
+  // version update can ship new default rules without clobbering the user.
+  const userRules: SiteRule[] = Array.isArray(r.siteRules)
+    ? r.siteRules
+        .map((rule, i) => normalizeSiteRule(rule, `rule-${i + 1}`))
+        .filter((rule): rule is SiteRule => rule !== null)
+    : [];
+  const hasStoredRules = Array.isArray(r.siteRules);
+  const siteRules = [...userRules];
+  for (const builtin of BUILTIN_SITE_RULES) {
+    if (!siteRules.some((s) => s.id === builtin.id)) {
+      siteRules.push({ ...builtin });
+    }
+  }
+  void hasStoredRules;
+
+  // Failover chain: only keep ids that exist among providers; deduplicated.
+  const failoverSeen = new Set<string>();
+  const failoverChain = Array.isArray(r.failoverChain)
+    ? r.failoverChain.filter((id): id is string => {
+        if (typeof id !== 'string' || failoverSeen.has(id)) return false;
+        if (!providers.some((p) => p.id === id)) return false;
+        failoverSeen.add(id);
+        return true;
+      })
+    : [];
+
+  const selectionTranslate: SelectionTranslateMode =
+    r.selectionTranslate === 'always' || r.selectionTranslate === 'alt' || r.selectionTranslate === 'off'
+      ? r.selectionTranslate
+      : defaults.selectionTranslate;
+
   return {
-    schemaVersion: 1,
+    schemaVersion: SCHEMA_VERSION,
     activeProviderId,
     providers,
     defaultDisplayMode: normalizeMode(r.defaultDisplayMode),
@@ -54,6 +128,22 @@ export function normalizeSettings(raw: unknown): Settings {
       typeof r.minTextLength === 'number' && Number.isFinite(r.minTextLength)
         ? clamp(Math.round(r.minTextLength), 1, 200)
         : defaults.minTextLength,
+    glossary,
+    glossaryVersion:
+      typeof r.glossaryVersion === 'number' && Number.isFinite(r.glossaryVersion)
+        ? Math.max(0, Math.round(r.glossaryVersion))
+        : 0,
+    siteRules,
+    failoverChain,
+    selectionTranslate,
+    inlineBudget:
+      typeof r.inlineBudget === 'number' && Number.isFinite(r.inlineBudget)
+        ? clamp(Math.round(r.inlineBudget), 10, 5000)
+        : DEFAULT_INLINE_BUDGET,
+    viewportBudget:
+      typeof r.viewportBudget === 'number' && Number.isFinite(r.viewportBudget)
+        ? clamp(Math.round(r.viewportBudget), 50, 10000)
+        : DEFAULT_VIEWPORT_BUDGET,
   };
 }
 
@@ -65,7 +155,8 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
   if (raw === null || typeof raw !== 'object') return null;
   const r = raw as Partial<ProviderConfig>;
   if (typeof r.id !== 'string' || r.id.trim() === '') return null;
-  if (r.type !== 'openai-compatible' && r.type !== 'custom-http') return null;
+  if (!PROVIDER_TYPES.includes(r.type as ProviderType)) return null;
+  const type = r.type as ProviderType;
   const num = (v: unknown, fallback: number, min: number, max: number) =>
     typeof v === 'number' && Number.isFinite(v) ? clamp(v, min, max) : fallback;
   const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
@@ -77,10 +168,10 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
     }
   }
 
-  return {
+  const provider: ProviderConfig = {
     id: r.id,
     name: str(r.name, r.id),
-    type: r.type,
+    type,
     baseUrl: str(r.baseUrl),
     apiKey: str(r.apiKey),
     model: str(r.model),
@@ -95,20 +186,30 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
     maxTokens: num(r.maxTokens, 4096, 1, 200000),
     headers,
     enabled: r.enabled !== false,
-    ...(r.type === 'custom-http'
-      ? {
-          method:
-            r.method === 'GET' || r.method === 'PUT' || r.method === 'PATCH' ? r.method : 'POST',
-          bodyTemplate: str(r.bodyTemplate),
-          responsePath: str(r.responsePath),
-          apiKeyPlacement:
-            r.apiKeyPlacement === 'query' || r.apiKeyPlacement === 'body'
-              ? r.apiKeyPlacement
-              : 'header',
-          apiKeyParamName: str(r.apiKeyParamName, 'Authorization'),
-        }
-      : {}),
   };
+
+  if (type === 'custom-http') {
+    provider.method =
+      r.method === 'GET' || r.method === 'PUT' || r.method === 'PATCH' ? r.method : 'POST';
+    provider.bodyTemplate = str(r.bodyTemplate);
+    provider.responsePath = str(r.responsePath);
+    provider.apiKeyPlacement =
+      r.apiKeyPlacement === 'query' || r.apiKeyPlacement === 'body' ? r.apiKeyPlacement : 'header';
+    provider.apiKeyParamName = str(r.apiKeyParamName, 'Authorization');
+  }
+  if (type === 'deepl') {
+    provider.formality =
+      r.formality === 'more' || r.formality === 'less' ? r.formality : 'default';
+  }
+  if (type === 'azure-translator') {
+    provider.region = str(r.region);
+  }
+  if (type === 'native-host') {
+    provider.hostName = str(r.hostName, DEFAULT_NATIVE_HOST_NAME).trim() || DEFAULT_NATIVE_HOST_NAME;
+    provider.backend = str(r.backend);
+    provider.fallbackProviderId = str(r.fallbackProviderId);
+  }
+  return provider;
 }
 
 /** Basic validation for settings imported from a JSON file. */
@@ -116,7 +217,11 @@ export function validateImportedSettings(raw: unknown): Settings | null {
   if (raw === null || typeof raw !== 'object') return null;
   const candidate = (raw as { settings?: unknown }).settings ?? raw;
   const normalized = normalizeSettings(candidate);
-  // Require at least one provider with a base URL configured.
-  if (!normalized.providers.some((p) => p.baseUrl.trim() !== '')) return null;
+  // Require at least one usable provider: a base URL for HTTP types, or a
+  // configured native-host provider.
+  const usable = normalized.providers.some(
+    (p) => p.type === 'native-host' || p.baseUrl.trim() !== '',
+  );
+  if (!usable) return null;
   return normalized;
 }

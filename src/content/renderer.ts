@@ -4,14 +4,39 @@
  * The renderer is the only module that mutates original page nodes. It always
  * saves the original child nodes before replacing content, so the original
  * text is fully restorable (spec §7.1 rule 5).
+ *
+ * 2.0: content.css does not reach into shadow roots, so every modified
+ * shadow root receives a style clone (spec 2.0 §6.1 item 2).
  */
-import { BILINGUAL_CLASS, DATA_ATTR, ERROR_CLASS, PENDING_CLASS } from '../shared/constants';
+import {
+  BILINGUAL_CLASS,
+  DATA_ATTR,
+  ERROR_CLASS,
+  PENDING_CLASS,
+  SHADOW_STYLE_ATTR,
+} from '../shared/constants';
 import type { DisplayMode } from '../shared/types';
+import contentCss from '../styles/content.css?raw';
 import type { NodeEntry } from './translator';
 
 /** Elements where inserting a sibling block would produce invalid HTML
  *  (table rows, lists); for those the translation block goes inside. */
 const INSERT_INSIDE_TAGS = new Set(['TD', 'TH', 'LI', 'DT', 'DD', 'FIGCAPTION']);
+
+/** Inject our stylesheet into a shadow root once (spec 2.0 §6.1). */
+export function ensureShadowStyle(root: ShadowRoot): void {
+  if (root.querySelector(`style[${SHADOW_STYLE_ATTR}]`)) return;
+  const style = document.createElement('style');
+  style.setAttribute(SHADOW_STYLE_ATTR, '1');
+  style.textContent = contentCss;
+  root.prepend(style);
+}
+
+/** Ensure styles exist in whichever root the element lives in. */
+export function ensureStylesFor(el: Element): void {
+  const root = el.getRootNode();
+  if (root instanceof ShadowRoot) ensureShadowStyle(root);
+}
 
 export function saveOriginal(entry: NodeEntry): void {
   if (entry.originalNodes === null) {
@@ -54,16 +79,17 @@ export function updateBilingualBlock(entry: NodeEntry): void {
     block.setAttribute(DATA_ATTR, entry.id);
     entry.bilingualEl = block;
     insertBlock(entry.el, block);
+    ensureStylesFor(block);
   }
   block.classList.remove('wt-bilingual-pending', 'wt-bilingual-error');
   if (entry.status === 'pending') {
     block.textContent = '翻译中…';
     block.classList.add('wt-bilingual-pending');
-  } else if (entry.status === 'error') {
-    block.textContent = `⚠ 翻译失败：${entry.error ?? '未知错误'}（点击重试）`;
-    block.classList.add('wt-bilingual-error');
   } else if (entry.status === 'done' && entry.translated !== null) {
     block.textContent = entry.translated;
+  } else if (entry.status === 'error') {
+    block.textContent = `翻译失败：${entry.error ?? '未知错误'}（点击重试）`;
+    block.classList.add('wt-bilingual-error');
   } else {
     block.textContent = '待翻译';
     block.classList.add('wt-bilingual-pending');
@@ -80,10 +106,23 @@ export function removeBilingualBlock(entry: NodeEntry): void {
 /**
  * Render one entry for the given mode. `mode === null` means "untouched
  * original page" (restores everything and removes inserted blocks).
+ * Inline mode is driven by the translator (per-segment spans); here a
+ * degraded inline entry falls back to paragraph-level bilingual.
  */
 export function renderEntry(entry: NodeEntry, mode: DisplayMode | null): void {
-  const bodyShowsTranslation = mode === 'translated' || mode === 'translated_hover_original';
-  const showBlock = mode === 'bilingual';
+  const effective: DisplayMode | null =
+    mode === 'inline' && entry.inlineDegraded ? 'bilingual' : mode;
+
+  if (effective === 'inline') {
+    // Body keeps the original text; segment spans are managed by translator.
+    restoreOriginal(entry);
+    removeBilingualBlock(entry);
+    return;
+  }
+
+  const bodyShowsTranslation =
+    effective === 'translated' || effective === 'translated_hover_original';
+  const showBlock = effective === 'bilingual';
 
   if (bodyShowsTranslation) {
     showTranslated(entry);

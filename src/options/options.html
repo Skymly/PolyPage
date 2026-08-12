@@ -12,6 +12,10 @@
         <nav>
           <a href="#general" class="nav-link">常规</a>
           <a href="#providers" class="nav-link">翻译服务</a>
+          <a href="#failover" class="nav-link">故障转移</a>
+          <a href="#glossary" class="nav-link">术语表</a>
+          <a href="#rules" class="nav-link">站点规则</a>
+          <a href="#gateway" class="nav-link">本地网关</a>
           <a href="#blacklist" class="nav-link">黑名单</a>
           <a href="#cache" class="nav-link">缓存</a>
           <a href="#errorlog" class="nav-link">错误日志</a>
@@ -29,6 +33,7 @@
             <label for="default-mode">默认显示模式</label>
             <select id="default-mode">
               <option value="bilingual">双语对照（原文下方插入译文）</option>
+              <option value="inline">段内对照（句内内联译文）</option>
               <option value="translated">译文模式</option>
               <option value="translated_hover_original">译文 + 悬停原文</option>
               <option value="original_hover_translated">原文 + 悬停译文</option>
@@ -44,8 +49,16 @@
           <div class="field-row">
             <label class="checkbox">
               <input type="checkbox" id="cache-enabled" />
-              启用翻译缓存（相同内容不重复请求）
+              启用翻译缓存（相同内容不重复请求；术语表变更自动失效旧缓存）
             </label>
+          </div>
+          <div class="field-row">
+            <label for="selection-translate">划词翻译</label>
+            <select id="selection-translate">
+              <option value="always">总是显示翻译按钮</option>
+              <option value="alt">按住 Alt 选中时显示</option>
+              <option value="off">关闭</option>
+            </select>
           </div>
           <div class="field-row">
             <label for="default-source">默认源语言</label>
@@ -59,18 +72,32 @@
             <label for="min-text-length">最短翻译文本长度（字符）</label>
             <input id="min-text-length" type="number" min="1" max="200" step="1" />
           </div>
+          <div class="field-row">
+            <label for="inline-budget">段内对照每页任务预算（超出降级为段落双语）</label>
+            <input id="inline-budget" type="number" min="10" max="5000" step="10" />
+          </div>
+          <div class="field-row">
+            <label for="viewport-budget">待翻译条目超过该值时自动切换「仅视口翻译」</label>
+            <input id="viewport-budget" type="number" min="50" max="10000" step="50" />
+          </div>
         </section>
 
         <section id="providers" class="card">
           <h2>翻译服务（Provider）</h2>
           <p class="hint">
-            支持 OpenAI-compatible LLM 与通用自定义 HTTP JSON API。翻译请求由后台统一发出，API Key
-            不会暴露给页面脚本。
+            支持 OpenAI-compatible / DeepL / Azure / Google / 自定义 HTTP / 本地网关。翻译请求由后台统一发出，API
+            Key 不会暴露给页面脚本。
           </p>
+          <div class="btn-row">
+            <label for="preset-select">从预设创建：</label>
+            <select id="preset-select"></select>
+            <button id="add-from-preset" class="btn">+ 创建</button>
+          </div>
           <div id="provider-list" class="provider-list"></div>
           <div class="btn-row">
             <button id="add-openai" class="btn">+ OpenAI-compatible</button>
             <button id="add-custom" class="btn">+ 自定义 HTTP API</button>
+            <button id="add-native" class="btn">+ 本地网关 (native-host)</button>
           </div>
 
           <div id="editor" class="editor hidden">
@@ -85,13 +112,17 @@
                 <select id="f-type">
                   <option value="openai-compatible">openai-compatible</option>
                   <option value="custom-http">custom-http</option>
+                  <option value="deepl">deepl</option>
+                  <option value="azure-translator">azure-translator</option>
+                  <option value="google-translate">google-translate</option>
+                  <option value="native-host">native-host</option>
                 </select>
               </div>
-              <div class="field">
+              <div class="field" id="field-baseurl">
                 <label>Base URL</label>
                 <input id="f-baseurl" type="text" placeholder="https://api.openai.com/v1" />
               </div>
-              <div class="field">
+              <div class="field" id="field-apikey">
                 <label>API Key</label>
                 <input id="f-apikey" type="password" placeholder="sk-..." />
               </div>
@@ -112,20 +143,12 @@
                 <input id="f-timeout" type="number" min="1000" max="600000" step="1000" />
               </div>
               <div class="field">
-                <label>批量最大条数</label>
+                <label>单批最大条数</label>
                 <input id="f-batch-items" type="number" min="1" max="100" step="1" />
               </div>
               <div class="field">
-                <label>批量最大字符数</label>
+                <label>单批最大字符数</label>
                 <input id="f-batch-chars" type="number" min="100" max="100000" step="100" />
-              </div>
-              <div class="field" id="field-temperature">
-                <label>temperature</label>
-                <input id="f-temperature" type="number" min="0" max="2" step="0.1" />
-              </div>
-              <div class="field" id="field-maxtokens">
-                <label>max tokens</label>
-                <input id="f-maxtokens" type="number" min="1" max="200000" step="1" />
               </div>
             </div>
 
@@ -136,6 +159,16 @@
             <div class="field" id="field-user-prompt">
               <label>User Prompt 模板（变量：{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}}）</label>
               <textarea id="f-user-prompt" rows="4"></textarea>
+            </div>
+            <div class="grid">
+              <div class="field" id="field-temperature">
+                <label>Temperature</label>
+                <input id="f-temperature" type="number" min="0" max="2" step="0.1" />
+              </div>
+              <div class="field" id="field-maxtokens">
+                <label>Max Tokens</label>
+                <input id="f-maxtokens" type="number" min="1" max="200000" step="1" />
+              </div>
             </div>
             <div class="field">
               <label>自定义请求头（JSON，可选）</label>
@@ -184,6 +217,49 @@
               </div>
             </div>
 
+            <div id="deepl-fields" class="hidden">
+              <h4>DeepL 专属配置</h4>
+              <div class="grid">
+                <div class="field">
+                  <label>Formality（语气正式度）</label>
+                  <select id="f-formality">
+                    <option value="default">default（默认）</option>
+                    <option value="more">more（更正式）</option>
+                    <option value="less">less（更随意）</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div id="azure-fields" class="hidden">
+              <h4>Azure Translator 专属配置</h4>
+              <div class="grid">
+                <div class="field">
+                  <label>订阅区域（Ocp-Apim-Subscription-Region，如 eastasia）</label>
+                  <input id="f-region" type="text" placeholder="eastasia" />
+                </div>
+              </div>
+            </div>
+
+            <div id="native-host-fields" class="hidden">
+              <h4>native-host 专属配置（本地网关）</h4>
+              <div class="grid">
+                <div class="field">
+                  <label>Native Host 名称</label>
+                  <input id="f-hostname" type="text" placeholder="com.skymly.polypage.gateway" />
+                </div>
+                <div class="field">
+                  <label>网关后端 id（如 ollama:qwen2.5，留空用网关默认）</label>
+                  <input id="f-backend" type="text" placeholder="ollama:qwen2.5" />
+                </div>
+                <div class="field">
+                  <label>网关不可用时的回退 Provider</label>
+                  <select id="f-fallback"></select>
+                </div>
+              </div>
+              <p class="hint">网关凭据保存在本机网关进程中，浏览器侧不保存任何后端密钥。</p>
+            </div>
+
             <div class="btn-row">
               <button id="test-provider" class="btn">测试连接</button>
               <span id="test-result" class="test-result"></span>
@@ -191,9 +267,113 @@
           </div>
         </section>
 
+        <section id="failover" class="card">
+          <h2>故障转移链（Failover）</h2>
+          <p class="hint">
+            活动 Provider 在重试用尽后仍失败（网络/超时/限流/服务端错误，或本地网关不可用）时，按此链条顺序接管。
+          </p>
+          <div id="failover-list" class="failover-list"></div>
+          <div class="btn-row">
+            <select id="failover-select"></select>
+            <button id="failover-add" class="btn">+ 加入链条</button>
+          </div>
+        </section>
+
+        <section id="glossary" class="card">
+          <h2>术语表</h2>
+          <p class="hint">
+            术语表会注入到 System Prompt 的 {{glossary}} 变量；每次编辑自动递增版本号并使旧缓存失效。
+          </p>
+          <div id="glossary-list" class="glossary-list"></div>
+          <div class="btn-row">
+            <button id="glossary-add" class="btn">+ 添加术语</button>
+          </div>
+          <div class="field">
+            <label>批量导入（每行一条：原文 = 译文，可用「原文 = 译文 (备注)」）</label>
+            <textarea id="glossary-paste" rows="3" placeholder="container = 集装箱&#10;bill of lading = 提单 (海运单据)"></textarea>
+          </div>
+          <div class="btn-row">
+            <button id="glossary-import" class="btn">导入粘贴内容</button>
+            <span id="glossary-version" class="hint"></span>
+          </div>
+        </section>
+
+        <section id="rules" class="card">
+          <h2>站点规则</h2>
+          <p class="hint">
+            按域名匹配（支持 *.example.com 通配符）；多条命中时精确域名优先，字段按「显式 &gt; 默认」合并。
+          </p>
+          <div id="rule-list" class="rule-list"></div>
+          <div class="btn-row">
+            <button id="rule-add" class="btn">+ 新增规则</button>
+            <button id="rule-export" class="btn">导出规则 JSON</button>
+            <button id="rule-import" class="btn">导入规则 JSON</button>
+            <input id="rule-import-file" type="file" accept="application/json,.json" class="hidden" />
+          </div>
+          <div id="rule-editor" class="editor hidden">
+            <h3 id="rule-editor-title">编辑规则</h3>
+            <div class="grid">
+              <div class="field">
+                <label>匹配域名（逗号分隔，支持 *.example.com）</label>
+                <input id="r-match" type="text" placeholder="example.com, *.example.com" />
+              </div>
+              <div class="field">
+                <label>仅翻译这些选择器内（逗号分隔，可空）</label>
+                <input id="r-include" type="text" placeholder="article .content" />
+              </div>
+              <div class="field">
+                <label>排除这些选择器（逗号分隔，可空）</label>
+                <input id="r-exclude" type="text" placeholder=".ad, .comments" />
+              </div>
+              <div class="field">
+                <label>最短文本长度（可空）</label>
+                <input id="r-minlen" type="number" min="1" max="200" step="1" />
+              </div>
+              <div class="field">
+                <label>该站点默认显示模式</label>
+                <select id="r-mode">
+                  <option value="">（跟随全局）</option>
+                  <option value="bilingual">双语对照</option>
+                  <option value="inline">段内对照</option>
+                  <option value="translated">译文模式</option>
+                  <option value="translated_hover_original">译文 + 悬停原文</option>
+                  <option value="original_hover_translated">原文 + 悬停译文</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="checkbox"><input type="checkbox" id="r-viewport" /> 仅视口翻译（虚拟列表）</label>
+              </div>
+              <div class="field">
+                <label class="checkbox"><input type="checkbox" id="r-enabled" /> 启用</label>
+              </div>
+            </div>
+            <div class="field">
+              <label>JSON 预览</label>
+              <pre id="rule-json" class="json-preview"></pre>
+            </div>
+            <div class="btn-row">
+              <button id="rule-save" class="btn btn-primary">应用规则</button>
+              <button id="rule-cancel" class="btn">取消</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="gateway" class="card">
+          <h2>本地网关（Native Host）</h2>
+          <p class="hint">
+            网关是可选依赖：未安装时插件功能与 1.0 等价。安装方式见仓库 native-host/README.md
+            （PolyPage.Gateway.exe --install）。
+          </p>
+          <div class="btn-row">
+            <button id="host-check" class="btn">检测网关状态</button>
+            <span id="host-status" class="test-result"></span>
+          </div>
+          <div id="host-backends" class="hint"></div>
+        </section>
+
         <section id="blacklist" class="card">
           <h2>敏感网站黑名单</h2>
-          <p class="hint">每行一个域名（如 mail.example.com），这些网站上不会执行翻译。</p>
+          <p class="hint">每行一个域名（如 mail.example.com），这些网站上不会执行翻译（含 iframe 与划词）。</p>
           <textarea id="blacklist-input" rows="5" placeholder="bank.example.com&#10;mail.example.com"></textarea>
         </section>
 
@@ -204,7 +384,7 @@
 
         <section id="cache" class="card">
           <h2>翻译缓存</h2>
-          <p class="hint">缓存按「Provider + 语言 + 文本」存储在本机 chrome.storage.local。</p>
+          <p class="hint">缓存按「Provider + 语言 + 术语表版本 + 文本」存储在本机 chrome.storage.local。</p>
           <div class="btn-row">
             <span id="cache-count" class="cache-count">—</span>
             <button id="clear-cache" class="btn btn-danger">清空缓存</button>
@@ -214,6 +394,7 @@
         <section id="errorlog" class="card">
           <h2>错误日志</h2>
           <div class="btn-row">
+            <select id="log-filter"></select>
             <button id="refresh-log" class="btn">刷新</button>
             <button id="clear-log" class="btn btn-danger">清空</button>
           </div>

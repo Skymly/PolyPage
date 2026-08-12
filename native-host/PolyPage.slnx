@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="PolyPage.Gateway.Backends/PolyPage.Gateway.Backends.csproj" />
+  <Project Path="PolyPage.Gateway.Tests/PolyPage.Gateway.Tests.csproj" />
+  <Project Path="PolyPage.Gateway/PolyPage.Gateway.csproj" />
+</Solution>

@@ -1,10 +1,26 @@
 /**
- * Options page (spec §10.4): provider management, languages, display mode,
- * blacklist, cache management, error log, import/export, shortcut info.
+ * Options page (spec §10.4), evolved for 2.0:
+ *  - provider presets + six provider types with per-type fields;
+ *  - failover chain editor (spec 2.0 §5.6);
+ *  - glossary editor with paste import (spec 2.0 §7.4);
+ *  - site rules editor with JSON preview + import/export (spec 2.0 §6.4);
+ *  - native host (gateway) status probe (spec 2.0 §5.5);
+ *  - per-provider stats + error log filtering (spec 2.0 §8.3).
  */
 import { sendRuntime } from '../messaging/messages';
-import { DEFAULT_CUSTOM_HTTP_BODY, defaultProvider } from '../shared/constants';
-import type { DisplayMode, ProviderConfig, ProviderType, Settings } from '../shared/types';
+import { DEFAULT_CUSTOM_HTTP_BODY, DEFAULT_NATIVE_HOST_NAME, defaultProvider } from '../shared/constants';
+import { normalizeSiteRule } from '../shared/siteRules';
+import type {
+  DisplayMode,
+  GlossaryEntry,
+  ProviderConfig,
+  ProviderStats,
+  ProviderType,
+  SelectionTranslateMode,
+  Settings,
+  SiteRule,
+} from '../shared/types';
+import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
 import { normalizeSettings, validateImportedSettings } from '../storage/settings';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -15,6 +31,8 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 let draft: Settings | null = null;
 let selectedId: string | null = null;
+let editingRuleId: string | null = null;
+let logFilterProvider = '';
 
 /* --------------------------------- helpers ---------------------------------- */
 
@@ -40,6 +58,10 @@ function num(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function newProviderId(): string {
+  return `provider-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 function selectedProvider(): ProviderConfig | null {
   return draft?.providers.find((p) => p.id === selectedId) ?? null;
 }
@@ -51,9 +73,12 @@ function renderGeneral(): void {
   $<HTMLSelectElement>('default-mode').value = draft.defaultDisplayMode;
   $<HTMLInputElement>('auto-translate').checked = draft.autoTranslate;
   $<HTMLInputElement>('cache-enabled').checked = draft.cacheEnabled;
+  $<HTMLSelectElement>('selection-translate').value = draft.selectionTranslate;
   $<HTMLInputElement>('default-source').value = draft.defaultSourceLanguage;
   $<HTMLInputElement>('default-target').value = draft.defaultTargetLanguage;
   $<HTMLInputElement>('min-text-length').value = String(draft.minTextLength);
+  $<HTMLInputElement>('inline-budget').value = String(draft.inlineBudget);
+  $<HTMLInputElement>('viewport-budget').value = String(draft.viewportBudget);
   $<HTMLTextAreaElement>('blacklist-input').value = draft.blacklist.join('\n');
 }
 
@@ -62,9 +87,13 @@ function collectGeneral(): void {
   draft.defaultDisplayMode = $<HTMLSelectElement>('default-mode').value as DisplayMode;
   draft.autoTranslate = $<HTMLInputElement>('auto-translate').checked;
   draft.cacheEnabled = $<HTMLInputElement>('cache-enabled').checked;
+  draft.selectionTranslate = $<HTMLSelectElement>('selection-translate')
+    .value as SelectionTranslateMode;
   draft.defaultSourceLanguage = $<HTMLInputElement>('default-source').value.trim() || 'auto';
   draft.defaultTargetLanguage = $<HTMLInputElement>('default-target').value.trim() || '简体中文';
   draft.minTextLength = Math.round(num($<HTMLInputElement>('min-text-length').value, draft.minTextLength));
+  draft.inlineBudget = Math.round(num($<HTMLInputElement>('inline-budget').value, draft.inlineBudget));
+  draft.viewportBudget = Math.round(num($<HTMLInputElement>('viewport-budget').value, draft.viewportBudget));
   draft.blacklist = $<HTMLTextAreaElement>('blacklist-input')
     .value.split('\n')
     .map((s) => s.trim())
@@ -72,6 +101,17 @@ function collectGeneral(): void {
 }
 
 /* ------------------------------ provider list -------------------------------- */
+
+let statsCache: Record<string, ProviderStats> = {};
+
+async function refreshStats(): Promise<void> {
+  try {
+    const res = await sendRuntime({ type: 'get-provider-stats' });
+    statsCache = res.stats ?? {};
+  } catch {
+    statsCache = {};
+  }
+}
 
 function renderProviderList(): void {
   if (!draft) return;
@@ -110,6 +150,17 @@ function renderProviderList(): void {
       row.appendChild(active);
     }
 
+    // Sliding-window stats (session only, spec 2.0 §8.3).
+    const stats = statsCache[provider.id];
+    if (stats && stats.calls > 0) {
+      const stat = document.createElement('span');
+      stat.className = 'stats-badge';
+      const rate = Math.round((stats.ok / stats.calls) * 100);
+      stat.textContent = `${stats.ok}/${stats.calls} · ${stats.avgMs}ms`;
+      stat.title = `近 ${stats.calls} 次请求成功率 ${rate}%${stats.lastError ? `；最近错误：${stats.lastError}` : ''}`;
+      row.appendChild(stat);
+    }
+
     const del = document.createElement('button');
     del.className = 'icon-btn';
     del.title = '删除';
@@ -131,10 +182,11 @@ function renderProviderList(): void {
 
 function removeProvider(id: string): void {
   if (!draft) return;
-  const provider = draft.providers.find((p) => p.id === id);
-  if (!provider) return;
-  if (!confirm(`确定删除翻译服务「${provider.name}」吗？`)) return;
   draft.providers = draft.providers.filter((p) => p.id !== id);
+  draft.failoverChain = draft.failoverChain.filter((fid) => fid !== id);
+  for (const p of draft.providers) {
+    if (p.fallbackProviderId === id) p.fallbackProviderId = '';
+  }
   if (draft.providers.length === 0) {
     const fresh = makeProvider('openai-compatible');
     draft.providers.push(fresh);
@@ -144,14 +196,19 @@ function removeProvider(id: string): void {
   markDirty();
   renderProviderList();
   renderEditor();
+  renderFailover();
 }
-
 function makeProvider(type: ProviderType): ProviderConfig {
   const base = defaultProvider();
   const provider: ProviderConfig = {
     ...base,
-    id: `provider-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    name: type === 'openai-compatible' ? 'OpenAI-compatible' : '自定义 HTTP API',
+    id: newProviderId(),
+    name:
+      type === 'openai-compatible'
+        ? 'OpenAI-compatible'
+        : type === 'custom-http'
+          ? '自定义 HTTP API'
+          : type,
     type,
   };
   if (type === 'custom-http') {
@@ -162,7 +219,27 @@ function makeProvider(type: ProviderType): ProviderConfig {
     provider.responsePath = '';
     provider.apiKeyPlacement = 'header';
     provider.apiKeyParamName = 'Authorization';
+    provider.systemPrompt = '';
+    provider.userPromptTemplate = '';
   }
+  if (type === 'native-host') {
+    provider.baseUrl = '';
+    provider.model = '';
+    provider.hostName = DEFAULT_NATIVE_HOST_NAME;
+    provider.backend = '';
+    provider.fallbackProviderId = '';
+    provider.systemPrompt = '';
+    provider.userPromptTemplate = '';
+  }
+  if (type === 'deepl' || type === 'azure-translator' || type === 'google-translate') {
+    provider.systemPrompt = '';
+    provider.userPromptTemplate = '';
+    provider.maxBatchItems = 50;
+    provider.maxBatchChars = 20000;
+  }
+  if (type === 'deepl') provider.baseUrl = 'https://api-free.deepl.com';
+  if (type === 'azure-translator') provider.baseUrl = 'https://api.cognitive.microsofttranslator.com';
+  if (type === 'google-translate') provider.baseUrl = 'https://translation.googleapis.com/language/translate/v2';
   return provider;
 }
 
@@ -174,6 +251,19 @@ function addProvider(type: ProviderType): void {
   markDirty();
   renderProviderList();
   renderEditor();
+}
+
+function addProviderFromPreset(presetId: string): void {
+  if (!draft) return;
+  const preset = findPreset(presetId);
+  if (!preset) return;
+  const provider = presetToProvider(preset, newProviderId());
+  draft.providers.push(provider);
+  selectedId = provider.id;
+  markDirty();
+  renderProviderList();
+  renderEditor();
+  toast(`已从预设「${preset.name}」创建${preset.needsApiKey ? '，请填写 API Key 后保存' : ''}`);
 }
 
 /* ------------------------------ provider editor ------------------------------ */
@@ -202,9 +292,10 @@ function renderEditor(): void {
   $<HTMLInputElement>('f-maxtokens').value = String(provider.maxTokens);
   $<HTMLTextAreaElement>('f-system-prompt').value = provider.systemPrompt;
   $<HTMLTextAreaElement>('f-user-prompt').value = provider.userPromptTemplate;
-  $<HTMLTextAreaElement>('f-headers').value = JSON.stringify(provider.headers, null, 2) === '{}'
-    ? ''
-    : JSON.stringify(provider.headers, null, 2);
+  $<HTMLTextAreaElement>('f-headers').value =
+    JSON.stringify(provider.headers, null, 2) === '{}'
+      ? ''
+      : JSON.stringify(provider.headers, null, 2);
   $<HTMLInputElement>('f-enabled').checked = provider.enabled;
 
   $<HTMLSelectElement>('f-method').value = provider.method ?? 'POST';
@@ -213,6 +304,28 @@ function renderEditor(): void {
   $<HTMLInputElement>('f-response-path').value = provider.responsePath ?? '';
   $<HTMLTextAreaElement>('f-body-template').value = provider.bodyTemplate ?? DEFAULT_CUSTOM_HTTP_BODY;
 
+  $<HTMLSelectElement>('f-formality').value = provider.formality ?? 'default';
+  $<HTMLInputElement>('f-region').value = provider.region ?? '';
+  $<HTMLInputElement>('f-hostname').value = provider.hostName ?? DEFAULT_NATIVE_HOST_NAME;
+  $<HTMLInputElement>('f-backend').value = provider.backend ?? '';
+
+  // Fallback provider select (native-host only).
+  const fallback = $<HTMLSelectElement>('f-fallback');
+  fallback.textContent = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '（无回退）';
+  fallback.appendChild(none);
+  for (const p of draft?.providers ?? []) {
+    if (p.id === provider.id) continue;
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name;
+    fallback.appendChild(opt);
+  }
+  fallback.value = provider.fallbackProviderId ?? '';
+  if (fallback.value !== (provider.fallbackProviderId ?? '')) fallback.value = '';
+
   applyTypeVisibility(provider.type);
   $<HTMLDivElement>('headers-error').classList.add('hidden');
   $<HTMLElement>('test-result').textContent = '';
@@ -220,13 +333,20 @@ function renderEditor(): void {
 
 function applyTypeVisibility(type: ProviderType): void {
   const isLLM = type === 'openai-compatible';
+  const isHttpApi = type === 'deepl' || type === 'azure-translator' || type === 'google-translate';
+  const isNative = type === 'native-host';
   for (const id of ['field-system-prompt', 'field-user-prompt', 'field-temperature', 'field-maxtokens']) {
     $<HTMLElement>(id).classList.toggle('hidden', !isLLM);
   }
-  $<HTMLElement>('custom-http-fields').classList.toggle('hidden', isLLM);
+  $<HTMLElement>('field-baseurl').classList.toggle('hidden', isNative);
+  $<HTMLElement>('field-apikey').classList.toggle('hidden', isNative);
+  $<HTMLElement>('field-model').classList.toggle('hidden', isHttpApi || isNative);
+  $<HTMLElement>('custom-http-fields').classList.toggle('hidden', type !== 'custom-http');
+  $<HTMLElement>('deepl-fields').classList.toggle('hidden', type !== 'deepl');
+  $<HTMLElement>('azure-fields').classList.toggle('hidden', type !== 'azure-translator');
+  $<HTMLElement>('native-host-fields').classList.toggle('hidden', !isNative);
 }
 
-/** Read the editor form back into the selected provider. Returns false on invalid headers. */
 function collectEditor(): boolean {
   const provider = selectedProvider();
   if (!provider) return true;
@@ -272,15 +392,379 @@ function collectEditor(): boolean {
   }
 
   provider.method = $<HTMLSelectElement>('f-method').value as ProviderConfig['method'];
-  provider.apiKeyPlacement = $<HTMLSelectElement>('f-key-placement').value as ProviderConfig['apiKeyPlacement'];
+  provider.apiKeyPlacement = $<HTMLSelectElement>('f-key-placement')
+    .value as ProviderConfig['apiKeyPlacement'];
   provider.apiKeyParamName = $<HTMLInputElement>('f-key-name').value.trim();
   provider.responsePath = $<HTMLInputElement>('f-response-path').value.trim();
   provider.bodyTemplate = $<HTMLTextAreaElement>('f-body-template').value;
 
+  provider.formality = $<HTMLSelectElement>('f-formality').value as ProviderConfig['formality'];
+  provider.region = $<HTMLInputElement>('f-region').value.trim();
+  provider.hostName = $<HTMLInputElement>('f-hostname').value.trim() || DEFAULT_NATIVE_HOST_NAME;
+  provider.backend = $<HTMLInputElement>('f-backend').value.trim();
+  provider.fallbackProviderId = $<HTMLSelectElement>('f-fallback').value;
+
   applyTypeVisibility(provider.type);
   return true;
 }
+/* -------------------------------- failover ----------------------------------- */
 
+function renderFailover(): void {
+  if (!draft) return;
+  const list = $<HTMLDivElement>('failover-list');
+  list.textContent = '';
+  if (draft.failoverChain.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = '链条为空：活动服务失败时不进行故障转移（native-host 的专属回退仍生效）。';
+    list.appendChild(empty);
+  }
+  draft.failoverChain.forEach((id, index) => {
+    const provider = draft!.providers.find((p) => p.id === id);
+    const row = document.createElement('div');
+    row.className = 'failover-row';
+    const label = document.createElement('span');
+    label.textContent = `${index + 1}. ${provider?.name ?? id}`;
+    row.appendChild(label);
+    const up = document.createElement('button');
+    up.className = 'icon-btn';
+    up.textContent = '↑';
+    up.disabled = index === 0;
+    up.addEventListener('click', () => {
+      const chain = draft!.failoverChain;
+      [chain[index - 1], chain[index]] = [chain[index], chain[index - 1]];
+      markDirty();
+      renderFailover();
+    });
+    const down = document.createElement('button');
+    down.className = 'icon-btn';
+    down.textContent = '↓';
+    down.disabled = index === draft!.failoverChain.length - 1;
+    down.addEventListener('click', () => {
+      const chain = draft!.failoverChain;
+      [chain[index + 1], chain[index]] = [chain[index], chain[index + 1]];
+      markDirty();
+      renderFailover();
+    });
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.textContent = '✕';
+    del.addEventListener('click', () => {
+      draft!.failoverChain.splice(index, 1);
+      markDirty();
+      renderFailover();
+    });
+    row.append(up, down, del);
+    list.appendChild(row);
+  });
+
+  const select = $<HTMLSelectElement>('failover-select');
+  select.textContent = '';
+  for (const p of draft.providers) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name;
+    select.appendChild(opt);
+  }
+}
+
+function addToFailover(): void {
+  if (!draft) return;
+  const id = $<HTMLSelectElement>('failover-select').value;
+  if (!id || draft.failoverChain.includes(id)) return;
+  draft.failoverChain.push(id);
+  markDirty();
+  renderFailover();
+}
+
+/* -------------------------------- glossary ----------------------------------- */
+
+function bumpGlossaryVersion(): void {
+  if (!draft) return;
+  draft.glossaryVersion += 1;
+  renderGlossary();
+}
+
+function renderGlossary(): void {
+  if (!draft) return;
+  const list = $<HTMLDivElement>('glossary-list');
+  list.textContent = '';
+  if (draft.glossary.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = '暂无术语。术语将以「原文 = 译文」注入 System Prompt。';
+    list.appendChild(empty);
+  }
+  draft.glossary.forEach((entry, index) => {
+    const row = document.createElement('div');
+    row.className = 'glossary-row';
+    const source = document.createElement('input');
+    source.type = 'text';
+    source.value = entry.source;
+    source.placeholder = '原文';
+    source.addEventListener('input', () => {
+      draft!.glossary[index].source = source.value;
+      markDirty();
+    });
+    source.addEventListener('change', bumpGlossaryVersion);
+    const eq = document.createElement('span');
+    eq.textContent = '=';
+    const target = document.createElement('input');
+    target.type = 'text';
+    target.value = entry.target;
+    target.placeholder = '译文';
+    target.addEventListener('input', () => {
+      draft!.glossary[index].target = target.value;
+      markDirty();
+    });
+    target.addEventListener('change', bumpGlossaryVersion);
+    const note = document.createElement('input');
+    note.type = 'text';
+    note.value = entry.note ?? '';
+    note.placeholder = '备注（可选）';
+    note.addEventListener('input', () => {
+      const value = note.value.trim();
+      if (value === '') delete draft!.glossary[index].note;
+      else draft!.glossary[index].note = value;
+      markDirty();
+    });
+    note.addEventListener('change', bumpGlossaryVersion);
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.textContent = '✕';
+    del.addEventListener('click', () => {
+      draft!.glossary.splice(index, 1);
+      markDirty();
+      bumpGlossaryVersion();
+    });
+    row.append(source, eq, target, note, del);
+    list.appendChild(row);
+  });
+  $<HTMLElement>('glossary-version').textContent = `术语表版本：v${draft.glossaryVersion}`;
+}
+
+function addGlossaryEntry(): void {
+  if (!draft) return;
+  draft.glossary.push({ source: '', target: '' });
+  markDirty();
+  renderGlossary();
+}
+
+function importPastedGlossary(): void {
+  if (!draft) return;
+  const raw = $<HTMLTextAreaElement>('glossary-paste').value;
+  let added = 0;
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '' || !trimmed.includes('=')) continue;
+    const [sourcePart, ...rest] = trimmed.split('=');
+    let targetPart = rest.join('=').trim();
+    const source = sourcePart.trim();
+    let note: string | undefined;
+    const noteMatch = targetPart.match(/^(.*?)\s*[（(](.*)[)）]\s*$/);
+    if (noteMatch) {
+      targetPart = noteMatch[1].trim();
+      note = noteMatch[2].trim();
+    }
+    if (source === '' || targetPart === '') continue;
+    const entry: GlossaryEntry = { source, target: targetPart };
+    if (note) entry.note = note;
+    draft.glossary.push(entry);
+    added++;
+  }
+  $<HTMLTextAreaElement>('glossary-paste').value = '';
+  if (added > 0) {
+    markDirty();
+    bumpGlossaryVersion();
+    toast(`已导入 ${added} 条术语（保存后生效）`);
+  } else {
+    toast('未解析到任何「原文 = 译文」行', true);
+  }
+}
+
+/* -------------------------------- site rules --------------------------------- */
+
+function renderRules(): void {
+  if (!draft) return;
+  const list = $<HTMLDivElement>('rule-list');
+  list.textContent = '';
+  if (draft.siteRules.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = '暂无站点规则。';
+    list.appendChild(empty);
+  }
+  for (const rule of draft.siteRules) {
+    const row = document.createElement('div');
+    row.className = 'rule-row';
+
+    const enabled = document.createElement('input');
+    enabled.type = 'checkbox';
+    enabled.checked = rule.enabled !== false;
+    enabled.title = '启用/停用';
+    enabled.addEventListener('change', () => {
+      rule.enabled = enabled.checked;
+      markDirty();
+    });
+
+    const summary = document.createElement('span');
+    summary.className = 'rule-summary';
+    const bits: string[] = [];
+    if (rule.defaultMode) bits.push(`模式:${rule.defaultMode}`);
+    if (typeof rule.minTextLength === 'number') bits.push(`长度≥${rule.minTextLength}`);
+    if (rule.viewportOnly) bits.push('仅视口');
+    if ((rule.includeSelectors ?? []).length > 0) bits.push(`include:${rule.includeSelectors!.length}`);
+    if ((rule.excludeSelectors ?? []).length > 0) bits.push(`exclude:${rule.excludeSelectors!.length}`);
+    const builtin = rule.id.startsWith('builtin-') ? '（内置）' : '';
+    summary.textContent = `${rule.match.join(', ')}${builtin}${bits.length > 0 ? ` — ${bits.join('，')}` : ''}`;
+
+    const edit = document.createElement('button');
+    edit.className = 'icon-btn';
+    edit.textContent = '编辑';
+    edit.addEventListener('click', () => openRuleEditor(rule.id));
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.textContent = '✕';
+    del.addEventListener('click', () => {
+      if (!draft) return;
+      draft.siteRules = draft.siteRules.filter((r) => r.id !== rule.id);
+      markDirty();
+      renderRules();
+    });
+
+    row.append(enabled, summary, edit, del);
+    list.appendChild(row);
+  }
+}
+
+function openRuleEditor(ruleId: string | null): void {
+  if (!draft) return;
+  editingRuleId = ruleId;
+  const rule = ruleId ? draft.siteRules.find((r) => r.id === ruleId) : null;
+  $<HTMLElement>('rule-editor-title').textContent = rule ? '编辑规则' : '新增规则';
+  $<HTMLInputElement>('r-match').value = rule?.match.join(', ') ?? '';
+  $<HTMLInputElement>('r-include').value = (rule?.includeSelectors ?? []).join(', ');
+  $<HTMLInputElement>('r-exclude').value = (rule?.excludeSelectors ?? []).join(', ');
+  $<HTMLInputElement>('r-minlen').value = rule?.minTextLength !== undefined ? String(rule.minTextLength) : '';
+  $<HTMLSelectElement>('r-mode').value = rule?.defaultMode ?? '';
+  $<HTMLInputElement>('r-viewport').checked = rule?.viewportOnly === true;
+  $<HTMLInputElement>('r-enabled').checked = rule?.enabled !== false;
+  updateRulePreview();
+  $<HTMLDivElement>('rule-editor').classList.remove('hidden');
+}
+
+function buildRuleFromEditor(): SiteRule | null {
+  const match = $<HTMLInputElement>('r-match')
+    .value.split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  const raw: Partial<SiteRule> = {
+    id: editingRuleId ?? `rule-${Date.now().toString(36)}`,
+    match,
+    enabled: $<HTMLInputElement>('r-enabled').checked,
+  };
+  const include = $<HTMLInputElement>('r-include').value.split(',').map((s) => s.trim()).filter(Boolean);
+  if (include.length > 0) raw.includeSelectors = include;
+  const exclude = $<HTMLInputElement>('r-exclude').value.split(',').map((s) => s.trim()).filter(Boolean);
+  if (exclude.length > 0) raw.excludeSelectors = exclude;
+  const minLen = $<HTMLInputElement>('r-minlen').value;
+  if (minLen.trim() !== '') raw.minTextLength = num(minLen, 6);
+  const mode = $<HTMLSelectElement>('r-mode').value;
+  if (mode !== '') raw.defaultMode = mode as DisplayMode;
+  if ($<HTMLInputElement>('r-viewport').checked) raw.viewportOnly = true;
+  return normalizeSiteRule(raw, raw.id as string);
+}
+
+function updateRulePreview(): void {
+  const rule = buildRuleFromEditor();
+  $<HTMLPreElement>('rule-json').textContent = rule
+    ? JSON.stringify(rule, null, 2)
+    : '（无效：match 域名不能为空）';
+}
+
+function saveRuleFromEditor(): void {
+  if (!draft) return;
+  const rule = buildRuleFromEditor();
+  if (!rule) {
+    toast('规则无效：match 域名不能为空', true);
+    return;
+  }
+  const index = draft.siteRules.findIndex((r) => r.id === rule.id);
+  if (index >= 0) draft.siteRules[index] = rule;
+  else draft.siteRules.push(rule);
+  markDirty();
+  renderRules();
+  $<HTMLDivElement>('rule-editor').classList.add('hidden');
+  editingRuleId = null;
+  toast('规则已应用到草稿，保存全部设置后生效');
+}
+
+function exportRules(): void {
+  if (!draft) return;
+  const payload = {
+    app: 'polypage-site-rules',
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    rules: draft.siteRules,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'polypage-site-rules.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importRules(file: File): Promise<void> {
+  if (!draft) return;
+  try {
+    const parsed: unknown = JSON.parse(await file.text());
+    const rawRules = Array.isArray(parsed)
+      ? parsed
+      : (parsed as { rules?: unknown[] })?.rules;
+    if (!Array.isArray(rawRules)) throw new Error('缺少 rules 数组');
+    let added = 0;
+    for (const raw of rawRules) {
+      const rule = normalizeSiteRule(raw, `rule-import-${Date.now().toString(36)}-${added}`);
+      if (!rule) continue;
+      if (draft.siteRules.some((r) => r.id === rule.id)) continue;
+      draft.siteRules.push(rule);
+      added++;
+    }
+    markDirty();
+    renderRules();
+    toast(`已导入 ${added} 条规则（保存后生效）`);
+  } catch (e) {
+    toast(`规则导入失败：${e instanceof Error ? e.message : String(e)}`, true);
+  }
+}
+
+/* -------------------------------- gateway UI --------------------------------- */
+
+async function checkHostStatus(): Promise<void> {
+  const statusEl = $<HTMLElement>('host-status');
+  const backendsEl = $<HTMLElement>('host-backends');
+  statusEl.className = 'test-result';
+  statusEl.textContent = '检测中…';
+  backendsEl.textContent = '';
+  try {
+    const res = await sendRuntime({ type: 'host-status' });
+    if (res.installed) {
+      statusEl.textContent = `✓ 网关在线${res.version ? `（版本 ${res.version}）` : ''}`;
+      statusEl.classList.add('ok');
+    } else {
+      statusEl.textContent = `✗ 未检测到网关：${res.error ?? '未知错误'}`;
+      statusEl.classList.add('bad');
+      backendsEl.textContent =
+        '安装方法：运行 native-host 发布的 PolyPage.Gateway.exe --install（无需管理员），' +
+        '开发态可用 --allow chrome-extension://<扩展ID>/ 追加允许来源。';
+    }
+  } catch (e) {
+    statusEl.textContent = `✗ ${e instanceof Error ? e.message : String(e)}`;
+    statusEl.classList.add('bad');
+  }
+}
 /* --------------------------------- actions ----------------------------------- */
 
 async function persist(): Promise<boolean> {
@@ -290,6 +774,8 @@ async function persist(): Promise<boolean> {
     toast('请修正表单中的错误', true);
     return false;
   }
+  // Drop glossary rows that are still empty.
+  draft.glossary = draft.glossary.filter((g) => g.source.trim() !== '' && g.target.trim() !== '');
   const normalized = normalizeSettings(draft);
   try {
     const res = await sendRuntime({ type: 'save-settings', settings: normalized });
@@ -321,8 +807,11 @@ async function testProvider(): Promise<void> {
   try {
     const res = await sendRuntime({ type: 'test-provider', provider });
     if (res?.ok) {
-      resultEl.textContent = `✓ 连接成功，示例译文：${res.result}`;
+      const latency = typeof res.latencyMs === 'number' ? `（${res.latencyMs}ms）` : '';
+      resultEl.textContent = `✓ 连接成功${latency}，示例译文：${res.result}`;
       resultEl.classList.add('ok');
+      await refreshStats();
+      renderProviderList();
     } else {
       resultEl.textContent = `✗ ${res?.error ?? '测试失败'}`;
       resultEl.classList.add('bad');
@@ -342,23 +831,60 @@ async function refreshCacheStats(): Promise<void> {
   }
 }
 
+let logEntriesCache: { providerId?: string }[] = [];
+
+function renderLogFilter(): void {
+  const select = $<HTMLSelectElement>('log-filter');
+  select.textContent = '';
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = '全部 Provider';
+  select.appendChild(all);
+  const ids = new Set<string>();
+  for (const entry of logEntriesCache) {
+    if (entry.providerId) ids.add(entry.providerId);
+  }
+  for (const id of ids) {
+    const provider = draft?.providers.find((p) => p.id === id);
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = provider?.name ?? id;
+    select.appendChild(opt);
+  }
+  select.value = logFilterProvider;
+  if (select.value !== logFilterProvider) {
+    logFilterProvider = '';
+    select.value = '';
+  }
+}
+
 async function refreshErrorLog(): Promise<void> {
   const box = $<HTMLDivElement>('error-log');
   box.textContent = '';
   try {
     const { entries } = await sendRuntime({ type: 'get-error-log' });
-    if (entries.length === 0) {
+    logEntriesCache = entries;
+    renderLogFilter();
+    const filtered = logFilterProvider
+      ? entries.filter((e) => e.providerId === logFilterProvider)
+      : entries;
+    if (filtered.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'log-empty';
-      empty.textContent = '暂无错误记录';
+      empty.textContent = logFilterProvider ? '该 Provider 暂无错误记录' : '暂无错误记录';
       box.appendChild(empty);
       return;
     }
-    for (const entry of entries) {
+    for (const entry of filtered) {
       const row = document.createElement('div');
       row.className = 'log-entry';
       const time = new Date(entry.ts).toLocaleString();
-      row.innerHTML = `<span class="log-meta">${time}</span><span class="log-kind">${entry.kind}</span><span>${entry.message}</span>`;
+      const provider = entry.providerId
+        ? (draft?.providers.find((p) => p.id === entry.providerId)?.name ?? entry.providerId)
+        : '';
+      row.innerHTML = `<span class="log-meta">${time}</span><span class="log-kind">${entry.kind}</span>${
+        provider ? `<span class="log-provider">[${provider}]</span>` : ''
+      }<span>${entry.message}</span>`;
       box.appendChild(row);
     }
   } catch {
@@ -370,7 +896,7 @@ function exportSettings(): void {
   if (!draft) return;
   collectGeneral();
   collectEditor();
-  const payload = { app: 'polypage-web-translator', version: 1, exportedAt: new Date().toISOString(), settings: draft };
+  const payload = { app: 'polypage-web-translator', version: 2, exportedAt: new Date().toISOString(), settings: draft };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -393,7 +919,7 @@ async function importSettings(file: File): Promise<void> {
     draft = normalized;
     selectedId = normalized.activeProviderId;
     renderAll();
-    toast('配置已导入');
+    toast('配置已导入（v1 配置会自动迁移到 v2）');
   } catch {
     toast('导入失败：无法解析 JSON 文件', true);
   }
@@ -416,12 +942,26 @@ async function renderShortcuts(): Promise<void> {
   }
 }
 
+function renderPresets(): void {
+  const select = $<HTMLSelectElement>('preset-select');
+  select.textContent = '';
+  for (const preset of PROVIDER_PRESETS) {
+    const opt = document.createElement('option');
+    opt.value = preset.id;
+    opt.textContent = `${preset.name} — ${preset.description}`;
+    select.appendChild(opt);
+  }
+}
+
 /* ---------------------------------- wiring ----------------------------------- */
 
 function renderAll(): void {
   renderGeneral();
   renderProviderList();
   renderEditor();
+  renderFailover();
+  renderGlossary();
+  renderRules();
 }
 
 async function init(): Promise<void> {
@@ -433,6 +973,8 @@ async function init(): Promise<void> {
     return;
   }
   selectedId = draft.activeProviderId;
+  renderPresets();
+  await refreshStats();
   renderAll();
   void refreshCacheStats();
   void refreshErrorLog();
@@ -441,18 +983,48 @@ async function init(): Promise<void> {
   $<HTMLButtonElement>('save').addEventListener('click', () => void persist());
   $<HTMLButtonElement>('add-openai').addEventListener('click', () => addProvider('openai-compatible'));
   $<HTMLButtonElement>('add-custom').addEventListener('click', () => addProvider('custom-http'));
+  $<HTMLButtonElement>('add-native').addEventListener('click', () => addProvider('native-host'));
+  $<HTMLButtonElement>('add-from-preset').addEventListener('click', () =>
+    addProviderFromPreset($<HTMLSelectElement>('preset-select').value),
+  );
   $<HTMLButtonElement>('test-provider').addEventListener('click', () => void testProvider());
   $<HTMLSelectElement>('f-type').addEventListener('change', () => {
     collectEditor();
     renderEditor();
     markDirty();
   });
+  $<HTMLButtonElement>('failover-add').addEventListener('click', addToFailover);
+  $<HTMLButtonElement>('glossary-add').addEventListener('click', addGlossaryEntry);
+  $<HTMLButtonElement>('glossary-import').addEventListener('click', importPastedGlossary);
+  $<HTMLButtonElement>('rule-add').addEventListener('click', () => openRuleEditor(null));
+  $<HTMLButtonElement>('rule-save').addEventListener('click', saveRuleFromEditor);
+  $<HTMLButtonElement>('rule-cancel').addEventListener('click', () => {
+    $<HTMLDivElement>('rule-editor').classList.add('hidden');
+    editingRuleId = null;
+  });
+  $<HTMLButtonElement>('rule-export').addEventListener('click', exportRules);
+  $<HTMLButtonElement>('rule-import').addEventListener('click', () =>
+    $<HTMLInputElement>('rule-import-file').click(),
+  );
+  $<HTMLInputElement>('rule-import-file').addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) void importRules(file);
+    (e.target as HTMLInputElement).value = '';
+  });
+  for (const id of ['r-match', 'r-include', 'r-exclude', 'r-minlen', 'r-mode', 'r-viewport', 'r-enabled']) {
+    document.getElementById(id)?.addEventListener('input', updateRulePreview);
+  }
+  $<HTMLButtonElement>('host-check').addEventListener('click', () => void checkHostStatus());
   $<HTMLButtonElement>('clear-cache').addEventListener('click', async () => {
     await sendRuntime({ type: 'clear-cache' });
     toast('缓存已清空');
     void refreshCacheStats();
   });
   $<HTMLButtonElement>('refresh-log').addEventListener('click', () => void refreshErrorLog());
+  $<HTMLSelectElement>('log-filter').addEventListener('change', (e) => {
+    logFilterProvider = (e.target as HTMLSelectElement).value;
+    void refreshErrorLog();
+  });
   $<HTMLButtonElement>('clear-log').addEventListener('click', async () => {
     await sendRuntime({ type: 'clear-error-log' });
     void refreshErrorLog();

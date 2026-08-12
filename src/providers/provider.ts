@@ -4,6 +4,10 @@
  *
  * New provider types (DeepL, Ollama, native-host, enterprise gateway...) plug
  * in via registerProviderFactory() without touching the rest of the code.
+ *
+ * 2.0: providers may implement the optional streaming interface
+ * translateStream() (spec 2.0 §7.3); non-streaming providers fall back to a
+ * single-shot translateTexts() result.
  */
 import { MAX_RETRIES } from '../shared/constants';
 import type { ErrorKind, ProviderConfig, ProviderType } from '../shared/types';
@@ -36,6 +40,9 @@ export interface TranslationContext {
   glossary?: string;
 }
 
+/** Incremental streaming callback. */
+export type StreamDeltaHandler = (delta: string) => void;
+
 export interface TranslationProvider {
   readonly config: ProviderConfig;
   /**
@@ -43,6 +50,22 @@ export interface TranslationProvider {
    * Throws ProviderError on failure.
    */
   translateTexts(texts: string[], ctx: TranslationContext, signal: AbortSignal): Promise<string[]>;
+  /**
+   * Optional streaming translation of a single text (spec 2.0 §7.3).
+   * Implementations push deltas through onDelta and resolve with the full
+   * text. Absence means the provider does not support streaming.
+   */
+  translateStream?(
+    text: string,
+    ctx: TranslationContext,
+    onDelta: StreamDeltaHandler,
+    signal: AbortSignal,
+  ): Promise<string>;
+}
+
+/** True when the provider instance supports streaming. */
+export function providerSupportsStreaming(provider: TranslationProvider): boolean {
+  return typeof provider.translateStream === 'function';
 }
 
 /* ------------------------------ factory registry ----------------------------- */
@@ -143,24 +166,35 @@ export function toProviderError(e: unknown): ProviderError {
   return new ProviderError('unknown', message);
 }
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Read a short error message from an API error response body (best effort). */
+export async function readApiErrorMessage(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text) return '';
+    try {
+      const json: unknown = JSON.parse(text);
+      if (json && typeof json === 'object') {
+        const record = json as Record<string, unknown>;
+        const candidate =
+          record.message ?? record.error ?? record.detail ?? record.description;
+        if (typeof candidate === 'string') return candidate.slice(0, 300);
+        if (
+          candidate &&
+          typeof candidate === 'object' &&
+          typeof (candidate as Record<string, unknown>).message === 'string'
+        ) {
+          return ((candidate as Record<string, unknown>).message as string).slice(0, 300);
+        }
+      }
+    } catch {
+      // not JSON — fall through to raw text
+    }
+    return text.slice(0, 300);
+  } catch {
+    return '';
+  }
 }
 
-/** Extract a human-readable error message from an API error response body. */
-export async function readApiErrorMessage(res: Response): Promise<string | null> {
-  try {
-    const body = (await res.json()) as {
-      error?: { message?: string } | string;
-      message?: string;
-      detail?: string;
-    };
-    if (typeof body?.error === 'string') return body.error;
-    if (typeof body?.error?.message === 'string') return body.error.message;
-    if (typeof body?.message === 'string') return body.message;
-    if (typeof body?.detail === 'string') return body.detail;
-  } catch {
-    // non-JSON body
-  }
-  return null;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -48,3 +48,32 @@
     background: rgba(220, 80, 80, 0.1);
   }
 }
+
+
+/* ---------- 2.0: inline bilingual mode (spec 2.0 §7.2) ---------- */
+.wt-inline-src {
+  /* original text stays untouched visually */
+}
+.wt-inline-dst {
+  color: rgba(79, 70, 229, 0.95);
+  border-bottom: 1px dotted rgba(79, 70, 229, 0.45);
+  margin: 0 0.15em;
+}
+.wt-inline-dst.wt-inline-pending {
+  color: rgba(100, 105, 120, 0.85);
+  font-style: italic;
+}
+.wt-inline-dst.wt-inline-error {
+  color: #b23b3b;
+  border-bottom-color: rgba(220, 80, 80, 0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  .wt-inline-dst {
+    color: rgba(165, 160, 255, 0.95);
+    border-bottom-color: rgba(129, 121, 255, 0.45);
+  }
+  .wt-inline-dst.wt-inline-error {
+    color: #ff9c9c;
+  }
+}

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PolyPage.Gateway</AssemblyName>
+    <RootNamespace>PolyPage.Gateway</RootNamespace>
+    <Version>2.0.0</Version>
+    <!-- Spec 2.0 §5.4 item 1: PublishSingleFile + SelfContained (x64).
+         Publish with: dotnet publish -c Release -r win-x64 -->
+    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PolyPage.Gateway.Backends\PolyPage.Gateway.Backends.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -362,3 +362,61 @@ textarea:focus {
 .toast.toast-error {
   background: var(--danger);
 }
+
+
+/* ---------- 2.0 additions ---------- */
+.stats-badge {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #6b7180;
+  background: #f1f2f7;
+  border-radius: 6px;
+  padding: 1px 7px;
+}
+.failover-list,
+.glossary-list,
+.rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+.failover-row,
+.glossary-row,
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.glossary-row input {
+  flex: 1;
+  min-width: 60px;
+}
+.rule-summary {
+  flex: 1;
+  font-size: 13px;
+  word-break: break-all;
+}
+.json-preview {
+  background: #f5f6fa;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-provider {
+  color: var(--indigo);
+  font-size: 12px;
+  margin-right: 6px;
+}
+#log-filter {
+  min-width: 160px;
+}

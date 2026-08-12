@@ -210,3 +210,28 @@ body {
   color: var(--text-dim);
   font-size: 11px;
 }
+
+
+/* 2.0 additions */
+.toggle-row {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text);
+}
+.toggle input {
+  accent-color: var(--indigo);
+}
+.info-hints {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fff7e6;
+  color: #7a5200;
+  font-size: 12px;
+}

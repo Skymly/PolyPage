@@ -12,6 +12,7 @@
 import { build } from 'vite';
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,6 +53,64 @@ async function buildPage(name) {
 async function buildPages() {
   await buildPage('popup');
   await buildPage('options');
+}
+
+/**
+ * PDF bilingual reader page (3.0 pillar E). Built like popup/options, but the
+ * html file name differs from the folder name (pdf-viewer.html in src/viewer).
+ */
+async function buildViewer() {
+  await build({
+    root,
+    configFile: false,
+    base: './',
+    publicDir: false,
+    build: {
+      ...shared,
+      outDir: 'dist/viewer',
+      emptyOutDir: false,
+      rollupOptions: {
+        input: { 'pdf-viewer': path.join(root, 'src/viewer/pdf-viewer.html') },
+      },
+    },
+  });
+  const deepHtml = path.join(dist, 'viewer', 'src', 'viewer', 'pdf-viewer.html');
+  if (existsSync(deepHtml)) {
+    const html = (await readFile(deepHtml, 'utf8')).replace(/\.\.\/\.\.\//g, './');
+    await writeFile(path.join(dist, 'viewer', 'pdf-viewer.html'), html);
+    await rm(path.join(dist, 'viewer', 'src'), { recursive: true, force: true });
+  }
+}
+
+/**
+ * Verify the locally packaged pdf.js vendor distribution against pinned
+ * SHA-256 hashes (spec 3.0 §13: vendor release checked at build time), then
+ * copy it to dist/vendor.
+ */
+async function copyVendor() {
+  const vendorDir = path.join(root, 'vendor');
+  const hashesPath = path.join(root, 'scripts', 'vendor-hashes.json');
+  const spec = JSON.parse(await readFile(hashesPath, 'utf8'));
+  const files = Object.keys(spec.files ?? {});
+  if (files.length === 0) throw new Error('vendor-hashes.json lists no files');
+  for (const name of files) {
+    const file = path.join(vendorDir, name);
+    if (!existsSync(file)) throw new Error(`vendor file missing: ${name}`);
+    const digest = createHash('sha256').update(await readFile(file)).digest('hex');
+    if (digest !== spec.files[name]) {
+      throw new Error(
+        `vendor hash mismatch for ${name}: expected ${spec.files[name]}, got ${digest}. ` +
+          'Re-run scripts/sync-vendor.mjs to re-pin after a deliberate pdf.js upgrade.',
+      );
+    }
+  }
+  await mkdir(path.join(dist, 'vendor'), { recursive: true });
+  for (const name of files) {
+    await cp(path.join(vendorDir, name), path.join(dist, 'vendor', name));
+  }
+  const license = path.join(vendorDir, 'LICENSE');
+  if (existsSync(license)) await cp(license, path.join(dist, 'vendor', 'LICENSE'));
+  console.log(`    vendor pdf.js v${spec.pdfjsVersion} verified (${files.length} files) and copied`);
 }
 
 async function buildBackground() {
@@ -109,6 +168,9 @@ async function verifyDist() {
     'content.js',
     'popup/popup.html',
     'options/options.html',
+    'viewer/pdf-viewer.html',
+    'vendor/pdf.min.mjs',
+    'vendor/pdf.worker.min.mjs',
     'styles/content.css',
     'icons/icon16.png',
     'icons/icon32.png',
@@ -143,14 +205,17 @@ async function verifyDist() {
 }
 
 await rm(dist, { recursive: true, force: true });
-console.log('[1/5] Building popup/options pages...');
+console.log('[1/6] Building popup/options pages...');
 await buildPages();
-console.log('[2/5] Building background service worker...');
+console.log('[2/6] Building PDF viewer page...');
+await buildViewer();
+console.log('[3/6] Building background service worker...');
 await buildBackground();
-console.log('[3/5] Building content script...');
+console.log('[4/6] Building content script...');
 await buildContent();
-console.log('[4/5] Copying static assets...');
+console.log('[5/6] Copying static assets + verifying vendor pdf.js...');
 await copyStatic();
-console.log('[5/5] Verifying dist...');
+await copyVendor();
+console.log('[6/6] Verifying dist...');
 await verifyDist();
 console.log('Build complete: dist/ is ready to load as an unpacked extension.');

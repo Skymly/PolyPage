@@ -97,6 +97,121 @@ const inlinePage = `<!doctype html>
   <p id="in2">A second paragraph that stays plain but long enough for translation.</p>
 </body></html>`;
 
+/* --------------------------- 3.0 fixtures: PDF ------------------------------- */
+
+/** Escape PDF string literal specials. */
+function pdfEscape(text) {
+  return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+/**
+ * Build a small multi-page PDF with a real text layer (Helvetica, one Tj per
+ * line). Page 4 has an empty content stream => "scanned" page. Xref offsets
+ * are computed programmatically so pdf.js accepts the file.
+ */
+function buildFixturePdf() {
+  const HEADER = 'SMOKE CONFERENCE 2026';
+  const pages = [
+    {
+      lines: [
+        { t: HEADER, y: 760, size: 9 },
+        { t: 'The bilingual reader extracts text layers page by page.', y: 700, size: 12 },
+        { t: 'Paragraph clustering rebuilds readable blocks for translation.', y: 680, size: 12 },
+        { t: 'A second paragraph starts after a larger vertical gap below.', y: 620, size: 12 },
+        { t: '1', y: 40, size: 9 },
+      ],
+    },
+    {
+      lines: [
+        { t: HEADER, y: 760, size: 9 },
+        { t: 'Headers repeating on most pages are filtered before translation.', y: 700, size: 12 },
+        { t: '2', y: 40, size: 9 },
+      ],
+    },
+    {
+      lines: [
+        { t: HEADER, y: 760, size: 9 },
+        { t: 'Cache keys carry the document fingerprint for zero-cost reopens.', y: 700, size: 12 },
+        { t: '3', y: 40, size: 9 },
+      ],
+    },
+    { lines: [] }, // scanned page placeholder (no text layer)
+  ];
+
+  const objects = []; // 1-based; each entry: raw body between "N 0 obj" and "endobj"
+  const pageObjIds = [];
+  // Reserve ids: 1 catalog, 2 pages tree, 3 font; pages start at 4.
+  let nextId = 4;
+  const perPage = pages.map((page) => {
+    const pageId = nextId++;
+    const contentId = nextId++;
+    pageObjIds.push(pageId);
+    const ops = ['BT'];
+    for (const line of page.lines) {
+      ops.push(`/F1 ${line.size} Tf`);
+      ops.push(`1 0 0 1 50 ${line.y} Tm`);
+      ops.push(`(${pdfEscape(line.t)}) Tj`);
+    }
+    ops.push('ET');
+    const stream = ops.join('\n');
+    objects[contentId - 1] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+    objects[pageId - 1] =
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ` +
+      `/Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`;
+    return pageId;
+  });
+  objects[0] = `<< /Type /Catalog /Pages 2 0 R >>`;
+  objects[1] = `<< /Type /Pages /Kids [${pageObjIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`;
+  objects[2] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`;
+
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(out.length);
+    out += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xrefPos = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+
+const fixturePdf = buildFixturePdf();
+
+/* ------------------------ 3.0 fixtures: image & video ------------------------ */
+
+/** 1x1 red PNG, displayed at 320x240 via CSS so the hover button qualifies. */
+const PNG_1PX_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+const imagePage = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Image</title></head>
+<body>
+  <p id="img-caption">Hover the picture below and use PolyPage to translate its text.</p>
+  <img id="photo" src="/img.png" alt="fixture" style="width:320px;height:240px;background:#ddd;" />
+</body></html>`;
+
+const subtitleVtt = `WEBVTT
+
+1
+00:00:01.000 --> 00:00:03.000
+Hello from the smoke fixture
+
+2
+00:00:04.000 --> 00:00:06.000
+Second cue line here
+`;
+
+const videoPage = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Video</title></head>
+<body>
+  <p id="vid-caption">A fixture video with a WebVTT subtitle track.</p>
+  <video id="vid" width="480" height="270" controls preload="metadata" style="background:#000;">
+    <track kind="subtitles" src="/subs.vtt" srclang="en" label="English" default />
+  </video>
+</body></html>`;
+
 function startPageServer() {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
@@ -108,8 +223,23 @@ function startPageServer() {
         '/iframe-child.html': iframeChildPage,
         '/selection.html': selectionPage,
         '/inline.html': inlinePage,
+        '/image.html': imagePage,
+        '/video.html': videoPage,
       };
-      const html = pages[url.split('?')[0]];
+      const pathOnly = url.split('?')[0];
+      if (pathOnly === '/sample.pdf') {
+        res.writeHead(200, { 'Content-Type': 'application/pdf' });
+        return res.end(fixturePdf);
+      }
+      if (pathOnly === '/img.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        return res.end(Buffer.from(PNG_1PX_BASE64, 'base64'));
+      }
+      if (pathOnly === '/subs.vtt') {
+        res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8' });
+        return res.end(subtitleVtt);
+      }
+      const html = pages[pathOnly];
       if (!html) {
         res.writeHead(404);
         return res.end('not found');
@@ -134,6 +264,7 @@ function startCrossOriginServer() {
 function startMockApi() {
   let requests = 0;
   let sseRequests = 0;
+  let visionRequests = 0;
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -155,6 +286,32 @@ function startMockApi() {
         return res.end(
           JSON.stringify({ data: { translations: slowTexts.map((t) => `[slow] ${t}`) } }),
         );
+      }
+
+      // 3.0 (pillar F): multimodal vision endpoint — user content is an
+      // array containing an image_url part; reply with fixed segments.
+      const firstUser = Array.isArray(parsed.messages)
+        ? parsed.messages.filter((m) => m.role === 'user').pop()
+        : null;
+      if (firstUser && Array.isArray(firstUser.content)) {
+        const hasImage = firstUser.content.some((p) => p?.type === 'image_url');
+        if (hasImage) {
+          visionRequests++;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content:
+                      '[{"text":"HELLO WORLD","translation":"你好，世界"},' +
+                      '{"text":"PolyPage 3.0","translation":"PolyPage 3.0（测试）"}]',
+                  },
+                },
+              ],
+            }),
+          );
+        }
       }
 
       // 2.0: gateway HttpBackend endpoint (custom JSON shape).
@@ -203,7 +360,12 @@ function startMockApi() {
   });
   return new Promise((resolve) => {
     server.listen(PORT_API, '127.0.0.1', () =>
-      resolve({ server, count: () => requests, sseCount: () => sseRequests }),
+      resolve({
+        server,
+        count: () => requests,
+        sseCount: () => sseRequests,
+        visionCount: () => visionRequests,
+      }),
     );
   });
 }
@@ -546,6 +708,22 @@ try {
       throw new Error('onInstalled never wrote default settings');
     })()`);
   check('save-settings accepted', await saveSettingsThroughExtension(settingsPayload({})));
+
+  // 3.0 (spec §9.3): the v2 payload above must land as schema v3 with the
+  // pillar E/F/G/H sections defaulted — the real save-settings migration path.
+  const savedV3 = await ext.eval(
+    `chrome.runtime.sendMessage({ type: 'get-full-settings' }).then((r) => r.settings)`,
+  );
+  check('v2 payload migrated to schemaVersion 3', savedV3?.schemaVersion === 3, `v=${savedV3?.schemaVersion}`);
+  check(
+    '3.0 pillar sections defaulted on migration',
+    !!savedV3?.pdfViewer &&
+      !!savedV3?.imageTranslate &&
+      !!savedV3?.subtitles &&
+      savedV3?.languageDetection === 'auto' &&
+      savedV3?.selectionSpeak === true,
+    JSON.stringify({ pdf: !!savedV3?.pdfViewer, img: !!savedV3?.imageTranslate, sub: !!savedV3?.subtitles }),
+  );
 
   // Boot the popup page inside the extension and verify its UI initializes.
   const popupUrl = `chrome-extension://${extensionId}/popup/popup.html`;
@@ -1126,6 +1304,451 @@ try {
   const bodyAfterCancel = await page.eval(`document.getElementById('p1').textContent`);
   check('original text intact after cancel', bodyAfterCancel === P1, JSON.stringify(bodyAfterCancel));
   check('settings restored', await saveSettingsThroughExtension(settingsPayload({})));
+
+  /* ==================== 3.0 language detection + auto guard ================== */
+
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:translate' }`), 5000);
+  let langState = null;
+  for (let i = 0; i < 30; i++) {
+    langState = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`));
+    if ((langState?.pending ?? 1) === 0 && (langState?.translated ?? 0) >= 4) break;
+    await sleep(400);
+  }
+  check(
+    'page language auto-detected as en (spec 8.1)',
+    langState?.pageLanguage === 'en',
+    JSON.stringify(langState?.pageLanguage),
+  );
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:restore' }`), 5000);
+
+  // Auto-translate guard: target language == page language -> skip + hint.
+  const sameLangSettings = settingsPayload({
+    autoTranslate: true,
+    defaultTargetLanguage: 'English',
+  });
+  check('same-language guard settings saved', await saveSettingsThroughExtension(sameLangSettings));
+  await page.eval(`location.reload()`);
+  await sleep(1500);
+  const guardState = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`));
+  check(
+    'auto-translate skipped when page language == target',
+    guardState?.autoSkipped === true && guardState?.active === false,
+    JSON.stringify(guardState),
+  );
+  const guardBlocks = await page.eval(`document.querySelectorAll('.wt-bilingual-block').length`);
+  check('no blocks rendered for same-language page', guardBlocks === 0, `blocks=${guardBlocks}`);
+  check('settings restored after guard test', await saveSettingsThroughExtension(settingsPayload({})));
+  await page.eval(`location.reload()`);
+  await sleep(1200);
+
+  /* ============================ 3.0 quality feedback ========================== */
+
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:translate' }`), 5000);
+  let fbBlocks = 0;
+  for (let i = 0; i < 30; i++) {
+    fbBlocks = await page.eval(`document.querySelectorAll('.wt-bilingual-block').length`);
+    if (fbBlocks >= 4) break;
+    await sleep(400);
+  }
+  check('bilingual blocks present for feedback test', fbBlocks >= 4, `blocks=${fbBlocks}`);
+  // Wait until translations land; the mark button only appears on completed blocks.
+  let fbDone = false;
+  for (let i = 0; i < 30; i++) {
+    fbDone = await page.eval(
+      `[...document.querySelectorAll('.wt-bilingual-block')].filter((b) => b.textContent.includes('[译]')).length >= 4`,
+    );
+    if (fbDone) break;
+    await sleep(400);
+  }
+  check('feedback test blocks fully translated', fbDone === true);
+  await page.eval(
+    `document.querySelector('.wt-bilingual-block').dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: 120, clientY: 120 }))`,
+  );
+  let fbBtnText = null;
+  for (let i = 0; i < 15; i++) {
+    fbBtnText = await page.eval(`document.querySelector('.wt-feedback-btn')?.textContent ?? null`);
+    if (fbBtnText) break;
+    await sleep(200);
+  }
+  check('bad-translation mark button appears on hover', typeof fbBtnText === 'string' && fbBtnText.includes('标记'), JSON.stringify(fbBtnText));
+  await page.eval(`document.querySelector('.wt-feedback-btn')?.click()`);
+  let fbLog = { entries: [] };
+  for (let i = 0; i < 15; i++) {
+    fbLog = await ext.eval(`chrome.runtime.sendMessage({ type: 'get-feedback-log' })`);
+    if ((fbLog?.entries ?? []).length >= 1) break;
+    await sleep(300);
+  }
+  check(
+    'feedback entry recorded with source + translation',
+    (fbLog?.entries ?? []).length >= 1 &&
+      typeof fbLog.entries[0].source === 'string' &&
+      fbLog.entries[0].translation.includes('[译]') &&
+      fbLog.entries[0].where === 'page',
+    JSON.stringify(fbLog?.entries?.[0]),
+  );
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:restore' }`), 5000);
+
+  /* ========================== 3.0 Alt+Q repeat-selection ====================== */
+
+  const repeatUrl = `http://127.0.0.1:${PORT_PAGE}/selection.html`;
+  await openPage(browserCdp, repeatUrl);
+  const repeatClient = await pageFor(repeatUrl);
+  await sleep(800);
+  await repeatClient.eval(`
+    (() => {
+      const p = document.getElementById('sel-p');
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 60 }));
+    })()`);
+  await sleep(400);
+  await repeatClient.eval(
+    `document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-btn')?.click()`,
+  );
+  let repeatPanel = '';
+  for (let i = 0; i < 30; i++) {
+    repeatPanel = await repeatClient.eval(
+      `document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-text')?.textContent ?? ''`,
+    );
+    if (repeatPanel.includes('[译]')) break;
+    await sleep(400);
+  }
+  check('selection translated before repeat test', repeatPanel.includes('[译]'), JSON.stringify(repeatPanel));
+  // Close panel + clear the selection, then replay via the command path.
+  await repeatClient.eval(`
+    (() => {
+      const btns = [...document.querySelector('.wt-selection-host')?.shadowRoot?.querySelectorAll('.wt-sel-actions button') ?? []];
+      btns.find((b) => b.textContent === '收起')?.click();
+      window.getSelection().removeAllRanges();
+    })()`);
+  await sleep(300);
+  await ext.eval(sendToTabWithUrl(repeatUrl, `{ type: 'wt:repeat-selection' }`), 5000);
+  await sleep(400);
+  const replayed = await repeatClient.eval(`
+    (() => {
+      const panel = document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-panel');
+      return { display: panel?.style.display, text: panel?.querySelector('.wt-sel-text')?.textContent ?? '' };
+    })()`);
+  check(
+    'repeat-selection replays last panel without a selection',
+    replayed?.display === 'block' && (replayed?.text ?? '').includes('[译]'),
+    JSON.stringify(replayed),
+  );
+  // Speak button exists (capability probe may disable it in headless).
+  const speakBtnPresent = await repeatClient.eval(
+    `document.querySelector('.wt-selection-host')?.shadowRoot?.querySelectorAll('.wt-sel-actions button').length >= 4`,
+  );
+  check('selection panel gained speak + mark buttons', speakBtnPresent === true);
+  await closePage(browserCdp, repeatUrl);
+  repeatClient.close();
+
+  /* ============================ 3.0 image OCR (pillar F) ===================== */
+
+  // Enable the cache for the OCR + PDF phases (fingerprint/hit assertions).
+  check('cache enabled for OCR/PDF phases', await saveSettingsThroughExtension(settingsPayload({ cacheEnabled: true })));
+
+  const imageUrl = `http://127.0.0.1:${PORT_PAGE}/image.html`;
+  await openPage(browserCdp, imageUrl);
+  const imageClient = await pageFor(imageUrl);
+  await sleep(900);
+  await imageClient.eval(
+    `document.getElementById('photo').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`,
+  );
+  let hoverBtn = false;
+  for (let i = 0; i < 20; i++) {
+    hoverBtn = await imageClient.eval(`document.querySelector('.wt-img-btn') !== null`);
+    if (hoverBtn) break;
+    await sleep(300);
+  }
+  check('image hover translate button appears (>=200px)', hoverBtn === true);
+
+  const visionBefore = mock.visionCount();
+  await imageClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  let ocrText = '';
+  for (let i = 0; i < 40; i++) {
+    ocrText = await imageClient.eval(
+      `document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelector('.wt-ocr-body')?.textContent ?? ''`,
+    );
+    if (ocrText.includes('你好，世界')) break;
+    await sleep(400);
+  }
+  check('mock vision endpoint called exactly once', mock.visionCount() === visionBefore + 1, `vision=${mock.visionCount()}`);
+  check(
+    'OCR result panel lists structured segments',
+    ocrText.includes('HELLO WORLD') && ocrText.includes('你好，世界'),
+    JSON.stringify(ocrText.slice(0, 120)),
+  );
+  check(
+    'OCR panel isolated in Shadow DOM (never page DOM)',
+    (await imageClient.eval(
+      `!!document.querySelector('.wt-ocr-host')?.shadowRoot && document.body.querySelector('.wt-ocr-panel') === null`,
+    )) === true,
+  );
+
+  // Close + re-trigger the same image: cache hit, no second vision call.
+  await imageClient.eval(`
+    (() => {
+      const btns = [...document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelectorAll('button') ?? []];
+      btns.find((b) => b.textContent === '收起')?.click();
+    })()`);
+  await sleep(400);
+  await imageClient.eval(
+    `document.getElementById('photo').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`,
+  );
+  await sleep(400);
+  await imageClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  let ocrAgain = '';
+  for (let i = 0; i < 40; i++) {
+    ocrAgain = await imageClient.eval(
+      `document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelector('.wt-ocr-body')?.textContent ?? ''`,
+    );
+    if (ocrAgain.includes('你好，世界')) break;
+    await sleep(400);
+  }
+  check(
+    'second OCR of identical image served from cache',
+    mock.visionCount() === visionBefore + 1 && ocrAgain.includes('你好，世界'),
+    `vision=${mock.visionCount()}`,
+  );
+
+  // Grey-out: provider without vision capability disables the entry.
+  const noVisionSettings = settingsPayload({
+    cacheEnabled: true,
+    activeProviderId: 'no-vision',
+    providers: [
+      providerOpenAi('mock', 'Mock LLM', `http://127.0.0.1:${PORT_API}/v1`),
+      {
+        id: 'no-vision',
+        name: 'Plain HTTP (no vision)',
+        type: 'custom-http',
+        baseUrl: `http://127.0.0.1:${PORT_API}/custom-translate`,
+        apiKey: '',
+        model: '',
+        sourceLanguage: 'English',
+        targetLanguage: 'Chinese',
+        timeoutMs: 15000,
+        maxBatchItems: 10,
+        maxBatchChars: 6000,
+        systemPrompt: '',
+        userPromptTemplate: '',
+        temperature: 0.2,
+        maxTokens: 4096,
+        headers: {},
+        enabled: true,
+        method: 'POST',
+        bodyTemplate: '{ "q": {{texts}}, "from": "{{sourceLanguage}}", "to": "{{targetLanguage}}" }',
+        responsePath: 'data.translations',
+        apiKeyPlacement: 'header',
+        apiKeyParamName: 'Authorization',
+      },
+    ],
+  });
+  check('no-vision provider saved', await saveSettingsThroughExtension(noVisionSettings));
+  const csGrey = await ext.eval(`chrome.runtime.sendMessage({ type: 'get-content-settings' })`);
+  check('content settings report visionSupported=false', csGrey?.visionSupported === false);
+  await imageClient.eval(`location.reload()`);
+  await sleep(900);
+  await imageClient.eval(
+    `document.getElementById('photo').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`,
+  );
+  let greyTitle = '';
+  for (let i = 0; i < 20; i++) {
+    greyTitle = await imageClient.eval(`document.querySelector('.wt-img-btn')?.title ?? ''`);
+    if (greyTitle) break;
+    await sleep(300);
+  }
+  check('hover entry greyed out with reason', greyTitle.includes('不支持视觉'), JSON.stringify(greyTitle));
+  await imageClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  await sleep(600);
+  check(
+    'greyed entry never opens the OCR panel',
+    (await imageClient.eval(`document.querySelector('.wt-ocr-host') === null`)) === true,
+  );
+  check('settings restored after grey-out test', await saveSettingsThroughExtension(settingsPayload({ cacheEnabled: true })));
+  await closePage(browserCdp, imageUrl);
+  imageClient.close();
+
+  /* ========================== 3.0 video subtitles (pillar G) ================= */
+
+  const videoUrl = `http://127.0.0.1:${PORT_PAGE}/video.html`;
+  await openPage(browserCdp, videoUrl);
+  const videoClient = await pageFor(videoUrl);
+  await sleep(1200); // allow the VTT track to load
+  await ext.eval(sendToTabWithUrl(videoUrl, `{ type: 'wt:toggle-subtitles' }`), 5000);
+  await videoClient.eval(`
+    (() => {
+      const v = document.getElementById('vid');
+      v.currentTime = 1.2;
+      v.dispatchEvent(new Event('timeupdate'));
+    })()`);
+  let cueText = '';
+  for (let i = 0; i < 40; i++) {
+    cueText = await videoClient.eval(
+      `document.querySelector('.wt-subtitle-host')?.shadowRoot?.querySelector('.wt-sub-box')?.textContent ?? ''`,
+    );
+    if (cueText.includes('[译]') && cueText.includes('Hello from the smoke fixture')) break;
+    await sleep(400);
+  }
+  check(
+    'subtitle layer renders bilingual cue (译 + 原文)',
+    cueText.includes('[译] Hello from the smoke fixture') && cueText.includes('Hello from the smoke fixture'),
+    JSON.stringify(cueText),
+  );
+  check(
+    'original track switched to hidden, not removed',
+    (await videoClient.eval(`document.querySelector('track')?.track?.mode`)) === 'hidden',
+  );
+
+  // Cue switch: second cue activates and translates.
+  await videoClient.eval(`
+    (() => {
+      const v = document.getElementById('vid');
+      v.currentTime = 4.5;
+      v.dispatchEvent(new Event('timeupdate'));
+    })()`);
+  let cue2 = '';
+  for (let i = 0; i < 40; i++) {
+    cue2 = await videoClient.eval(
+      `document.querySelector('.wt-subtitle-host')?.shadowRoot?.querySelector('.wt-sub-box')?.textContent ?? ''`,
+    );
+    if (cue2.includes('Second cue line here')) break;
+    await sleep(400);
+  }
+  check(
+    'cue switch renders the second cue bilingually',
+    cue2.includes('Second cue line here') && cue2.includes('[译]'),
+    JSON.stringify(cue2),
+  );
+
+  // Toggle off: layer removed, track mode restored — zero residue.
+  await ext.eval(sendToTabWithUrl(videoUrl, `{ type: 'wt:toggle-subtitles' }`), 5000);
+  await sleep(600);
+  check(
+    'subtitle teardown removes the layer',
+    (await videoClient.eval(`document.querySelector('.wt-subtitle-host') === null`)) === true,
+  );
+  check(
+    'track mode restored after teardown',
+    (await videoClient.eval(`document.querySelector('track')?.track?.mode`)) === 'showing',
+  );
+  await closePage(browserCdp, videoUrl);
+  videoClient.close();
+
+  /* ========================= 3.0 PDF bilingual reader (E) ==================== */
+
+  const pdfSrc = `http://127.0.0.1:${PORT_PAGE}/sample.pdf`;
+  const viewerUrl = `chrome-extension://${extensionId}/viewer/pdf-viewer.html?src=${encodeURIComponent(pdfSrc)}`;
+  await openPage(browserCdp, viewerUrl);
+  const viewer = await pageFor(viewerUrl);
+  // Scroll so lazy pages (incl. the scanned one) enter the observer margin.
+  await sleep(800);
+  await viewer.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  let pdfDst = [];
+  for (let i = 0; i < 60; i++) {
+    pdfDst = await viewer.eval(`[...document.querySelectorAll('.para .dst')].map((d) => d.textContent)`);
+    if (pdfDst.length >= 4 && pdfDst.filter((t) => t.includes('[译]')).length >= 4) break;
+    await sleep(500);
+    if (i === 10) await viewer.eval(`window.scrollTo(0, 0)`);
+    if (i === 20) await viewer.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  }
+  check(
+    'PDF reader translates clustered paragraphs via background pipeline',
+    pdfDst.filter((t) => t.includes('[译]')).length >= 4,
+    JSON.stringify(pdfDst),
+  );
+  const pdfSrcText = await viewer.eval(
+    `[...document.querySelectorAll('.para .src')].map((s) => s.textContent).join(' | ')`,
+  );
+  check(
+    'repeating headers + page numbers filtered out',
+    !pdfSrcText.includes('SMOKE CONFERENCE') && pdfSrcText.includes('bilingual reader extracts'),
+    JSON.stringify(pdfSrcText.slice(0, 160)),
+  );
+  const scannedHint = await viewer.eval(`document.querySelector('.scanned-hint')?.textContent ?? ''`);
+  check('scanned page shows explicit no-text-layer hint', scannedHint.includes('没有文本层'), JSON.stringify(scannedHint));
+  const pdfProgress = await viewer.eval(`document.getElementById('progress')?.textContent ?? ''`);
+  check('reader toolbar reports translated/total progress', pdfProgress.includes('已译'), JSON.stringify(pdfProgress));
+  const canvases = await viewer.eval(`document.querySelectorAll('.page canvas').length`);
+  check('reader renders page canvases', canvases >= 1, `canvases=${canvases}`);
+  await closePage(browserCdp, viewerUrl);
+  viewer.close();
+
+  // Reopen: every paragraph must come from the fingerprint cache — zero calls.
+  const apiCallsBeforeReopen = mock.count();
+  await sleep(400);
+  await openPage(browserCdp, viewerUrl);
+  const viewer2 = await pageFor(viewerUrl);
+  await sleep(800);
+  await viewer2.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  let pdfDst2 = [];
+  for (let i = 0; i < 60; i++) {
+    pdfDst2 = await viewer2.eval(`[...document.querySelectorAll('.para .dst')].map((d) => d.textContent)`);
+    if (pdfDst2.filter((t) => t.includes('[译]')).length >= 4) break;
+    await sleep(500);
+  }
+  check('reopened document shows cached translations', pdfDst2.filter((t) => t.includes('[译]')).length >= 4, JSON.stringify(pdfDst2));
+  check(
+    'reopening costs zero API calls (document fingerprint cache)',
+    mock.count() === apiCallsBeforeReopen,
+    `before=${apiCallsBeforeReopen} after=${mock.count()}`,
+  );
+  await closePage(browserCdp, viewerUrl);
+  viewer2.close();
+
+  /* ============================ 3.0 resume (pillar H) ======================== */
+
+  // Translate against the 2s-slow endpoint, kill the service worker mid-flight,
+  // wake it back up, and assert the persisted task table recovers everything.
+  check('slow provider saved for resume test', await saveSettingsThroughExtension(slowSettings));
+  await page.eval(`location.reload()`);
+  await sleep(1200);
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:translate' }`), 5000);
+  await sleep(500); // tasks now recorded in-flight against the slow endpoint
+
+  const targetsBeforeKill = await fetchJson('http://127.0.0.1:9222/json');
+  const swTarget = targetsBeforeKill.find(
+    (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
+  );
+  check('service worker target located for the kill', !!swTarget);
+  if (swTarget) {
+    await browserCdp.send('Target.closeTarget', { targetId: swTarget.id });
+  }
+  await sleep(900);
+
+  // Wake the restarted SW through a runtime message; retry while it boots.
+  let swUp = false;
+  for (let i = 0; i < 25 && !swUp; i++) {
+    try {
+      const r = await ext.eval(
+        `chrome.runtime.sendMessage({ type: 'get-cache-stats' }).then(() => 'up').catch(() => 'down')`,
+        4000,
+      );
+      swUp = r === 'up';
+    } catch {
+      swUp = false;
+    }
+    if (!swUp) await sleep(400);
+  }
+  check('service worker restarted and reachable', swUp === true);
+
+  let resumeBlocks = [];
+  for (let i = 0; i < 50; i++) {
+    resumeBlocks = await page.eval(
+      `[...document.querySelectorAll('.wt-bilingual-block')].map((b) => b.textContent)`,
+    );
+    if (resumeBlocks.length >= 4 && resumeBlocks.every((t) => t.includes('[slow]'))) break;
+    await sleep(500);
+  }
+  check(
+    'resume: in-flight tasks recovered after SW restart',
+    resumeBlocks.length >= 4 && resumeBlocks.every((t) => t.includes('[slow]')),
+    JSON.stringify(resumeBlocks),
+  );
+  await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:restore' }`), 5000);
+  check('settings restored after resume test', await saveSettingsThroughExtension(settingsPayload({})));
 
   /* ====================== 2.0 native-host gateway + failover ================= */
 

@@ -74,6 +74,8 @@ function renderGeneral(): void {
   $<HTMLInputElement>('auto-translate').checked = draft.autoTranslate;
   $<HTMLInputElement>('cache-enabled').checked = draft.cacheEnabled;
   $<HTMLSelectElement>('selection-translate').value = draft.selectionTranslate;
+  $<HTMLSelectElement>('language-detect').value = draft.languageDetection;
+  $<HTMLInputElement>('selection-speak').checked = draft.selectionSpeak;
   $<HTMLInputElement>('default-source').value = draft.defaultSourceLanguage;
   $<HTMLInputElement>('default-target').value = draft.defaultTargetLanguage;
   $<HTMLInputElement>('min-text-length').value = String(draft.minTextLength);
@@ -89,6 +91,8 @@ function collectGeneral(): void {
   draft.cacheEnabled = $<HTMLInputElement>('cache-enabled').checked;
   draft.selectionTranslate = $<HTMLSelectElement>('selection-translate')
     .value as SelectionTranslateMode;
+  draft.languageDetection = $<HTMLSelectElement>('language-detect').value === 'off' ? 'off' : 'auto';
+  draft.selectionSpeak = $<HTMLInputElement>('selection-speak').checked;
   draft.defaultSourceLanguage = $<HTMLInputElement>('default-source').value.trim() || 'auto';
   draft.defaultTargetLanguage = $<HTMLInputElement>('default-target').value.trim() || '简体中文';
   draft.minTextLength = Math.round(num($<HTMLInputElement>('min-text-length').value, draft.minTextLength));
@@ -98,6 +102,160 @@ function collectGeneral(): void {
     .value.split('\n')
     .map((s) => s.trim())
     .filter((s) => s !== '');
+}
+
+/* --------------------------- 3.0 media sections ------------------------------ */
+
+function renderMediaSections(): void {
+  if (!draft) return;
+  $<HTMLInputElement>('pdf-enabled').checked = draft.pdfViewer.enabled;
+  $<HTMLSelectElement>('pdf-mode').value = draft.pdfViewer.defaultMode;
+  $<HTMLInputElement>('pdf-skip-hf').checked = draft.pdfViewer.skipHeadersFooters;
+  $<HTMLInputElement>('pdf-concurrency').value = String(draft.pdfViewer.maxConcurrentPages);
+  $<HTMLInputElement>('pdf-autoopen').checked = draft.pdfViewer.autoOpen;
+  $<HTMLInputElement>('img-enabled').checked = draft.imageTranslate.enabled;
+  $<HTMLSelectElement>('img-trigger').value = draft.imageTranslate.trigger;
+  $<HTMLSelectElement>('img-engine').value = draft.imageTranslate.engine;
+  $<HTMLInputElement>('img-maxedge').value = String(draft.imageTranslate.maxEdgePx);
+  $<HTMLInputElement>('sub-enabled').checked = draft.subtitles.enabled;
+  $<HTMLSelectElement>('sub-bilingual').value = draft.subtitles.bilingual;
+  $<HTMLInputElement>('sub-font').value = String(draft.subtitles.fontSizePct);
+  void refreshPdfPermStatus();
+}
+
+function collectMediaSections(): void {
+  if (!draft) return;
+  draft.pdfViewer = {
+    enabled: $<HTMLInputElement>('pdf-enabled').checked,
+    defaultMode:
+      $<HTMLSelectElement>('pdf-mode').value === 'translated_hover_original'
+        ? 'translated_hover_original'
+        : 'bilingual',
+    skipHeadersFooters: $<HTMLInputElement>('pdf-skip-hf').checked,
+    maxConcurrentPages: Math.round(num($<HTMLInputElement>('pdf-concurrency').value, draft.pdfViewer.maxConcurrentPages)),
+    autoOpen: $<HTMLInputElement>('pdf-autoopen').checked,
+  };
+  draft.imageTranslate = {
+    enabled: $<HTMLInputElement>('img-enabled').checked,
+    trigger: (() => {
+      const v = $<HTMLSelectElement>('img-trigger').value;
+      return v === 'contextMenu' || v === 'hoverButton' ? v : 'both';
+    })(),
+    engine: $<HTMLSelectElement>('img-engine').value === 'tesseract-wasm' ? 'tesseract-wasm' : 'llm-vision',
+    maxEdgePx: Math.round(num($<HTMLInputElement>('img-maxedge').value, draft.imageTranslate.maxEdgePx)),
+  };
+  draft.subtitles = {
+    enabled: $<HTMLInputElement>('sub-enabled').checked,
+    bilingual: (() => {
+      const v = $<HTMLSelectElement>('sub-bilingual').value;
+      return v === 'src' || v === 'dst' ? v : 'both';
+    })(),
+    fontSizePct: Math.round(num($<HTMLInputElement>('sub-font').value, draft.subtitles.fontSizePct)),
+  };
+}
+
+async function refreshPdfPermStatus(): Promise<void> {
+  const el = $<HTMLElement>('pdf-perm-status');
+  try {
+    const granted = await chrome.permissions.contains({ permissions: ['webNavigation'] });
+    el.textContent = granted ? '（webNavigation 权限已授予）' : '（尚未授予 webNavigation 权限）';
+  } catch {
+    el.textContent = '';
+  }
+}
+
+async function onAutoOpenChange(enabled: boolean): Promise<void> {
+  if (!enabled) return;
+  try {
+    const granted = await chrome.permissions.request({ permissions: ['webNavigation'] });
+    if (!granted) {
+      $<HTMLInputElement>('pdf-autoopen').checked = false;
+      toast('未授予 webNavigation 权限，自动打开保持关闭', true);
+    } else {
+      toast('已授予 webNavigation 权限');
+    }
+    void refreshPdfPermStatus();
+  } catch {
+    $<HTMLInputElement>('pdf-autoopen').checked = false;
+  }
+}
+
+/* ------------------------------ feedback log (3.0) --------------------------- */
+
+async function renderFeedbackLog(): Promise<void> {
+  const box = $<HTMLDivElement>('feedback-list');
+  box.textContent = '';
+  try {
+    const res = await sendRuntime({ type: 'get-feedback-log' });
+    const entries = res.entries ?? [];
+    if (entries.length === 0) {
+      box.textContent = '暂无反馈记录。在双语块 / 字幕 / PDF 块 / 划词面板悬停可「标记坏句」。';
+      return;
+    }
+    for (const entry of entries) {
+      const row = document.createElement('div');
+      row.className = 'log-row';
+      const time = new Date(entry.ts).toLocaleString();
+      const del = document.createElement('button');
+      del.className = 'btn btn-small';
+      del.textContent = '删除';
+      del.addEventListener('click', async () => {
+        await sendRuntime({ type: 'delete-feedback-entry', ts: entry.ts });
+        void renderFeedbackLog();
+      });
+      const head = document.createElement('div');
+      head.innerHTML = `<span class="log-time">${time}</span> <span class="log-provider">[${entry.providerName ?? '?'} / ${entry.where}]</span>`;
+      head.appendChild(del);
+      const body = document.createElement('div');
+      body.textContent = `原文：${entry.source}\n译文：${entry.translation}\n页面：${entry.pageUrl}`;
+      body.style.whiteSpace = 'pre-wrap';
+      row.append(head, body);
+      box.appendChild(row);
+    }
+  } catch {
+    box.textContent = '无法读取反馈日志';
+  }
+}
+
+function downloadText(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportFeedback(format: 'csv' | 'json'): Promise<void> {
+  try {
+    const res = await sendRuntime({ type: 'get-feedback-log' });
+    const entries = res.entries ?? [];
+    if (entries.length === 0) {
+      toast('反馈日志为空', true);
+      return;
+    }
+    if (format === 'json') {
+      downloadText('polypage-feedback.json', JSON.stringify(entries, null, 2), 'application/json');
+      return;
+    }
+    const csvEscape = (value: string): string =>
+      /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+    const header = 'ts,source,translation,provider,pageUrl,where';
+    const rows = entries.map((e) =>
+      [
+        new Date(e.ts).toISOString(),
+        csvEscape(e.source),
+        csvEscape(e.translation),
+        csvEscape(e.providerName ?? ''),
+        csvEscape(e.pageUrl),
+        csvEscape(e.where),
+      ].join(','),
+    );
+    downloadText('polypage-feedback.csv', [header, ...rows].join('\r\n'), 'text/csv;charset=utf-8');
+  } catch (e) {
+    toast(`导出失败：${e instanceof Error ? e.message : String(e)}`, true);
+  }
 }
 
 /* ------------------------------ provider list -------------------------------- */
@@ -770,6 +928,7 @@ async function checkHostStatus(): Promise<void> {
 async function persist(): Promise<boolean> {
   if (!draft) return false;
   collectGeneral();
+  collectMediaSections();
   if (!collectEditor()) {
     toast('请修正表单中的错误', true);
     return false;
@@ -896,7 +1055,7 @@ function exportSettings(): void {
   if (!draft) return;
   collectGeneral();
   collectEditor();
-  const payload = { app: 'polypage-web-translator', version: 2, exportedAt: new Date().toISOString(), settings: draft };
+  const payload = { app: 'polypage-web-translator', version: 3, exportedAt: new Date().toISOString(), settings: draft };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -919,7 +1078,7 @@ async function importSettings(file: File): Promise<void> {
     draft = normalized;
     selectedId = normalized.activeProviderId;
     renderAll();
-    toast('配置已导入（v1 配置会自动迁移到 v2）');
+    toast('配置已导入（v1/v2 配置会自动迁移到 v3）');
   } catch {
     toast('导入失败：无法解析 JSON 文件', true);
   }
@@ -957,6 +1116,7 @@ function renderPresets(): void {
 
 function renderAll(): void {
   renderGeneral();
+  renderMediaSections();
   renderProviderList();
   renderEditor();
   renderFailover();
@@ -1036,6 +1196,20 @@ async function init(): Promise<void> {
     if (file) void importSettings(file);
     (e.target as HTMLInputElement).value = '';
   });
+
+  /* 3.0 wiring: media sections + feedback log. */
+  $<HTMLInputElement>('pdf-autoopen').addEventListener('change', (e) => {
+    void onAutoOpenChange((e.target as HTMLInputElement).checked);
+  });
+  $<HTMLButtonElement>('feedback-refresh').addEventListener('click', () => void renderFeedbackLog());
+  $<HTMLButtonElement>('feedback-export-csv').addEventListener('click', () => void exportFeedback('csv'));
+  $<HTMLButtonElement>('feedback-export-json').addEventListener('click', () => void exportFeedback('json'));
+  $<HTMLButtonElement>('feedback-clear').addEventListener('click', async () => {
+    await sendRuntime({ type: 'clear-feedback-log' });
+    void renderFeedbackLog();
+    toast('反馈日志已清空');
+  });
+  void renderFeedbackLog();
 
   // Any field edit marks the draft dirty.
   document.querySelector('.content')?.addEventListener('input', markDirty);

@@ -1,6 +1,7 @@
 /**
  * Site rules: pure matching and merging logic (spec 2.0 §6.4).
  * DOM application lives in the content script; this module is unit-tested.
+ * 3.0: rules gain `subtitleSelectors` (pillar G, spec 3.0 §7.2).
  */
 import type { DisplayMode, EffectiveRule, GlossaryEntry, SiteRule } from './types';
 import { DISPLAY_MODES } from './types';
@@ -73,6 +74,7 @@ export function mergeEffectiveRules(matched: SiteRule[]): EffectiveRule {
     minTextLength: null,
     defaultMode: null,
     viewportOnly: false,
+    subtitleSelectors: [],
   };
   // Walk least specific first so more specific rules overwrite.
   for (let i = matched.length - 1; i >= 0; i--) {
@@ -89,6 +91,11 @@ export function mergeEffectiveRules(matched: SiteRule[]): EffectiveRule {
     const mode = normalizeMode(rule.defaultMode);
     if (mode) effective.defaultMode = mode;
     if (rule.viewportOnly === true) effective.viewportOnly = true;
+    if (Array.isArray(rule.subtitleSelectors) && rule.subtitleSelectors.length > 0) {
+      effective.subtitleSelectors = rule.subtitleSelectors.filter(
+        (s) => typeof s === 'string' && s.trim() !== '',
+      );
+    }
   }
   return effective;
 }
@@ -135,5 +142,7 @@ export function normalizeSiteRule(raw: unknown, fallbackId: string): SiteRule | 
   const mode = normalizeMode(r.defaultMode);
   if (mode) rule.defaultMode = mode;
   if (r.viewportOnly === true) rule.viewportOnly = true;
+  const subs = strArray(r.subtitleSelectors);
+  if (subs && subs.length > 0) rule.subtitleSelectors = subs;
   return rule;
 }

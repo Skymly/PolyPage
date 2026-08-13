@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PolyPage 双语阅读器</title>
+    <link rel="stylesheet" href="./viewer.css" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <span class="brand">PolyPage 双语阅读器</span>
+      <span id="doc-title" class="title" title="">加载中…</span>
+      <span id="progress" class="progress"></span>
+      <span id="budget-hint" class="hint hidden"></span>
+      <span class="spacer"></span>
+      <select id="mode-select" title="显示模式">
+        <option value="bilingual">双语对照</option>
+        <option value="translated_hover_original">译文 + 悬停原文</option>
+        <option value="original">仅原文</option>
+      </select>
+      <button id="retry-btn" disabled>重试失败</button>
+    </header>
+    <main id="document" aria-busy="true"></main>
+    <div id="fatal" class="fatal hidden"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

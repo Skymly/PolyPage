@@ -11,12 +11,23 @@
  *    host-status (gateway probe), get-provider-stats (P1 ops),
  *    wt:translate-selection (context menu / shortcut);
  *  - streaming deltas use a runtime Port ("wt-stream"), not one-shot messages.
+ *
+ * 3.0 (protocol v3, spec 3.0 §9.2):
+ *  - every message carries v: 3; messages without v are treated as an older
+ *    protocol version and stay fully compatible (spec 3.0 §0 item 1);
+ *  - new: ocr-request / ocr-cancel (image OCR), translate-cue (subtitle
+ *    low-latency path), mark-feedback / feedback log access, pdf-open /
+ *    pdf-progress (PDF reader), detect-language;
+ *  - new TabCommands: wt:open-pdf-viewer, wt:translate-image,
+ *    wt:toggle-subtitles, wt:repeat-selection, wt:resume-inflight.
  */
 import type {
   ContentSettings,
   DisplayMode,
   ErrorLogEntry,
+  FeedbackEntry,
   FrameStateEntry,
+  OcrSegment,
   PageState,
   ProviderConfig,
   ProviderStats,
@@ -25,13 +36,15 @@ import type {
   TranslationItem,
 } from '../shared/types';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /* --------------------------- content -> background --------------------------- */
 
 export type RuntimeMessage =
-  | { type: 'translate'; v?: number; items: TranslationItem[]; domain?: string }
+  | { type: 'translate'; v?: number; items: TranslationItem[]; domain?: string; pageLanguage?: string | null }
   | { type: 'translate-selection'; v?: number; text: string; domain?: string }
+  /** 3.0: low-latency single-text path for subtitle cues (no batch window). */
+  | { type: 'translate-cue'; v?: number; text: string; domain?: string }
   | { type: 'get-content-settings'; v?: number }
   | { type: 'get-settings-summary'; v?: number }
   | { type: 'get-full-settings'; v?: number }
@@ -52,11 +65,32 @@ export type RuntimeMessage =
   /** 2.0 (P1): per-provider sliding window stats. */
   | { type: 'get-provider-stats'; v?: number }
   /** 2.0 (P1): bilingual export payload for the active tab. */
-  | { type: 'get-export-payload'; v?: number; tabId?: number };
+  | { type: 'get-export-payload'; v?: number; tabId?: number }
+  /* ------------------------------ 3.0 additions ----------------------------- */
+  /** 3.0 (pillar F): translate an image through the vision pipeline. */
+  | { type: 'ocr-request'; v?: number; requestId: string; url: string; naturalWidth?: number; naturalHeight?: number }
+  /** 3.0 (pillar F): abort an in-flight OCR request. */
+  | { type: 'ocr-cancel'; v?: number; requestId: string }
+  /** 3.0 (pillar H): mark a bad translation into the feedback log. */
+  | { type: 'mark-feedback'; v?: number; source: string; translation: string; pageUrl: string; where: FeedbackEntry['where']; providerName?: string }
+  | { type: 'get-feedback-log'; v?: number }
+  | { type: 'delete-feedback-entry'; v?: number; ts: number }
+  | { type: 'clear-feedback-log'; v?: number }
+  /** 3.0 (pillar E): open the PDF bilingual reader for a URL. */
+  | { type: 'pdf-open'; v?: number; url: string }
+  /** 3.0 (pillar E): viewer progress report (popup hint). */
+  | { type: 'pdf-progress'; v?: number; url: string; done: number; total: number; failed: number }
+  /** 3.0 (pillar H): detect the dominant language of text samples. */
+  | { type: 'detect-language'; v?: number; texts: string[] };
+
+export type OcrResponse =
+  | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string }
+  | { ok: false; kind: string; error: string };
 
 export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'translate' } ? TranslateResults :
-  M extends { type: 'translate-selection' } ? { ok: boolean; translated?: string; error?: string } :
+  M extends { type: 'translate-selection' } ? { ok: boolean; translated?: string; language?: string; error?: string } :
+  M extends { type: 'translate-cue' } ? { ok: boolean; translated?: string; error?: string } :
   M extends { type: 'get-content-settings' } ? ContentSettings :
   M extends { type: 'get-settings-summary' } ? SettingsSummary :
   M extends { type: 'get-full-settings' } ? { settings: unknown } :
@@ -72,6 +106,15 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'host-status' } ? { installed: boolean; version?: string; error?: string } :
   M extends { type: 'get-provider-stats' } ? { stats: Record<string, ProviderStats> } :
   M extends { type: 'get-export-payload' } ? { ok: boolean; entries?: ExportEntry[]; title?: string; url?: string; error?: string } :
+  M extends { type: 'ocr-request' } ? OcrResponse :
+  M extends { type: 'ocr-cancel' } ? { ok: true } :
+  M extends { type: 'mark-feedback' } ? { ok: true } :
+  M extends { type: 'get-feedback-log' } ? { entries: FeedbackEntry[] } :
+  M extends { type: 'delete-feedback-entry' } ? { ok: true } :
+  M extends { type: 'clear-feedback-log' } ? { ok: true } :
+  M extends { type: 'pdf-open' } ? { ok: boolean; tabId?: number; error?: string } :
+  M extends { type: 'pdf-progress' } ? { ok: true } :
+  M extends { type: 'detect-language' } ? { language: string | null; confident: boolean } :
   never;
 
 export interface ExportEntry {
@@ -118,14 +161,27 @@ export type TabCommand =
   | { type: 'wt:retry-failed'; v?: number }
   | { type: 'wt:rescan'; v?: number }
   | { type: 'wt:get-state'; v?: number }
-  /** 2.0: context menu / shortcut — translate the current selection. */
+  /** 2.0: context menu / command — translate the current selection. */
   | { type: 'wt:translate-selection'; v?: number }
   /** 2.0 (P1): collect bilingual export payload. */
-  | { type: 'wt:collect-export'; v?: number };
+  | { type: 'wt:collect-export'; v?: number }
+  /* ------------------------------ 3.0 additions ----------------------------- */
+  /** 3.0 (pillar E): answer with the tab's URL so the background can open
+   *  the PDF reader (context menu page entry). */
+  | { type: 'wt:open-pdf-viewer'; v?: number }
+  /** 3.0 (pillar F): open the image OCR panel for an image URL. */
+  | { type: 'wt:translate-image'; v?: number; url: string }
+  /** 3.0 (pillar G): toggle the subtitle layer on the active video. */
+  | { type: 'wt:toggle-subtitles'; v?: number }
+  /** 3.0 (pillar H): repeat the last selection translation (Alt+Q). */
+  | { type: 'wt:repeat-selection'; v?: number }
+  /** 3.0 (pillar H): re-submit persisted in-flight tasks after SW restart. */
+  | { type: 'wt:resume-inflight'; v?: number; keys: string[] };
 
 export type TabCommandResponse<C extends TabCommand> =
   C extends { type: 'wt:get-state' } ? PageState :
   C extends { type: 'wt:collect-export' } ? { entries: ExportEntry[]; title: string } :
+  C extends { type: 'wt:open-pdf-viewer' } ? { ok: true; url: string } :
   { ok: true };
 
 export function sendTabCommand<C extends TabCommand>(

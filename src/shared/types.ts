@@ -2,6 +2,9 @@
  * Shared type definitions used across background, content, popup and options.
  * 2.0: schema v2 types (glossary, site rules, failover, selection translate,
  * inline mode, native-host provider). See PolyPage-2.0.md.
+ * 3.0: schema v3 types (PDF viewer, image translate, subtitles, language
+ * detection, selection speak, feedback log, resume task table). See
+ * PolyPage-3.0.md.
  */
 
 /** Display modes. 2.0 adds `inline` (sixth mode, spec 2.0 §7.2). */
@@ -39,6 +42,54 @@ export type ApiKeyPlacement = 'header' | 'query' | 'body';
 /** Selection-translate trigger strategy (spec 2.0 §7.1). */
 export type SelectionTranslateMode = 'always' | 'alt' | 'off';
 
+/* ----------------------------- 3.0 schema v3 types ---------------------------- */
+
+/** PDF bilingual reader display modes (subset of DisplayMode, spec 3.0 §5.4). */
+export type PdfViewerMode = 'bilingual' | 'translated_hover_original';
+
+/** Settings for the PDF bilingual reader (spec 3.0 §9.3, pillar E). */
+export interface PdfViewerSettings {
+  enabled: boolean;
+  defaultMode: PdfViewerMode;
+  /** Filter repeating header/footer lines and lone page numbers. */
+  skipHeadersFooters: boolean;
+  /** Max pages translated concurrently (provider rate-limit guard). */
+  maxConcurrentPages: number;
+  /** P1: auto-open the reader for PDF navigations (needs webNavigation). */
+  autoOpen: boolean;
+}
+
+/** OCR engine ids (spec 3.0 §6.1). tesseract-wasm is a P1 engine. */
+export type OcrEngineId = 'llm-vision' | 'tesseract-wasm';
+
+/** Image translation trigger strategy (spec 3.0 §6.3). */
+export type ImageTranslateTrigger = 'contextMenu' | 'hoverButton' | 'both';
+
+/** Settings for image OCR translation (spec 3.0 §9.3, pillar F). */
+export interface ImageTranslateSettings {
+  enabled: boolean;
+  trigger: ImageTranslateTrigger;
+  engine: OcrEngineId;
+  /** Images larger than this edge are downsampled before upload. */
+  maxEdgePx: number;
+}
+
+/** Subtitle bilingual level (spec 3.0 §7.1). */
+export type SubtitleBilingual = 'both' | 'src' | 'dst';
+
+/** Settings for video subtitle translation (spec 3.0 §9.3, pillar G). */
+export interface SubtitleSettings {
+  enabled: boolean;
+  bilingual: SubtitleBilingual;
+  /** Subtitle font size as percentage of the default. */
+  fontSizePct: number;
+}
+
+/** Language auto-detection mode (spec 3.0 §8.1). */
+export type LanguageDetectionMode = 'auto' | 'off';
+
+/* ---------------------------------- glossary ---------------------------------- */
+
 /** One glossary entry; rendered into the {{glossary}} prompt variable. */
 export interface GlossaryEntry {
   source: string;
@@ -46,7 +97,8 @@ export interface GlossaryEntry {
   note?: string;
 }
 
-/** Site rule (spec 2.0 §6.4). All fields optional except id/match. */
+/** Site rule (spec 2.0 §6.4, 3.0 adds subtitleSelectors). All fields optional
+ *  except id/match. */
 export interface SiteRule {
   id: string;
   /** Hostname patterns: "example.com" (exact) or "*.example.com" (wildcard). */
@@ -58,6 +110,9 @@ export interface SiteRule {
   /** Only translate nodes entering the viewport (virtual lists). */
   viewportOnly?: boolean;
   enabled?: boolean;
+  /** 3.0 (pillar G): selectors of self-drawn subtitle DOM for in-place
+   *  translate (e.g. YouTube caption containers). */
+  subtitleSelectors?: string[];
 }
 
 /** Effective per-site configuration after merging matched rules. */
@@ -67,6 +122,8 @@ export interface EffectiveRule {
   minTextLength: number | null;
   defaultMode: DisplayMode | null;
   viewportOnly: boolean;
+  /** 3.0: merged subtitle selectors (most specific rule wins). */
+  subtitleSelectors: string[];
 }
 
 /** Provider configuration (1.0 fields kept; 2.0 additions are optional). */
@@ -111,7 +168,7 @@ export interface ProviderConfig {
   fallbackProviderId?: string;
 }
 
-/** Global settings stored in chrome.storage.local (schema v2). */
+/** Global settings stored in chrome.storage.local (schema v3). */
 export interface Settings {
   schemaVersion: number;
   activeProviderId: string;
@@ -138,6 +195,13 @@ export interface Settings {
   inlineBudget: number;
   /** Pending-item threshold that switches a page to viewport-only mode. */
   viewportBudget: number;
+  /* ------------------------- 3.0 additions ------------------------- */
+  pdfViewer: PdfViewerSettings;
+  imageTranslate: ImageTranslateSettings;
+  subtitles: SubtitleSettings;
+  languageDetection: LanguageDetectionMode;
+  /** Speak translations in the selection panel via speechSynthesis. */
+  selectionSpeak: boolean;
 }
 
 /** A single translation work item as sent from content script to background. */
@@ -169,6 +233,9 @@ export interface TranslateResults {
 /** Status of a single page node. */
 export type NodeStatus = 'idle' | 'pending' | 'done' | 'error';
 
+/** Subtitle layer state reported by the content script (3.0 pillar G). */
+export type SubtitleState = 'off' | 'on' | 'unavailable';
+
 /** Page state reported by the content script to the popup. */
 export interface PageState {
   injected: true;
@@ -189,6 +256,14 @@ export interface PageState {
   inlineDowngraded?: boolean;
   /** Page switched to viewport-only translation (over viewportBudget). */
   viewportOnly?: boolean;
+  /** 3.0: detected page language (BCP-ish code), null when unknown. */
+  pageLanguage?: string | null;
+  /** 3.0: subtitle layer state for this frame. */
+  subtitles?: SubtitleState;
+  /** 3.0: number of videos with subtitle/caption tracks in this frame. */
+  subtitleVideos?: number;
+  /** 3.0: auto-translate skipped because page language == target language. */
+  autoSkipped?: boolean;
 }
 
 /** Aggregated per-frame state served to the popup (spec 2.0 §6.2). */
@@ -207,6 +282,22 @@ export interface ErrorLogEntry {
   providerId?: string;
 }
 
+/** One entry in the 3.0 quality-feedback log (spec 3.0 §8.2). */
+export interface FeedbackEntry {
+  ts: number;
+  /** Original text that was badly translated. */
+  source: string;
+  /** The translation the user flagged. */
+  translation: string;
+  /** Provider that produced the translation (name, never the key). */
+  providerName?: string;
+  providerId?: string;
+  /** Page URL where the bad translation was shown. */
+  pageUrl: string;
+  /** UI surface where the user marked it. */
+  where: 'page' | 'selection' | 'subtitle' | 'pdf' | 'image';
+}
+
 /** Summary used by the popup (never exposes API keys). */
 export interface SettingsSummary {
   providerName: string;
@@ -217,6 +308,16 @@ export interface SettingsSummary {
   autoTranslate: boolean;
   providerConfigured: boolean;
   selectionTranslate: SelectionTranslateMode;
+  /** 3.0: active provider implements translateImage (vision). */
+  visionSupported: boolean;
+  /** 3.0: image translation master switch. */
+  imageTranslateEnabled: boolean;
+  /** 3.0: subtitle translation master switch. */
+  subtitlesEnabled: boolean;
+  /** 3.0: PDF reader master switch. */
+  pdfViewerEnabled: boolean;
+  /** 3.0: speak translations in the selection panel. */
+  selectionSpeak: boolean;
 }
 
 /** Subset of settings the content script is allowed to see (no API keys). */
@@ -229,6 +330,17 @@ export interface ContentSettings {
   siteRules: SiteRule[];
   inlineBudget: number;
   viewportBudget: number;
+  /* ------------------------- 3.0 additions ------------------------- */
+  defaultTargetLanguage: string;
+  languageDetection: LanguageDetectionMode;
+  selectionSpeak: boolean;
+  imageTranslateEnabled: boolean;
+  imageTranslateTrigger: ImageTranslateTrigger;
+  /** Active provider supports vision; image entries grey out otherwise. */
+  visionSupported: boolean;
+  subtitlesEnabled: boolean;
+  subtitleBilingual: SubtitleBilingual;
+  subtitleFontSizePct: number;
 }
 
 /** Per-provider sliding-window stats (in-memory only, spec 2.0 §8.3). */
@@ -237,4 +349,27 @@ export interface ProviderStats {
   ok: number;
   avgMs: number;
   lastError: string | null;
+}
+
+/* ------------------------------ 3.0 OCR types -------------------------------- */
+
+/** One OCR'd text fragment with its translation (spec 3.0 §6.1). */
+export interface OcrSegment {
+  text: string;
+  translation: string;
+}
+
+export interface OcrResult {
+  engine: OcrEngineId;
+  segments: OcrSegment[];
+}
+
+/** Persisted resume task record (spec 3.0 §8.4). */
+export interface TaskRecord {
+  tabId: number;
+  frameId: number;
+  taskKey: string;
+  textHash: string;
+  state: 'inflight' | 'done';
+  ts: number;
 }

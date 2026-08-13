@@ -9,6 +9,7 @@
  */
 import type { ProviderConfig } from '../shared/types';
 import { parseBatchTranslation, renderTemplate } from '../shared/utils';
+import { buildVisionRequest, buildVisionUserPrompt } from '../ocr/llm-vision';
 import {
   ProviderError,
   classifyHttpStatus,
@@ -159,6 +160,63 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       }
     }
     return full;
+  }
+
+  /**
+   * Vision capability (spec 3.0 §6.2): one chat/completions round trip whose
+   * user message carries the image data URL. Returns the raw content string;
+   * structured parsing lives in the OCR engine layer (src/ocr/llm-vision.ts).
+   */
+  async translateImage(
+    dataUrl: string,
+    ctx: TranslationContext,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const { config } = this;
+    if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
+      throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
+    }
+    const prompt = buildVisionUserPrompt(ctx);
+    const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+      ...config.headers,
+    };
+    const body = JSON.stringify(
+      buildVisionRequest(config.model, config.temperature, config.maxTokens, prompt, dataUrl),
+    );
+    return withTimeoutAndRetry(
+      async (innerSignal) => {
+        let res: Response;
+        try {
+          res = await fetch(url, { method: 'POST', headers, body, signal: innerSignal });
+        } catch (e) {
+          throw toProviderError(e);
+        }
+        if (!res.ok) {
+          const kind = classifyHttpStatus(res.status);
+          const detail = await readApiErrorMessage(res);
+          throw new ProviderError(
+            kind,
+            `视觉翻译请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          );
+        }
+        let json: unknown;
+        try {
+          json = await res.json();
+        } catch {
+          throw new ProviderError('invalid_response', 'API 返回了非 JSON 内容');
+        }
+        const content = (json as { choices?: { message?: { content?: unknown } }[] })
+          ?.choices?.[0]?.message?.content;
+        if (typeof content !== 'string') {
+          throw new ProviderError('invalid_response', '视觉 API 响应缺少 choices[0].message.content');
+        }
+        return content;
+      },
+      { timeoutMs: config.timeoutMs, signal, retries: 1 },
+    );
   }
 
   private isLocalEndpoint(): boolean {

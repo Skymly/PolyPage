@@ -1,0 +1,52 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #525659; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+#toolbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px; background: #2b2d31; color: #e7e9ee; font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+#toolbar .brand { font-weight: 700; white-space: nowrap; }
+#toolbar .title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b9c0d0; }
+#toolbar .progress { color: #9fe8a2; white-space: nowrap; }
+#toolbar .hint { color: #ffd28a; white-space: nowrap; }
+#toolbar .spacer { flex: 1; }
+#toolbar select, #toolbar button {
+  background: #3a3d44; color: #e7e9ee; border: 1px solid #55585f;
+  border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+#toolbar button:disabled { opacity: .5; cursor: default; }
+.hidden { display: none !important; }
+
+#document { max-width: 1080px; margin: 0 auto; padding: 18px 16px 80px; }
+.page { background: #fff; margin: 0 auto 18px; padding: 14px; border-radius: 6px; box-shadow: 0 3px 12px rgba(0,0,0,.28); }
+.page canvas { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.page .paras { margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+.para { position: relative; padding: 6px 8px; border-radius: 6px; line-height: 1.7; }
+.para:hover { background: #f3f5ff; }
+.para .src { color: #6b7280; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.para .dst { color: #111827; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.para .dst.pending { color: #9aa2b1; }
+.para .dst.error { color: #b91c1c; cursor: pointer; }
+.para .mark-btn {
+  position: absolute; top: 4px; right: 4px; display: none;
+  border: 1px solid #d8dce6; background: #fff; border-radius: 4px;
+  font-size: 11px; padding: 1px 6px; color: #6b7280; cursor: pointer;
+}
+.para:hover .mark-btn { display: block; }
+.para .mark-btn:hover { color: #b91c1c; border-color: #f1c2c2; }
+
+.scanned-hint {
+  margin-top: 10px; padding: 12px; border: 1px dashed #d1a13e; border-radius: 6px;
+  color: #8a6d1a; background: #fff8e6; font-size: 13px;
+}
+.fatal {
+  max-width: 720px; margin: 60px auto; padding: 24px; background: #fff;
+  border-radius: 8px; color: #b91c1c; font-size: 14px; line-height: 1.8;
+}
+#tooltip {
+  position: fixed; z-index: 50; max-width: 520px; padding: 8px 10px;
+  background: #1f2430; color: #f3f4f6; font-size: 12.5px; line-height: 1.6;
+  border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.3);
+  pointer-events: none; white-space: pre-wrap; word-break: break-word;
+}

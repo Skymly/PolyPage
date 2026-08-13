@@ -61,11 +61,23 @@ export interface TranslationProvider {
     onDelta: StreamDeltaHandler,
     signal: AbortSignal,
   ): Promise<string>;
+  /**
+   * Optional vision translation of one image (spec 3.0 §6.2, pillar F).
+   * Implementations send the data URL plus a structured prompt to a
+   * multimodal model and return the raw assistant content. Absence means
+   * the provider does not support vision (entries grey out, spec §6.2.3).
+   */
+  translateImage?(dataUrl: string, ctx: TranslationContext, signal: AbortSignal): Promise<string>;
 }
 
 /** True when the provider instance supports streaming. */
 export function providerSupportsStreaming(provider: TranslationProvider): boolean {
   return typeof provider.translateStream === 'function';
+}
+
+/** True when the provider instance implements the vision capability (3.0). */
+export function providerSupportsVision(provider: TranslationProvider): boolean {
+  return typeof provider.translateImage === 'function';
 }
 
 /* ------------------------------ factory registry ----------------------------- */

@@ -47,9 +47,18 @@
         </label>
       </section>
 
+      <section class="section" id="media-section">
+        <div class="actions actions-secondary">
+          <button id="btn-open-pdf" class="btn btn-small hidden">打开双语阅读器</button>
+          <button id="btn-toggle-subtitles" class="btn btn-small hidden">字幕翻译</button>
+        </div>
+        <div id="media-hint" class="info-hints hidden"></div>
+      </section>
+
       <section class="section info">
         <div class="info-row"><span>翻译服务</span><b id="info-provider">—</b></div>
         <div class="info-row"><span>目标语言</span><b id="info-target">—</b></div>
+        <div class="info-row hidden" id="row-language"><span>页面语言</span><b id="info-language">—</b></div>
         <div class="info-row"><span>进度</span><b id="info-progress">—</b></div>
         <div class="info-row hidden" id="row-frames"><span>页面框架</span><b id="info-frames">—</b></div>
         <div class="info-row hidden" id="row-actual"><span>实际提供方</span><b id="info-actual">—</b></div>
@@ -60,7 +69,7 @@
 
     <footer class="footer">
       <a href="#" id="open-options">打开设置</a>
-      <span class="version">v2.0.0</span>
+      <span class="version">v3.0.0</span>
     </footer>
 
     <script type="module" src="./main.ts"></script>

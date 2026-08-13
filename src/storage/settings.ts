@@ -3,13 +3,17 @@
  * Runs in background, popup and options pages (never in content scripts).
  *
  * 2.0: schema v2. Migration v1 -> v2 only adds defaults and never clears
- * existing fields (spec 2.0 §9.3). v2 settings remain readable by 1.0 code
- * because unknown fields are ignored during normalization.
+ * existing fields (spec 2.0 §9.3).
+ * 3.0: schema v3. Migration v2 -> v3 only adds defaults (spec 3.0 §9.3);
+ * v3 settings remain readable by 2.0 code because unknown fields are ignored
+ * during 2.0 normalization (regression-tested in tests/migration3.test.ts).
  */
 import {
   BUILTIN_SITE_RULES,
+  DEFAULT_IMAGE_MAX_EDGE_PX,
   DEFAULT_INLINE_BUDGET,
   DEFAULT_NATIVE_HOST_NAME,
+  DEFAULT_SUBTITLE_FONT_PCT,
   DEFAULT_VIEWPORT_BUDGET,
   SCHEMA_VERSION,
   SETTINGS_STORAGE_KEY,
@@ -19,11 +23,15 @@ import { DISPLAY_MODES } from '../shared/types';
 import type {
   DisplayMode,
   GlossaryEntry,
+  ImageTranslateSettings,
+  LanguageDetectionMode,
+  PdfViewerSettings,
   ProviderConfig,
   ProviderType,
   SelectionTranslateMode,
   Settings,
   SiteRule,
+  SubtitleSettings,
 } from '../shared/types';
 import { normalizeSiteRule } from '../shared/siteRules';
 import { clamp } from '../shared/utils';
@@ -46,7 +54,7 @@ const PROVIDER_TYPES: ProviderType[] = [
   'native-host',
 ];
 
-/** Coerce arbitrary stored data (schema v1 or v2) into a valid v2 Settings. */
+/** Coerce arbitrary stored data (schema v1, v2 or v3) into a valid v3 Settings. */
 export function normalizeSettings(raw: unknown): Settings {
   const defaults = defaultSettings();
   if (raw === null || typeof raw !== 'object') return defaults;
@@ -81,14 +89,12 @@ export function normalizeSettings(raw: unknown): Settings {
         .map((rule, i) => normalizeSiteRule(rule, `rule-${i + 1}`))
         .filter((rule): rule is SiteRule => rule !== null)
     : [];
-  const hasStoredRules = Array.isArray(r.siteRules);
   const siteRules = [...userRules];
   for (const builtin of BUILTIN_SITE_RULES) {
     if (!siteRules.some((s) => s.id === builtin.id)) {
       siteRules.push({ ...builtin });
     }
   }
-  void hasStoredRules;
 
   // Failover chain: only keep ids that exist among providers; deduplicated.
   const failoverSeen = new Set<string>();
@@ -144,11 +150,66 @@ export function normalizeSettings(raw: unknown): Settings {
       typeof r.viewportBudget === 'number' && Number.isFinite(r.viewportBudget)
         ? clamp(Math.round(r.viewportBudget), 50, 10000)
         : DEFAULT_VIEWPORT_BUDGET,
+    /* ------------------------- 3.0 additions ------------------------- */
+    pdfViewer: normalizePdfViewer(r.pdfViewer),
+    imageTranslate: normalizeImageTranslate(r.imageTranslate),
+    subtitles: normalizeSubtitles(r.subtitles),
+    languageDetection:
+      r.languageDetection === 'off' ? 'off' : ('auto' as LanguageDetectionMode),
+    selectionSpeak: r.selectionSpeak !== false,
   };
 }
 
 function normalizeMode(value: unknown): DisplayMode {
   return DISPLAY_MODES.includes(value as DisplayMode) ? (value as DisplayMode) : 'bilingual';
+}
+
+/* --------------------------- 3.0 sub-normalizers ----------------------------- */
+
+export function normalizePdfViewer(raw: unknown): PdfViewerSettings {
+  const d = defaultSettings().pdfViewer;
+  if (raw === null || typeof raw !== 'object') return d;
+  const r = raw as Partial<PdfViewerSettings>;
+  return {
+    enabled: r.enabled !== false,
+    defaultMode:
+      r.defaultMode === 'translated_hover_original' ? 'translated_hover_original' : 'bilingual',
+    skipHeadersFooters: r.skipHeadersFooters !== false,
+    maxConcurrentPages:
+      typeof r.maxConcurrentPages === 'number' && Number.isFinite(r.maxConcurrentPages)
+        ? clamp(Math.round(r.maxConcurrentPages), 1, 8)
+        : d.maxConcurrentPages,
+    autoOpen: r.autoOpen === true,
+  };
+}
+
+export function normalizeImageTranslate(raw: unknown): ImageTranslateSettings {
+  const d = defaultSettings().imageTranslate;
+  if (raw === null || typeof raw !== 'object') return d;
+  const r = raw as Partial<ImageTranslateSettings>;
+  return {
+    enabled: r.enabled !== false,
+    trigger:
+      r.trigger === 'contextMenu' || r.trigger === 'hoverButton' ? r.trigger : 'both',
+    engine: r.engine === 'tesseract-wasm' ? 'tesseract-wasm' : 'llm-vision',
+    maxEdgePx:
+      typeof r.maxEdgePx === 'number' && Number.isFinite(r.maxEdgePx)
+        ? clamp(Math.round(r.maxEdgePx), 512, 8192)
+        : DEFAULT_IMAGE_MAX_EDGE_PX,
+  };
+}
+
+export function normalizeSubtitles(raw: unknown): SubtitleSettings {
+  if (raw === null || typeof raw !== 'object') return defaultSettings().subtitles;
+  const r = raw as Partial<SubtitleSettings>;
+  return {
+    enabled: r.enabled !== false,
+    bilingual: r.bilingual === 'src' || r.bilingual === 'dst' ? r.bilingual : 'both',
+    fontSizePct:
+      typeof r.fontSizePct === 'number' && Number.isFinite(r.fontSizePct)
+        ? clamp(Math.round(r.fontSizePct), 50, 250)
+        : DEFAULT_SUBTITLE_FONT_PCT,
+  };
 }
 
 export function normalizeProvider(raw: unknown): ProviderConfig | null {

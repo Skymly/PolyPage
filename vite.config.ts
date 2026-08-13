@@ -21,6 +21,7 @@ export default defineConfig({
       input: {
         popup: 'src/popup/popup.html',
         options: 'src/options/options.html',
+        'pdf-viewer': 'src/viewer/pdf-viewer.html',
       },
     },
   },

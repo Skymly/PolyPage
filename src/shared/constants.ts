@@ -4,12 +4,18 @@ export const SETTINGS_STORAGE_KEY = 'settings';
 export const CACHE_INDEX_KEY = 'cacheIndex';
 export const CACHE_KEY_PREFIX = 'trcache:';
 export const ERROR_LOG_KEY = 'errorLog';
+/** 3.0: quality-feedback log storage key (spec 3.0 §8.2). */
+export const FEEDBACK_LOG_KEY = 'feedbackLog';
 
 export const ERROR_LOG_MAX = 50;
 export const CACHE_MAX_ENTRIES = 3000;
+/** 3.0: feedback log ring size (spec 3.0 §8.2). */
+export const FEEDBACK_LOG_MAX = 200;
+/** 3.0: resume task table ring size (spec 3.0 §8.4). */
+export const TASK_TABLE_MAX = 5000;
 
-/** Current settings schema version (2.0). */
-export const SCHEMA_VERSION = 2;
+/** Current settings schema version (3.0). */
+export const SCHEMA_VERSION = 3;
 
 /** How long the background waits to merge incoming items into one batch. */
 export const BATCH_WINDOW_MS = 80;
@@ -87,6 +93,23 @@ export const SELECTION_MAX_LEN = 500;
 export const DEFAULT_INLINE_BUDGET = 300;
 export const DEFAULT_VIEWPORT_BUDGET = 500;
 
+/* ------------------------------ 3.0 defaults -------------------------------- */
+
+/** Max image edge before downsampling (spec 3.0 §6.2 item 4). */
+export const DEFAULT_IMAGE_MAX_EDGE_PX = 4096;
+/** Max uploaded image size before downsampling (spec 3.0 §6.2 item 4). */
+export const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** Images smaller than this (rendered size) get no hover button. */
+export const IMAGE_HOVER_MIN_PX = 200;
+/** Pending paragraph budget before the PDF reader degrades to viewport±1. */
+export const PDF_PARAGRAPH_BUDGET = 2000;
+/** Default subtitle font size, percent of the layer default. */
+export const DEFAULT_SUBTITLE_FONT_PCT = 100;
+/** Number of leading paragraphs sampled for language detection. */
+export const LANGUAGE_DETECT_MAX_SAMPLES = 12;
+/** Max characters per sampled paragraph for language detection. */
+export const LANGUAGE_DETECT_SAMPLE_CHARS = 240;
+
 /** Built-in site rules shipped with the extension (spec 2.0 §6.4 item 5). */
 export const BUILTIN_SITE_RULES: SiteRule[] = [
   {
@@ -99,6 +122,14 @@ export const BUILTIN_SITE_RULES: SiteRule[] = [
     id: 'builtin-github',
     match: ['github.com', '*.github.com'],
     excludeSelectors: ['.blob-code-inner', '.js-file-line', 'pre', 'code'],
+    enabled: true,
+  },
+  {
+    // 3.0 (pillar G): YouTube self-drawn captions. Known limitation: the
+    // selectors break when YouTube ships new markup (spec 3.0 §7.2 item 4).
+    id: 'builtin-youtube',
+    match: ['*.youtube.com'],
+    subtitleSelectors: ['.ytp-caption-segment'],
     enabled: true,
   },
 ];
@@ -145,5 +176,26 @@ export function defaultSettings(): Settings {
     selectionTranslate: 'always',
     inlineBudget: DEFAULT_INLINE_BUDGET,
     viewportBudget: DEFAULT_VIEWPORT_BUDGET,
+    /* 3.0 */
+    pdfViewer: {
+      enabled: true,
+      defaultMode: 'bilingual',
+      skipHeadersFooters: true,
+      maxConcurrentPages: 3,
+      autoOpen: false,
+    },
+    imageTranslate: {
+      enabled: true,
+      trigger: 'both',
+      engine: 'llm-vision',
+      maxEdgePx: DEFAULT_IMAGE_MAX_EDGE_PX,
+    },
+    subtitles: {
+      enabled: true,
+      bilingual: 'both',
+      fontSizePct: DEFAULT_SUBTITLE_FONT_PCT,
+    },
+    languageDetection: 'auto',
+    selectionSpeak: true,
   };
 }

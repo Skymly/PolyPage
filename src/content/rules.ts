@@ -8,7 +8,7 @@ import type { EffectiveRule, SiteRule } from '../shared/types';
 /** Resolve the effective rule for a hostname (enabled rules only). */
 export function effectiveRuleForHost(hostname: string, rules: SiteRule[]): EffectiveRule {
   if (!Array.isArray(rules) || rules.length === 0) {
-    return { includeSelectors: [], excludeSelectors: [], minTextLength: null, defaultMode: null, viewportOnly: false };
+    return { includeSelectors: [], excludeSelectors: [], minTextLength: null, defaultMode: null, viewportOnly: false, subtitleSelectors: [] };
   }
   const matched = matchRulesForHost(hostname, rules);
   return mergeEffectiveRules(matched);

@@ -1,11 +1,14 @@
 /**
- * Selection translate (划词翻译, spec 2.0 §7.1).
+ * Selection translate (划词翻译, spec 2.0 §7.1), evolved for 3.0 §8.3:
  *
  *  - triggers on mouseup / keyup (Shift+arrow selection), 1-500 chars;
  *  - trigger strategy: always / hold-Alt / off (settings);
  *  - floating button at the selection end, expanding to a translation panel;
  *  - all UI lives inside a Shadow DOM host on <html> — never in page DOM;
- *  - reuses the background translate pipeline (single item + cache).
+ *  - reuses the background translate pipeline (single item + cache);
+ *  - 3.0: speak button (speechSynthesis, target-language voice; Alt+click
+ *    speaks the original), bad-translation mark button, and repeatLast()
+ *    for the Alt+Q command (spec 3.0 §8.3).
  */
 import { sendRuntime } from '../messaging/messages';
 import { SELECTION_MAX_LEN, SELECTION_MIN_LEN } from '../shared/constants';
@@ -42,12 +45,13 @@ const SEL_CSS = `
   }
   .wt-sel-text { padding: 10px 12px 4px; white-space: pre-wrap; word-break: break-word; }
   .wt-sel-text.error { color: #dc2626; }
-  .wt-sel-actions { display: flex; gap: 8px; padding: 8px 12px 10px; }
+  .wt-sel-actions { display: flex; gap: 8px; padding: 8px 12px 10px; flex-wrap: wrap; }
   .wt-sel-actions button {
     border: none; border-radius: 6px; padding: 4px 10px;
     background: #e5e7eb; color: #111827; cursor: pointer; font-size: 12px;
   }
   .wt-sel-actions button:hover { background: #d1d5db; }
+  .wt-sel-actions button:disabled { opacity: .5; cursor: default; }
 `;
 
 export class SelectionTranslator {
@@ -55,12 +59,26 @@ export class SelectionTranslator {
   private button: HTMLButtonElement | null = null;
   private panel: HTMLElement | null = null;
   private textEl: HTMLElement | null = null;
+  private speakBtn: HTMLButtonElement | null = null;
+  private markBtn: HTMLButtonElement | null = null;
   private mode: SelectionTranslateMode = 'always';
   private currentSelectionText = '';
+  /** Last completed result, replayed by Alt+Q (spec 3.0 §8.3 item 2). */
+  private lastResult: { source: string; translated: string; language: string | null } | null =
+    null;
+  private lastPanelPos: { x: number; y: number } | null = null;
+  private speakEnabled = false;
+  private targetLanguage: string | null = null;
 
   setMode(mode: SelectionTranslateMode): void {
     this.mode = mode;
     if (mode === 'off') this.hideAll();
+  }
+
+  /** 3.0: speak availability comes from settings + capability probe. */
+  setSpeak(enabled: boolean): void {
+    this.speakEnabled = enabled && typeof window.speechSynthesis !== 'undefined';
+    if (this.speakBtn) this.speakBtn.disabled = !this.speakEnabled;
   }
 
   start(): void {
@@ -133,6 +151,25 @@ export class SelectionTranslator {
     return true;
   }
 
+  /**
+   * Alt+Q (spec 3.0 §8.3 item 2): repeat the previous selection translate.
+   * With a live selection it translates it; without one it replays the
+   * last result panel.
+   */
+  repeatLast(): boolean {
+    const text = this.readSelection();
+    if (text) return this.translateCurrentSelection();
+    if (!this.lastResult) return false;
+    this.ensureHost();
+    if (this.lastPanelPos && this.host) {
+      this.host.style.transform = `translate(${this.lastPanelPos.x}px, ${this.lastPanelPos.y}px)`;
+    } else {
+      this.host!.style.transform = `translate(${Math.round(window.innerWidth / 2 - 160)}px, 90px)`;
+    }
+    this.showPanel(this.lastResult.translated, false);
+    return true;
+  }
+
   private checkSelection(): void {
     const text = this.readSelection();
     if (!text) {
@@ -173,11 +210,16 @@ export class SelectionTranslator {
     textEl.className = 'wt-sel-text';
     const actions = document.createElement('div');
     actions.className = 'wt-sel-actions';
+    const speakBtn = document.createElement('button');
+    speakBtn.textContent = '朗读';
+    speakBtn.title = '朗读译文（Alt+点击朗读原文）';
+    const markBtn = document.createElement('button');
+    markBtn.textContent = '标记坏句';
     const copyBtn = document.createElement('button');
     copyBtn.textContent = '复制';
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '收起';
-    actions.append(copyBtn, closeBtn);
+    actions.append(speakBtn, markBtn, copyBtn, closeBtn);
     panel.append(textEl, actions);
     shadow.append(style, button, panel);
     document.documentElement.appendChild(host);
@@ -198,11 +240,38 @@ export class SelectionTranslator {
       e.stopPropagation();
       this.hideAll();
     });
+    speakBtn.disabled = !this.speakEnabled;
+    speakBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Alt+click speaks the original text (spec 3.0 §8.3 item 1).
+      const useOriginal = e.altKey;
+      const text = useOriginal ? this.currentSelectionText : (textEl.textContent ?? '');
+      if (useOriginal || (!e.altKey && !textEl.classList.contains('error'))) {
+        this.speak(text, useOriginal ? null : this.targetLanguage);
+      }
+    });
+    markBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const translated = textEl.classList.contains('error') ? '' : (textEl.textContent ?? '');
+      if (translated === '' || translated === '翻译中…') return;
+      void sendRuntime({
+        type: 'mark-feedback',
+        source: this.currentSelectionText,
+        translation: translated,
+        pageUrl: location.href,
+        where: 'selection',
+      }).then(() => {
+        markBtn.textContent = '已标记 ✓';
+        window.setTimeout(() => (markBtn.textContent = '标记坏句'), 1200);
+      });
+    });
 
     this.host = host;
     this.button = button;
     this.panel = panel;
     this.textEl = textEl;
+    this.speakBtn = speakBtn;
+    this.markBtn = markBtn;
   }
 
   private positionAtSelection(): void {
@@ -212,6 +281,10 @@ export class SelectionTranslator {
     const scrollX = window.scrollX;
     const scrollY = window.scrollY;
     this.host.style.transform = `translate(${Math.round(rect.right + scrollX)}px, ${Math.round(rect.bottom + scrollY + 6)}px)`;
+    this.lastPanelPos = {
+      x: Math.round(rect.right + scrollX),
+      y: Math.round(rect.bottom + scrollY + 6),
+    };
   }
 
   private showButton(): void {
@@ -228,11 +301,43 @@ export class SelectionTranslator {
     this.panel.style.transform = 'translate(-100%, 0)';
     this.textEl.textContent = text;
     this.textEl.classList.toggle('error', isError);
+    if (this.markBtn) this.markBtn.style.display = isError ? 'none' : '';
+    if (this.speakBtn) {
+      const speakable = !isError && text !== '翻译中…';
+      this.speakBtn.disabled = !this.speakEnabled || !speakable;
+    }
   }
 
   private hideAll(): void {
     if (this.button) this.button.style.display = 'none';
     if (this.panel) this.panel.style.display = 'none';
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /* --------------------------------- speaking --------------------------------- */
+
+  private speak(text: string, language: string | null): void {
+    if (typeof window.speechSynthesis === 'undefined' || text.trim() === '') return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      if (language) utterance.lang = language;
+      const voices = window.speechSynthesis.getVoices();
+      if (language && voices.length > 0) {
+        const prefix = language.split('-')[0].toLowerCase();
+        const match =
+          voices.find((v) => v.lang.toLowerCase() === language.toLowerCase()) ??
+          voices.find((v) => v.lang.toLowerCase().startsWith(prefix));
+        if (match) utterance.voice = match;
+      }
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // Voice missing or engine busy — capability probe keeps button honest.
+    }
   }
 
   /* -------------------------------- translation ------------------------------- */
@@ -245,6 +350,8 @@ export class SelectionTranslator {
         domain: location.hostname,
       });
       if (res?.ok && res.translated !== undefined) {
+        this.targetLanguage = res.language ?? null;
+        this.lastResult = { source: text, translated: res.translated, language: res.language ?? null };
         this.showPanel(res.translated, false);
       } else {
         this.showPanel(`翻译失败：${res?.error ?? '未知错误'}`, true);

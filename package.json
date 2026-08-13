@@ -1,26 +1,27 @@
 {
-    "name": "polypage-web-translator",
-    "displayName": "PolyPage — Web Translator Extension",
-    "version": "2.0.0",
-    "description": "Chrome/Edge Manifest V3 web page translator with pluggable LLM / custom API providers, bilingual reading and hover tooltips.",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "icons": "node scripts/generate-icons.mjs",
-        "build": "node scripts/build.mjs",
-        "typecheck": "tsc --noEmit",
-        "test": "vitest run",
-        "smoke": "node scripts/smoke-test.mjs",
-        "verify": "npm run typecheck && npm run test && npm run build",
+  "name": "polypage-web-translator",
+  "displayName": "PolyPage — Web Translator Extension",
+  "version": "3.0.0",
+  "description": "Chrome/Edge Manifest V3 translator for web pages, PDFs, images and video subtitles with pluggable LLM / custom API providers, bilingual reading and hover tooltips.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "icons": "node scripts/generate-icons.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke-test.mjs",
+    "verify": "npm run typecheck && npm run test && npm run build",
     "test:gateway": "dotnet test native-host/PolyPage.slnx -v q",
     "test:contract": "node scripts/gateway-contract-test.mjs",
     "verify:all": "npm run verify && npm run test:gateway && npm run test:contract && npm run smoke"
-    },
-    "devDependencies": {
-        "@types/chrome": "^0.0.287",
-        "happy-dom": "^15.11.7",
-        "typescript": "^5.6.3",
-        "vite": "^5.4.11",
-        "vitest": "^2.1.8"
-    }
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "happy-dom": "^15.11.7",
+    "pdfjs-dist": "4.10.38",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
 }

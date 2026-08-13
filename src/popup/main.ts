@@ -141,6 +141,8 @@ function renderAggregated(agg: Aggregated): void {
   const hints: string[] = [];
   if (state.viewportOnly) hints.push('已降级为仅视口翻译（页面条目过多）');
   if (state.inlineDowngraded) hints.push('部分段落超出段内对照预算，已降级为段落双语');
+  if (state.autoSkipped) hints.push('页面语言与目标语言相同，已跳过自动翻译');
+  renderMediaRow(state);
   const hintBox = $<HTMLDivElement>('info-hints');
   if (hints.length > 0) {
     hintBox.textContent = hints.join('；');
@@ -321,12 +323,77 @@ async function exportAs(format: 'html' | 'md'): Promise<void> {
   }
 }
 
+/* ------------------------------ 3.0 media entries ----------------------------- */
+
+let activeTabUrl = '';
+
+function looksLikePdf(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.pathname.toLowerCase().endsWith('.pdf');
+  } catch {
+    return false;
+  }
+}
+
+/** Show PDF reader / subtitle entries based on the current tab + page state. */
+function renderMediaRow(state: PageState | null): void {
+  const pdfBtn = $<HTMLButtonElement>('btn-open-pdf');
+  const subBtn = $<HTMLButtonElement>('btn-toggle-subtitles');
+  const hint = $<HTMLDivElement>('media-hint');
+
+  pdfBtn.classList.toggle('hidden', !looksLikePdf(activeTabUrl));
+
+  const subtitleVideos = state?.subtitleVideos ?? 0;
+  const hasSubtitles = state?.subtitles !== undefined && state.subtitles !== 'unavailable';
+  subBtn.classList.toggle('hidden', !(hasSubtitles || subtitleVideos > 0));
+  if (hasSubtitles || subtitleVideos > 0) {
+    subBtn.textContent = state?.subtitles === 'on' ? '关闭字幕翻译' : '字幕翻译';
+  }
+
+  if (state?.pageLanguage) {
+    const row = $<HTMLDivElement>('row-language');
+    row.classList.remove('hidden');
+    $<HTMLElement>('info-language').textContent = state.pageLanguage;
+  }
+
+  const hints: string[] = [];
+  if (!looksLikePdf(activeTabUrl) && !hasSubtitles && subtitleVideos === 0) {
+    hint.classList.add('hidden');
+  } else {
+    if (looksLikePdf(activeTabUrl)) hints.push('检测到 PDF：可用双语阅读器逐页翻译');
+    if (subtitleVideos > 0) hints.push(`检测到 ${subtitleVideos} 个带字幕的视频`);
+    hint.textContent = hints.join('；');
+    hint.classList.toggle('hidden', hints.length === 0);
+  }
+}
+
+async function detectPdfTab(): Promise<void> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    activeTabUrl = tab?.url ?? '';
+  } catch {
+    activeTabUrl = '';
+  }
+}
+
 /* ---------------------------------- main ------------------------------------- */
 
 async function main(): Promise<void> {
   buildModeList();
   await resolveActiveTab();
+  await detectPdfTab();
   await Promise.all([refresh(), loadSummary()]);
+
+  $<HTMLButtonElement>('btn-open-pdf').addEventListener('click', () => {
+    void sendRuntime({ type: 'pdf-open', url: activeTabUrl }).catch(() => undefined);
+  });
+  $<HTMLButtonElement>('btn-toggle-subtitles').addEventListener('click', () => {
+    if (activeTabId === null) return;
+    void sendTabCommand(activeTabId, { type: 'wt:toggle-subtitles' })
+      .then(() => setTimeout(() => void refresh(), 250))
+      .catch(() => undefined);
+  });
 
   $<HTMLButtonElement>('btn-translate').addEventListener('click', () => void command('wt:translate'));
   $<HTMLButtonElement>('btn-restore').addEventListener('click', () => void command('wt:restore'));

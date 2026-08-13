@@ -70,6 +70,9 @@ export interface TranslatorConfig {
   inlineBudget: number;
   viewportBudget: number;
   streamingAvailable: boolean;
+  /** 3.0: detected page language, forwarded to the background so providers
+   *  with sourceLanguage=auto can receive it (spec 3.0 §8.1 item 2). */
+  pageLanguage: string | null;
 }
 
 export class PageTranslator {
@@ -87,6 +90,7 @@ export class PageTranslator {
     inlineBudget: 300,
     viewportBudget: 500,
     streamingAvailable: false,
+    pageLanguage: null,
   };
 
   /** Set by the bootstrap when the host is on the blacklist. */
@@ -312,6 +316,30 @@ export class PageTranslator {
     }
   }
 
+  /**
+   * 3.0 resume (spec 3.0 §8.4): the background persisted these task keys as
+   * in-flight before a service-worker restart. Re-submit them; completed
+   * items are skipped by the cache (idempotent).
+   */
+  async resumeInflight(keys: string[]): Promise<void> {
+    const wanted = new Set(keys);
+    const targets: NodeEntry[] = [];
+    for (const entry of this.entries.values()) {
+      if (!wanted.has(entry.id)) continue;
+      if (entry.status === 'done') continue; // cache idempotency
+      entry.status = 'idle';
+      entry.error = null;
+      targets.push(entry);
+    }
+    if (targets.length === 0) return;
+    if (!this._active) {
+      this._active = true;
+      this._mode = this._mode ?? 'bilingual';
+    }
+    await this.fetchTranslations(targets);
+    this.report();
+  }
+
   rescan(): void {
     this.scan();
     if (this._active) {
@@ -453,6 +481,7 @@ export class PageTranslator {
           type: 'translate',
           items,
           domain: location.hostname,
+          pageLanguage: this.config.pageLanguage,
         });
         if (!this._active) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;
@@ -524,6 +553,7 @@ export class PageTranslator {
           type: 'translate',
           items,
           domain: location.hostname,
+          pageLanguage: this.config.pageLanguage,
         });
         if (!this._active) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;

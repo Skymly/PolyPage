@@ -1,11 +1,12 @@
 /**
- * Settings schema migration tests (spec 2.0 §9.3, §12.1):
- *  - v1 -> v2 migration adds defaults without clearing existing fields;
+ * Settings schema migration tests (spec 2.0 §9.3, 3.0 §9.3, §12.1):
+ *  - v1 -> v3 migration adds defaults without clearing existing fields;
  *  - v2 settings remain readable by 1.0-style normalization (unknown fields
  *    are ignored), which is the backwards-compat guarantee of §9.3 item 3.
+ *  - v3 -> v2 read compatibility lives in tests/migration3.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_SITE_RULES, DEFAULT_INLINE_BUDGET, DEFAULT_VIEWPORT_BUDGET } from '../src/shared/constants';
+import { BUILTIN_SITE_RULES, DEFAULT_IMAGE_MAX_EDGE_PX, DEFAULT_INLINE_BUDGET, DEFAULT_VIEWPORT_BUDGET } from '../src/shared/constants';
 import type { Settings } from '../src/shared/types';
 import { clamp } from '../src/shared/utils';
 import { normalizeProvider, normalizeSettings } from '../src/storage/settings';
@@ -44,11 +45,11 @@ const v1Settings = {
   minTextLength: 9,
 };
 
-describe('v1 -> v2 migration', () => {
+describe('v1 -> v3 migration', () => {
   const migrated = normalizeSettings(v1Settings);
 
-  it('bumps schemaVersion to 2', () => {
-    expect(migrated.schemaVersion).toBe(2);
+  it('bumps schemaVersion to 3', () => {
+    expect(migrated.schemaVersion).toBe(3);
   });
 
   it('keeps every existing v1 field intact', () => {
@@ -81,6 +82,25 @@ describe('v1 -> v2 migration', () => {
     for (const builtin of BUILTIN_SITE_RULES) {
       expect(migrated.siteRules.some((r) => r.id === builtin.id)).toBe(true);
     }
+  });
+
+  it('adds 3.0 defaults for pillar E/F/G/H fields', () => {
+    expect(migrated.pdfViewer).toEqual({
+      enabled: true,
+      defaultMode: 'bilingual',
+      skipHeadersFooters: true,
+      maxConcurrentPages: 3,
+      autoOpen: false,
+    });
+    expect(migrated.imageTranslate).toEqual({
+      enabled: true,
+      trigger: 'both',
+      engine: 'llm-vision',
+      maxEdgePx: DEFAULT_IMAGE_MAX_EDGE_PX,
+    });
+    expect(migrated.subtitles).toEqual({ enabled: true, bilingual: 'both', fontSizePct: 100 });
+    expect(migrated.languageDetection).toBe('auto');
+    expect(migrated.selectionSpeak).toBe(true);
   });
 });
 

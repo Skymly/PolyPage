@@ -15,6 +15,10 @@
           <a href="#failover" class="nav-link">故障转移</a>
           <a href="#glossary" class="nav-link">术语表</a>
           <a href="#rules" class="nav-link">站点规则</a>
+          <a href="#pdfviewer" class="nav-link">PDF 阅读器</a>
+          <a href="#imagetranslate" class="nav-link">图片翻译</a>
+          <a href="#subtitles" class="nav-link">视频字幕</a>
+          <a href="#feedback" class="nav-link">反馈日志</a>
           <a href="#gateway" class="nav-link">本地网关</a>
           <a href="#blacklist" class="nav-link">黑名单</a>
           <a href="#cache" class="nav-link">缓存</a>
@@ -59,6 +63,19 @@
               <option value="alt">按住 Alt 选中时显示</option>
               <option value="off">关闭</option>
             </select>
+          </div>
+          <div class="field-row">
+            <label for="language-detect">页面语言自动检测</label>
+            <select id="language-detect">
+              <option value="auto">自动（检测页面语言，填充 auto 源语言；同语言页面跳过自动翻译）</option>
+              <option value="off">关闭</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="selection-speak" />
+              划词面板显示「朗读」按钮（浏览器语音合成，按目标语言选声）
+            </label>
           </div>
           <div class="field-row">
             <label for="default-source">默认源语言</label>
@@ -377,10 +394,112 @@
           <textarea id="blacklist-input" rows="5" placeholder="bank.example.com&#10;mail.example.com"></textarea>
         </section>
 
+        <section id="pdfviewer" class="card">
+          <h2>PDF 双语阅读器</h2>
+          <p class="hint">
+            在扩展内阅读器页中逐页翻译 PDF（本地 pdf.js 渲染，不修改源文件）。仅用户打开时翻译；
+            段落缓存按文档指纹存储，重复打开零 API 调用。
+          </p>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="pdf-enabled" /> 启用 PDF 双语阅读器</label>
+          </div>
+          <div class="field-row">
+            <label for="pdf-mode">默认显示模式</label>
+            <select id="pdf-mode">
+              <option value="bilingual">双语对照（原文 + 下方译文）</option>
+              <option value="translated_hover_original">译文 + 悬停原文</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="pdf-skip-hf" /> 过滤重复页眉页脚与页码（启发式）
+            </label>
+          </div>
+          <div class="field-row">
+            <label for="pdf-concurrency">同时翻译的最大页数</label>
+            <input id="pdf-concurrency" type="number" min="1" max="8" step="1" />
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="pdf-autoopen" /> 访问 PDF 链接时自动打开阅读器（需要授予 webNavigation 权限）
+            </label>
+            <span id="pdf-perm-status" class="hint"></span>
+          </div>
+        </section>
+
+        <section id="imagetranslate" class="card">
+          <h2>图片文字翻译（OCR）</h2>
+          <p class="hint">
+            只在用户点击时翻译图片（右键菜单 / 悬停按钮），绝不自动扫描页面图片。图片会降采样后
+            发送给多模态视觉模型；费用与隐私由用户每次点击掌控。需要支持视觉的翻译服务
+            （当前为 OpenAI-compatible 多模态）。
+          </p>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="img-enabled" /> 启用图片翻译</label>
+          </div>
+          <div class="field-row">
+            <label for="img-trigger">触发方式</label>
+            <select id="img-trigger">
+              <option value="both">右键菜单 + 悬停按钮</option>
+              <option value="contextMenu">仅右键菜单</option>
+              <option value="hoverButton">仅悬停按钮</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="img-engine">识别引擎</label>
+            <select id="img-engine">
+              <option value="llm-vision">llm-vision（多模态一步翻译）</option>
+              <option value="tesseract-wasm">tesseract-wasm（本地 OCR，3.1 提供）</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="img-maxedge">最大边长（像素，超出先降采样）</label>
+            <input id="img-maxedge" type="number" min="512" max="8192" step="128" />
+          </div>
+        </section>
+
+        <section id="subtitles" class="card">
+          <h2>视频字幕翻译</h2>
+          <p class="hint">
+            接管 &lt;track&gt; 字幕并在自绘字幕层显示双语（不修改视频源与字幕文件）。
+            自绘字幕站点（如 YouTube）通过站点规则的 subtitleSelectors 适配，站点改版可能失效。
+          </p>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="sub-enabled" /> 启用字幕翻译（Popup 开关 / 右键入口）</label>
+          </div>
+          <div class="field-row">
+            <label for="sub-bilingual">字幕档位</label>
+            <select id="sub-bilingual">
+              <option value="both">双语（原文上 + 译文下）</option>
+              <option value="dst">仅译文</option>
+              <option value="src">仅原文</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="sub-font">字幕字号（%）</label>
+            <input id="sub-font" type="number" min="50" max="250" step="5" />
+          </div>
+        </section>
+
         <div class="save-bar">
           <button id="save" class="btn btn-primary">保存全部设置</button>
           <span id="save-hint" class="hint"></span>
         </div>
+
+        <section id="feedback" class="card">
+          <h2>反馈日志（坏句标记）</h2>
+          <p class="hint">
+            在双语块 / 字幕 / PDF 块 / 划词面板上「标记坏句」后记录于此（最多 200 条环形）。
+            导出后可用于向 Provider 调优 Prompt。标记不改变页面渲染。
+          </p>
+          <div class="btn-row">
+            <button id="feedback-refresh" class="btn">刷新</button>
+            <button id="feedback-export-csv" class="btn">导出 CSV</button>
+            <button id="feedback-export-json" class="btn">导出 JSON</button>
+            <button id="feedback-clear" class="btn btn-danger">清空</button>
+          </div>
+          <div id="feedback-list" class="error-log"></div>
+        </section>
 
         <section id="cache" class="card">
           <h2>翻译缓存</h2>

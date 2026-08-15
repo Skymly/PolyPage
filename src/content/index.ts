@@ -21,7 +21,8 @@ import { DomObserver } from './observer';
 import { effectiveRuleForHost, hostBlacklisted, topLevelHostname } from './rules';
 import { SelectionTranslator } from './selection';
 import { PageTranslator } from './translator';
-import { SubtitleManager } from './media';
+import { SubtitleManager, captureMediaWindow } from './media';
+import { bytesToBase64 } from '../shared/binaryChunk';
 import { ImageTranslateController } from './imageButton';
 import { FeedbackMarker } from './feedback';
 
@@ -88,6 +89,8 @@ function extendedState(): PageState {
   state.autoSkipped = autoSkipped;
   state.subtitles = subtitleManager.state();
   state.subtitleVideos = subtitleManager.subtitleVideoCount();
+  state.captionlessMedia = subtitleManager.captionlessMediaCount();
+  state.asrActive = subtitleManager.asrActive();
   return state;
 }
 
@@ -130,6 +133,69 @@ function pageMatchesTargetLanguage(): boolean {
   if (!target) return false;
   const base = target.split('-')[0].toLowerCase();
   return base === pageLanguage.toLowerCase();
+}
+
+async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; skipped?: string; error?: string }> {
+  if (!contentSettings?.asrEnabled) return { ok: false, error: '语音转写已关闭' };
+  if (!contentSettings.asrSupported) return { ok: false, error: '当前翻译服务不支持转写' };
+  if (subtitleManager.asrActive()) {
+    subtitleManager.restoreAll();
+    scheduleReport();
+    return { ok: true };
+  }
+  if (subtitleManager.subtitleVideoCount() > 0 && !force) {
+    return { ok: true, skipped: 'has-tracks' };
+  }
+  const media = subtitleManager.pickCaptionlessMedia();
+  if (!media) return { ok: false, error: '没有可转写的无字幕媒体' };
+  const maxSeconds = contentSettings.asrMaxSeconds ?? 90;
+  const remaining =
+    Number.isFinite(media.duration) && media.duration > 0
+      ? Math.max(0, media.duration - (media.currentTime || 0))
+      : maxSeconds;
+  let duration = Math.min(maxSeconds, remaining || maxSeconds);
+  if ((contentSettings.asrConfirmFull ?? true) && remaining > maxSeconds) {
+    const full = window.confirm(
+      `默认只转写 ${maxSeconds} 秒。整段约 ${Math.round(remaining)} 秒将上传到当前 Provider 或本地网关。确定转写整段，取消则只转写 ${maxSeconds} 秒。`,
+    );
+    if (full) duration = remaining;
+  }
+  let captured: { mime: string; bytes: Uint8Array; start: number; duration: number };
+  try {
+    captured = await captureMediaWindow(media, duration);
+  } catch (e) {
+    const src = media.currentSrc || media.src;
+    if (src && /^https?:/i.test(src)) {
+      const res = await fetch(src);
+      if (!res.ok) return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      captured = {
+        mime: res.headers.get('content-type')?.split(';')[0]?.trim() || 'audio/webm',
+        bytes,
+        start: media.currentTime || 0,
+        duration,
+      };
+    } else {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  const requestId = `asr-${Date.now()}`;
+  const res = await sendRuntime({
+    type: 'asr-start',
+    requestId,
+    mime: captured.mime,
+    base64: bytesToBase64(captured.bytes),
+    windowStart: captured.start,
+    windowDuration: captured.duration,
+    languageHint: pageLanguage ?? undefined,
+  });
+  if (!res?.ok) return { ok: false, error: res && 'error' in res ? res.error : '转写失败' };
+  subtitleManager.applyMemoryCues(
+    media,
+    res.cues.map((c) => ({ startTime: c.start, endTime: c.end, text: c.text })),
+  );
+  scheduleReport();
+  return { ok: true };
 }
 
 /* --------------------------------- commands ---------------------------------- */
@@ -179,10 +245,13 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       imageController.translateImage(cmd.url);
       return { ok: true };
     case 'wt:toggle-subtitles': {
-      subtitleManager.configure(
-        contentSettings?.subtitleBilingual ?? 'both',
-        contentSettings?.subtitleFontSizePct ?? 100,
-      );
+      subtitleManager.configure({
+        bilingual: contentSettings?.subtitleBilingual ?? 'both',
+        fontSizePct: contentSettings?.subtitleFontSizePct ?? 100,
+        swapSrcDst: contentSettings?.subtitleSwapSrcDst ?? false,
+        background: contentSettings?.subtitleBackground ?? 'rgba(0,0,0,.62)',
+        position: contentSettings?.subtitlePosition ?? 'bottom',
+      });
       subtitleManager.toggle();
       scheduleReport();
       return { ok: true };
@@ -192,6 +261,8 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:resume-inflight':
       void translator.resumeInflight(cmd.keys).then(scheduleReport);
       return { ok: true };
+    case 'wt:transcribe-media':
+      return handleTranscribeMedia(cmd.force === true);
     default:
       return { ok: false };
   }
@@ -240,20 +311,27 @@ async function init(): Promise<void> {
 
   // 3.0 pillars F/G/H wiring (never on blacklisted hosts).
   if (!blacklisted) {
+    const ocrAvailable = contentSettings.ocrAvailable ?? contentSettings.visionSupported;
     imageController.configure({
       enabled: contentSettings.imageTranslateEnabled,
       trigger: contentSettings.imageTranslateTrigger,
       visionSupported: contentSettings.visionSupported,
-      disabledReason: contentSettings.visionSupported
+      ocrAvailable,
+      disabledReason: ocrAvailable
         ? null
-        : '当前翻译服务不支持视觉翻译，请切换到 OpenAI-compatible 多模态服务',
+        : (contentSettings.ocrEngine === 'tesseract-wasm'
+            ? '本地 OCR 不可用'
+            : '当前翻译服务不支持视觉翻译，请切换到 OpenAI-compatible 多模态服务或改用 tesseract-wasm'),
     });
     imageController.init();
     feedbackMarker.init();
-    subtitleManager.configure(
-      contentSettings.subtitleBilingual,
-      contentSettings.subtitleFontSizePct,
-    );
+    subtitleManager.configure({
+      bilingual: contentSettings.subtitleBilingual ?? 'both',
+      fontSizePct: contentSettings.subtitleFontSizePct ?? 100,
+      swapSrcDst: contentSettings.subtitleSwapSrcDst ?? false,
+      background: contentSettings.subtitleBackground ?? 'rgba(0,0,0,.62)',
+      position: contentSettings.subtitlePosition ?? 'bottom',
+    });
     if ((effectiveRule?.subtitleSelectors.length ?? 0) > 0 && contentSettings.subtitlesEnabled) {
       subtitleManager.applySelectors(effectiveRule!.subtitleSelectors);
     }

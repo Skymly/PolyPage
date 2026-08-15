@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeFirefoxDist, GECKO_ID } from './manifest-firefox.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
@@ -83,9 +84,9 @@ async function buildViewer() {
 }
 
 /**
- * Verify the locally packaged pdf.js vendor distribution against pinned
- * SHA-256 hashes (spec 3.0 §13: vendor release checked at build time), then
- * copy it to dist/vendor.
+ * Verify the locally packaged pdf.js + tesseract.js vendor distribution
+ * against pinned SHA-256 hashes (spec 3.0 §13 / 4.0 §7.1), then copy it
+ * to dist/vendor (including nested tessdata/).
  */
 async function copyVendor() {
   const vendorDir = path.join(root, 'vendor');
@@ -100,17 +101,23 @@ async function copyVendor() {
     if (digest !== spec.files[name]) {
       throw new Error(
         `vendor hash mismatch for ${name}: expected ${spec.files[name]}, got ${digest}. ` +
-          'Re-run scripts/sync-vendor.mjs to re-pin after a deliberate pdf.js upgrade.',
+          'Re-run scripts/sync-vendor.mjs to re-pin after a deliberate pdf.js / tesseract.js upgrade.',
       );
     }
   }
   await mkdir(path.join(dist, 'vendor'), { recursive: true });
+  await mkdir(path.join(dist, 'vendor', 'tessdata'), { recursive: true });
   for (const name of files) {
-    await cp(path.join(vendorDir, name), path.join(dist, 'vendor', name));
+    const dest = path.join(dist, 'vendor', name);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await cp(path.join(vendorDir, name), dest);
   }
   const license = path.join(vendorDir, 'LICENSE');
   if (existsSync(license)) await cp(license, path.join(dist, 'vendor', 'LICENSE'));
-  console.log(`    vendor pdf.js v${spec.pdfjsVersion} verified (${files.length} files) and copied`);
+  const tessLicense = path.join(vendorDir, 'tesseract.LICENSE');
+  if (existsSync(tessLicense)) await cp(tessLicense, path.join(dist, 'vendor', 'tesseract.LICENSE'));
+  const tessLabel = spec.tesseractJsVersion ? ` + tesseract.js v${spec.tesseractJsVersion}` : '';
+  console.log(`    vendor pdf.js v${spec.pdfjsVersion}${tessLabel} verified (${files.length} files) and copied`);
 }
 
 async function buildBackground() {
@@ -171,6 +178,11 @@ async function verifyDist() {
     'viewer/pdf-viewer.html',
     'vendor/pdf.min.mjs',
     'vendor/pdf.worker.min.mjs',
+    'vendor/tesseract.esm.min.js',
+    'vendor/tesseract-worker.min.js',
+    'vendor/tesseract-core-simd-lstm.wasm.js',
+    'vendor/tessdata/eng.traineddata',
+    'vendor/tessdata/chi_sim.traineddata',
     'styles/content.css',
     'icons/icon16.png',
     'icons/icon32.png',
@@ -205,17 +217,26 @@ async function verifyDist() {
 }
 
 await rm(dist, { recursive: true, force: true });
-console.log('[1/6] Building popup/options pages...');
+console.log('[1/7] Building popup/options pages...');
 await buildPages();
-console.log('[2/6] Building PDF viewer page...');
+console.log('[2/7] Building PDF viewer page...');
 await buildViewer();
-console.log('[3/6] Building background service worker...');
+console.log('[3/7] Building background service worker...');
 await buildBackground();
-console.log('[4/6] Building content script...');
+console.log('[4/7] Building content script...');
 await buildContent();
-console.log('[5/6] Copying static assets + verifying vendor pdf.js...');
+console.log('[5/7] Copying static assets + verifying vendor pdf.js / tesseract...');
 await copyStatic();
 await copyVendor();
-console.log('[6/6] Verifying dist...');
+console.log('[6/7] Verifying dist...');
 await verifyDist();
-console.log('Build complete: dist/ is ready to load as an unpacked extension.');
+console.log('[7/7] Writing dist-firefox/ (gecko.id + event-page background)...');
+const fx = await writeFirefoxDist(dist, path.join(root, 'dist-firefox'));
+const fxManifest = JSON.parse(await readFile(path.join(fx.outDir, 'manifest.json'), 'utf8'));
+if (fxManifest.browser_specific_settings?.gecko?.id !== GECKO_ID) {
+  throw new Error('dist-firefox manifest missing gecko.id');
+}
+if (!Array.isArray(fxManifest.background?.scripts) || fxManifest.background.scripts.length === 0) {
+  throw new Error('dist-firefox manifest missing background.scripts');
+}
+console.log(`Build complete: dist/ (Chrome/Edge) and ${fx.outDir} (Firefox, ${fx.geckoId}) are ready.`);

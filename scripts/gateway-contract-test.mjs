@@ -113,6 +113,9 @@ const gateway = spawn(EXE, [], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env, POLYPAGE_GATEWAY_CONFIG: configPath },
 });
+gateway.stdin.on('error', (err) => {
+  stderrTail = `${stderrTail}\nstdin: ${err.message}`;
+});
 
 const decoder = new FrameDecoder();
 const pending = new Map();
@@ -144,14 +147,27 @@ function rpc(method, params, timeoutMs = 15000) {
       clearTimeout(timer);
       resolve(msg);
     });
-    gateway.stdin.write(encodeFrame({ jsonrpc: '2.0', id, method, params }));
+    const frame = encodeFrame({ jsonrpc: '2.0', id, method, params });
+    if (frame.length > 1024 * 1024) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(new Error(`rpc frame exceeds 1MB: ${method} ${frame.length}`));
+      return;
+    }
+    try {
+      gateway.stdin.write(frame);
+    } catch (e) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(e);
+    }
   });
 }
 
 try {
   // 1. ping
   const ping = await rpc('ping', {});
-  check('ping returns protocol version', ping.result?.protocol === 1, JSON.stringify(ping));
+  check('ping returns protocol version', ping.result?.protocol === 2, JSON.stringify(ping));
   check('ping reports gateway version', typeof ping.result?.version === 'string', JSON.stringify(ping));
 
   // 2. capabilities
@@ -194,6 +210,37 @@ try {
   // 6. unknown method
   const unknown = await rpc('no.such', {});
   check('unknown method -> -32601', unknown.error?.code === -32601, JSON.stringify(unknown.error));
+
+  const dataUrl = 'data:image/png;base64,AQID';
+  const image = await rpc('translate.image', { dataUrl, source: 'en', target: 'zh', backend: 'stub-http' });
+  check(
+    'translate.image on HttpBackend is config (unsupported)',
+    image.error?.code === -32007,
+    JSON.stringify(image),
+  );
+
+  const crypto = await import('node:crypto');
+  const blob = Buffer.alloc(1024 * 1024 + 64, 7);
+  const sha = crypto.createHash('sha256').update(blob).digest('hex');
+  const chunkSize = 512 * 1024;
+  const total = Math.ceil(blob.length / chunkSize);
+  let lastChunk;
+  for (let i = 0; i < total; i++) {
+    const slice = blob.subarray(i * chunkSize, Math.min(blob.length, (i + 1) * chunkSize));
+    lastChunk = await rpc('binary.chunk', {
+      transferId: 'contract-big',
+      index: i,
+      total,
+      mime: 'application/octet-stream',
+      sha256: sha,
+      data: slice.toString('base64'),
+    });
+  }
+  check(
+    'binary.chunk >1MB assembles with matching sha256',
+    lastChunk?.result?.complete === true && lastChunk.result.sha256 === sha && lastChunk.result.bytes === blob.length,
+    JSON.stringify(lastChunk),
+  );
 } catch (e) {
   failures++;
   console.log(`  FAIL  contract test crashed — ${e.message}`);

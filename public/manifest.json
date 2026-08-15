@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PolyPage — Web Translator",
   "short_name": "PolyPage",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Translate web pages, PDFs, images and video subtitles with your own LLM / DeepL / Azure / Google / local gateway. Bilingual reading, inline mode, hover tooltips, selection translate.",
   "icons": {
     "16": "icons/icon16.png",
@@ -35,6 +35,12 @@
       "css": ["styles/content.css"],
       "run_at": "document_idle",
       "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/*", "vendor/tessdata/*"],
+      "matches": ["<all_urls>"]
     }
   ],
   "commands": {

@@ -58,4 +58,8 @@ export interface GatewayCapabilities {
   supportsStreaming?: boolean;
   maxBatchItems?: number;
   maxBatchChars?: number;
+  /** 4.0 protocol v2 additions (absent on protocol=1 gateways). */
+  supportsVision?: boolean;
+  supportsAsr?: boolean;
+  maxBinaryBytes?: number;
 }

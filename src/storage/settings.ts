@@ -7,13 +7,21 @@
  * 3.0: schema v3. Migration v2 -> v3 only adds defaults (spec 3.0 §9.3);
  * v3 settings remain readable by 2.0 code because unknown fields are ignored
  * during 2.0 normalization (regression-tested in tests/migration3.test.ts).
+ * 4.0: schema v4. Migration v3 -> v4 only adds defaults (spec 4.0 §9.3);
+ * v4 settings remain readable by 3.0 code (regression-tested in
+ * tests/migration4.test.ts).
  */
 import {
   BUILTIN_SITE_RULES,
+  DEFAULT_ASR_MAX_SECONDS,
+  DEFAULT_ASR_MAX_UPLOAD_MB,
   DEFAULT_IMAGE_MAX_EDGE_PX,
   DEFAULT_INLINE_BUDGET,
   DEFAULT_NATIVE_HOST_NAME,
+  DEFAULT_SUBTITLE_BACKGROUND,
   DEFAULT_SUBTITLE_FONT_PCT,
+  DEFAULT_TESS_LANGS,
+  DEFAULT_TM_MAX_ENTRIES,
   DEFAULT_VIEWPORT_BUDGET,
   SCHEMA_VERSION,
   SETTINGS_STORAGE_KEY,
@@ -21,6 +29,7 @@ import {
 } from '../shared/constants';
 import { DISPLAY_MODES } from '../shared/types';
 import type {
+  AsrSettings,
   DisplayMode,
   GlossaryEntry,
   ImageTranslateSettings,
@@ -32,6 +41,7 @@ import type {
   Settings,
   SiteRule,
   SubtitleSettings,
+  TranslationMemorySettings,
 } from '../shared/types';
 import { normalizeSiteRule } from '../shared/siteRules';
 import { clamp } from '../shared/utils';
@@ -54,7 +64,7 @@ const PROVIDER_TYPES: ProviderType[] = [
   'native-host',
 ];
 
-/** Coerce arbitrary stored data (schema v1, v2 or v3) into a valid v3 Settings. */
+/** Coerce arbitrary stored data (schema v1, v2 or v3) into a valid v4 Settings. */
 export function normalizeSettings(raw: unknown): Settings {
   const defaults = defaultSettings();
   if (raw === null || typeof raw !== 'object') return defaults;
@@ -157,6 +167,9 @@ export function normalizeSettings(raw: unknown): Settings {
     languageDetection:
       r.languageDetection === 'off' ? 'off' : ('auto' as LanguageDetectionMode),
     selectionSpeak: r.selectionSpeak !== false,
+    /* ------------------------- 4.0 additions ------------------------- */
+    asr: normalizeAsr(r.asr),
+    translationMemory: normalizeTranslationMemory(r.translationMemory),
   };
 }
 
@@ -180,6 +193,7 @@ export function normalizePdfViewer(raw: unknown): PdfViewerSettings {
         ? clamp(Math.round(r.maxConcurrentPages), 1, 8)
         : d.maxConcurrentPages,
     autoOpen: r.autoOpen === true,
+    scannedPageOcr: r.scannedPageOcr !== false,
   };
 }
 
@@ -196,6 +210,7 @@ export function normalizeImageTranslate(raw: unknown): ImageTranslateSettings {
       typeof r.maxEdgePx === 'number' && Number.isFinite(r.maxEdgePx)
         ? clamp(Math.round(r.maxEdgePx), 512, 8192)
         : DEFAULT_IMAGE_MAX_EDGE_PX,
+    tessLangs: normalizeTessLangs(r.tessLangs),
   };
 }
 
@@ -209,6 +224,51 @@ export function normalizeSubtitles(raw: unknown): SubtitleSettings {
       typeof r.fontSizePct === 'number' && Number.isFinite(r.fontSizePct)
         ? clamp(Math.round(r.fontSizePct), 50, 250)
         : DEFAULT_SUBTITLE_FONT_PCT,
+    swapSrcDst: r.swapSrcDst === true,
+    background:
+      typeof r.background === 'string' && r.background.trim() !== ''
+        ? r.background.trim()
+        : DEFAULT_SUBTITLE_BACKGROUND,
+    position: r.position === 'top' ? 'top' : 'bottom',
+  };
+}
+
+function normalizeTessLangs(raw: unknown): string[] {
+  const fallback = [...DEFAULT_TESS_LANGS];
+  if (!Array.isArray(raw)) return fallback;
+  const langs = raw
+    .filter((x): x is string => typeof x === 'string')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  return langs.length > 0 ? langs : fallback;
+}
+
+export function normalizeAsr(raw: unknown): AsrSettings {
+  if (raw === null || typeof raw !== 'object') return defaultSettings().asr;
+  const r = raw as Partial<AsrSettings>;
+  return {
+    enabled: r.enabled !== false,
+    maxSeconds:
+      typeof r.maxSeconds === 'number' && Number.isFinite(r.maxSeconds)
+        ? clamp(Math.round(r.maxSeconds), 10, 600)
+        : DEFAULT_ASR_MAX_SECONDS,
+    maxUploadMb:
+      typeof r.maxUploadMb === 'number' && Number.isFinite(r.maxUploadMb)
+        ? clamp(Math.round(r.maxUploadMb), 1, 100)
+        : DEFAULT_ASR_MAX_UPLOAD_MB,
+    confirmFull: r.confirmFull !== false,
+  };
+}
+
+export function normalizeTranslationMemory(raw: unknown): TranslationMemorySettings {
+  if (raw === null || typeof raw !== 'object') return defaultSettings().translationMemory;
+  const r = raw as Partial<TranslationMemorySettings>;
+  return {
+    enabled: r.enabled === true,
+    maxEntries:
+      typeof r.maxEntries === 'number' && Number.isFinite(r.maxEntries)
+        ? clamp(Math.round(r.maxEntries), 100, 20000)
+        : DEFAULT_TM_MAX_ENTRIES,
   };
 }
 

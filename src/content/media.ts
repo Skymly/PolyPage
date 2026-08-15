@@ -11,9 +11,16 @@
  * original (spec §7.2).
  */
 import { sendRuntime } from '../messaging/messages';
-import type { SubtitleBilingual, SubtitleState } from '../shared/types';
+import type { SubtitleState } from '../shared/types';
 import { CueScheduler, activeCueText, stripVttTags } from './subtitleScheduler';
 import type { CueLike } from './subtitleScheduler';
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  cueLineOrder,
+  cuePositionClass,
+  cueVerticalRatio,
+} from './subtitleStyle';
+import type { SubtitleStyleConfig } from './subtitleStyle';
 
 const SUB_CSS = `
 :host { all: initial; }
@@ -45,8 +52,8 @@ class VideoSubtitleController {
   private scheduler = new CueScheduler();
   private cueHost: CueHost | null = null;
   private lastRendered: string | null = null;
-  private bilingual: SubtitleBilingual = 'both';
-  private fontSizePct = 100;
+  private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
+  private memoryCues: CueLike[] = [];
 
   constructor(private readonly video: HTMLVideoElement) {}
 
@@ -60,7 +67,16 @@ class VideoSubtitleController {
     );
   }
 
+  setMemoryCues(cues: CueLike[]): void {
+    this.memoryCues = cues;
+    this.lastRendered = null;
+    this.ensureLayer();
+    if (this.timer === null) this.timer = window.setInterval(this.tick, 250);
+    this.tick();
+  }
+
   private collectCues(): CueLike[] {
+    if (this.memoryCues.length > 0) return this.memoryCues;
     const out: CueLike[] = [];
     for (const track of this.subtitleTracks()) {
       const cues = track.cues;
@@ -73,9 +89,8 @@ class VideoSubtitleController {
     return out;
   }
 
-  setStyles(bilingual: SubtitleBilingual, fontSizePct: number): void {
-    this.bilingual = bilingual;
-    this.fontSizePct = fontSizePct;
+  setStyles(style: SubtitleStyleConfig): void {
+    this.style = { ...style };
     this.lastRendered = null; // force re-render
     this.tick();
   }
@@ -102,6 +117,7 @@ class VideoSubtitleController {
       track.mode = mode;
     }
     this.savedModes = [];
+    this.memoryCues = [];
     this.cueHost?.host.remove();
     this.cueHost = null;
     this.scheduler.reset();
@@ -109,7 +125,7 @@ class VideoSubtitleController {
   }
 
   get active(): boolean {
-    return this.savedModes.length > 0;
+    return this.savedModes.length > 0 || this.memoryCues.length > 0;
   }
 
   private onCueChange = (): void => {
@@ -140,10 +156,13 @@ class VideoSubtitleController {
     }
     this.cueHost.box.style.display = '';
     const baseFont = Math.max(13, Math.min(24, rect.height * 0.045));
-    this.cueHost.box.style.fontSize = `${((baseFont * this.fontSizePct) / 100).toFixed(1)}px`;
+    this.cueHost.box.style.fontSize = `${((baseFont * this.style.fontSizePct) / 100).toFixed(1)}px`;
     this.cueHost.box.style.left = `${Math.round(rect.left)}px`;
     this.cueHost.box.style.width = `${Math.round(rect.width)}px`;
-    this.cueHost.box.style.top = `${Math.round(rect.top + rect.height * 0.82)}px`;
+    const ratio = cueVerticalRatio(this.style.position);
+    this.cueHost.box.style.top = `${Math.round(rect.top + rect.height * ratio)}px`;
+    this.cueHost.box.classList.remove('wt-sub-pos-top', 'wt-sub-pos-bottom');
+    this.cueHost.box.classList.add(cuePositionClass(this.style.position));
   }
 
   private tick = (): void => {
@@ -195,19 +214,12 @@ class VideoSubtitleController {
     if (source === null) {
       return;
     }
-    const showSrc = this.bilingual === 'both' || this.bilingual === 'src';
-    const showDst = this.bilingual === 'both' || this.bilingual === 'dst';
-    if (showDst) {
-      const dst = document.createElement('div');
-      dst.className = 'wt-sub-row wt-sub-dst';
-      dst.textContent = translation ?? '…';
-      box.appendChild(dst);
-    }
-    if (showSrc) {
-      const src = document.createElement('div');
-      src.className = 'wt-sub-row wt-sub-src';
-      src.textContent = source;
-      box.appendChild(src);
+    for (const kind of cueLineOrder(this.style.bilingual, this.style.swapSrcDst)) {
+      const row = document.createElement('div');
+      row.className = `wt-sub-row wt-sub-${kind}`;
+      row.style.background = this.style.background;
+      row.textContent = kind === 'src' ? source : (translation ?? '…');
+      box.appendChild(row);
     }
     if (translation !== null) {
       const mark = document.createElement('button');
@@ -236,8 +248,7 @@ class VideoSubtitleController {
 export class SubtitleManager {
   private controllers = new Map<HTMLVideoElement, VideoSubtitleController>();
   private activeVideo: HTMLVideoElement | null = null;
-  private bilingual: SubtitleBilingual = 'both';
-  private fontSizePct = 100;
+  private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
   private selectorObserver: MutationObserver | null = null;
   private selectorTimer: number | null = null;
   private selectorDirty = new Set<Element>();
@@ -246,11 +257,10 @@ export class SubtitleManager {
   private selectors: string[] = [];
   private wired = false;
 
-  configure(bilingual: SubtitleBilingual, fontSizePct: number): void {
-    this.bilingual = bilingual;
-    this.fontSizePct = fontSizePct;
+  configure(style: SubtitleStyleConfig): void {
+    this.style = { ...style };
     for (const controller of this.controllers.values()) {
-      controller.setStyles(bilingual, fontSizePct);
+      controller.setStyles(style);
     }
   }
 
@@ -291,6 +301,32 @@ export class SubtitleManager {
     return this.videos().filter((v) => this.controllerFor(v).hasTracks).length;
   }
 
+  captionlessMediaCount(): number {
+    const videos = this.videos().filter((v) => !this.controllerFor(v).hasTracks).length;
+    const audios = document.querySelectorAll('audio').length;
+    return videos + audios;
+  }
+
+  asrActive(): boolean {
+    return [...this.controllers.values()].some((c) => c.active && !c.hasTracks);
+  }
+
+  applyMemoryCues(media: HTMLMediaElement, cues: CueLike[]): void {
+    if (media instanceof HTMLVideoElement) {
+      const controller = this.controllerFor(media);
+      controller.setStyles(this.style);
+      controller.setMemoryCues(cues);
+    }
+  }
+
+  pickCaptionlessMedia(): HTMLMediaElement | null {
+    this.wireInteraction();
+    const videos = this.videos().filter((v) => !this.controllerFor(v).hasTracks);
+    if (this.activeVideo && videos.includes(this.activeVideo)) return this.activeVideo;
+    if (videos[0]) return videos[0];
+    return document.querySelector('audio');
+  }
+
   state(): SubtitleState {
     const withTracks = this.videos().filter((v) => this.controllerFor(v).hasTracks);
     if (withTracks.length === 0) return 'unavailable';
@@ -310,7 +346,7 @@ export class SubtitleManager {
     if (controller.active) {
       controller.restore();
     } else {
-      controller.setStyles(this.bilingual, this.fontSizePct);
+      controller.setStyles(this.style);
       controller.takeover();
     }
     return this.state();
@@ -415,4 +451,63 @@ export class SubtitleManager {
   get selectorList(): string[] {
     return this.selectors;
   }
+}
+
+export async function captureMediaWindow(
+  media: HTMLMediaElement,
+  maxSeconds: number,
+): Promise<{ mime: string; bytes: Uint8Array; start: number; duration: number }> {
+  const start = media.currentTime || 0;
+  const remaining =
+    Number.isFinite(media.duration) && media.duration > 0 ? Math.max(0, media.duration - start) : maxSeconds;
+  const duration = Math.min(maxSeconds, remaining || maxSeconds);
+  const streamFn = (
+    media as HTMLMediaElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream }
+  ).captureStream?.bind(media) ??
+    (media as HTMLMediaElement & { mozCaptureStream?: () => MediaStream }).mozCaptureStream?.bind(media);
+  if (!streamFn) {
+    throw new Error('当前媒体无法 captureStream（可能受 DRM 保护或浏览器不支持）');
+  }
+  let stream: MediaStream;
+  try {
+    stream = streamFn();
+  } catch (e) {
+    throw new Error(e instanceof Error ? e.message : 'captureStream 失败');
+  }
+  const audioTracks = stream.getAudioTracks();
+  if (audioTracks.length === 0) throw new Error('媒体没有可采集的音轨');
+  const audioOnly = new MediaStream(audioTracks);
+  const mime = pickRecorderMime();
+  const recorder = mime ? new MediaRecorder(audioOnly, { mimeType: mime }) : new MediaRecorder(audioOnly);
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (ev) => {
+    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+  };
+  const stopped = new Promise<void>((resolve, reject) => {
+    recorder.onstop = () => resolve();
+    recorder.onerror = () => reject(new Error('MediaRecorder 失败'));
+  });
+  recorder.start(250);
+  if (media.paused) {
+    try {
+      await media.play();
+    } catch {
+      /* user gesture may be required; keep recording silence */
+    }
+  }
+  await new Promise((r) => window.setTimeout(r, Math.max(200, duration * 1000)));
+  if (recorder.state !== 'inactive') recorder.stop();
+  await stopped;
+  audioTracks.forEach((t) => t.stop());
+  const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return { mime: blob.type || 'audio/webm', bytes, start, duration };
+}
+
+function pickRecorderMime(): string {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  for (const type of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return '';
 }

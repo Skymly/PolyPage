@@ -15,7 +15,7 @@
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import os from 'node:os';
@@ -212,6 +212,34 @@ const videoPage = `<!doctype html>
   </video>
 </body></html>`;
 
+function loadCaptionlessWebm() {
+  const dir = path.join(root, 'scripts', 'fixtures');
+  const out = path.join(dir, 'captionless.webm');
+  if (existsSync(out)) {
+    const buf = readFileSync(out);
+    if (buf.byteLength > 32) return buf;
+  }
+  mkdirSync(dir, { recursive: true });
+  const ffmpeg = spawnSync(
+    'ffmpeg',
+    ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', '1', '-c:a', 'libopus', out],
+    { stdio: 'ignore' },
+  );
+  if (ffmpeg.status === 0 && existsSync(out)) return readFileSync(out);
+  // Fallback: tiny WebM header. Content script fetch-src fallback still
+  // uploads these bytes to the mock /audio/transcriptions endpoint.
+  return Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOA', 'base64');
+}
+
+const clipWebm = loadCaptionlessWebm();
+
+const captionlessPage = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Captionless</title></head>
+<body>
+  <p id="asr-caption">A fixture video with no subtitle track.</p>
+  <video id="vid" width="480" height="270" controls preload="auto" src="/clip.webm" style="background:#000;"></video>
+</body></html>`;
+
 function startPageServer() {
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
@@ -225,6 +253,7 @@ function startPageServer() {
         '/inline.html': inlinePage,
         '/image.html': imagePage,
         '/video.html': videoPage,
+        '/captionless.html': captionlessPage,
       };
       const pathOnly = url.split('?')[0];
       if (pathOnly === '/sample.pdf') {
@@ -238,6 +267,10 @@ function startPageServer() {
       if (pathOnly === '/subs.vtt') {
         res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8' });
         return res.end(subtitleVtt);
+      }
+      if (pathOnly === '/clip.webm') {
+        res.writeHead(200, { 'Content-Type': 'video/webm' });
+        return res.end(clipWebm);
       }
       const html = pages[pathOnly];
       if (!html) {
@@ -265,10 +298,21 @@ function startMockApi() {
   let requests = 0;
   let sseRequests = 0;
   let visionRequests = 0;
+  let asrRequests = 0;
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
+      if ((req.url ?? '').includes('/audio/transcriptions')) {
+        asrRequests++;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(
+          JSON.stringify({
+            text: 'Hello from ASR',
+            segments: [{ start: 0, end: 2, text: 'Hello from ASR' }],
+          }),
+        );
+      }
       requests++;
       let parsed;
       try {
@@ -365,6 +409,7 @@ function startMockApi() {
         count: () => requests,
         sseCount: () => sseRequests,
         visionCount: () => visionRequests,
+        asrCount: () => asrRequests,
       }),
     );
   });
@@ -714,7 +759,7 @@ try {
   const savedV3 = await ext.eval(
     `chrome.runtime.sendMessage({ type: 'get-full-settings' }).then((r) => r.settings)`,
   );
-  check('v2 payload migrated to schemaVersion 3', savedV3?.schemaVersion === 3, `v=${savedV3?.schemaVersion}`);
+  check('v2 payload migrated to schemaVersion 4', savedV3?.schemaVersion === 4, `v=${savedV3?.schemaVersion}`);
   check(
     '3.0 pillar sections defaulted on migration',
     !!savedV3?.pdfViewer &&
@@ -723,6 +768,15 @@ try {
       savedV3?.languageDetection === 'auto' &&
       savedV3?.selectionSpeak === true,
     JSON.stringify({ pdf: !!savedV3?.pdfViewer, img: !!savedV3?.imageTranslate, sub: !!savedV3?.subtitles }),
+  );
+  check(
+    '4.0 sections defaulted on v2→v4 migration',
+    savedV3?.asr?.enabled === true &&
+      savedV3?.asr?.maxSeconds === 90 &&
+      savedV3?.translationMemory?.enabled === false &&
+      savedV3?.pdfViewer?.scannedPageOcr === true &&
+      savedV3?.subtitles?.swapSrcDst === false,
+    JSON.stringify({ asr: savedV3?.asr, tm: savedV3?.translationMemory, scanned: savedV3?.pdfViewer?.scannedPageOcr }),
   );
 
   // Boot the popup page inside the extension and verify its UI initializes.
@@ -1634,8 +1688,60 @@ try {
     'track mode restored after teardown',
     (await videoClient.eval(`document.querySelector('track')?.track?.mode`)) === 'showing',
   );
+  check(
+    'tracked 3.0 video does not auto-ASR',
+    mock.asrCount() === 0,
+    `asr=${mock.asrCount()}`,
+  );
   await closePage(browserCdp, videoUrl);
   videoClient.close();
+
+  /* ========================= 4.0 captionless ASR (pillar I) ================== */
+
+  check(
+    'asr smoke settings saved',
+    await saveSettingsThroughExtension(
+      settingsPayload({
+        cacheEnabled: true,
+        asr: { enabled: true, maxSeconds: 10, confirmFull: false, maxUploadMb: 20 },
+      }),
+    ),
+  );
+  const asrUrl = `http://127.0.0.1:${PORT_PAGE}/captionless.html`;
+  await openPage(browserCdp, asrUrl);
+  const asrClient = await pageFor(asrUrl);
+  await sleep(800);
+  const asrBefore = mock.asrCount();
+  const asrRes = await ext.eval(sendToTabWithUrl(asrUrl, `{ type: 'wt:transcribe-media' }`), 25000);
+  check('captionless wt:transcribe-media returns ok', asrRes?.ok === true, JSON.stringify(asrRes));
+  await asrClient.eval(
+    `(() => { const v = document.querySelector('video'); if (v) { v.currentTime = 0.25; } })()`,
+  );
+  let asrCue = '';
+  for (let i = 0; i < 40; i++) {
+    asrCue = await asrClient.eval(
+      `document.querySelector('.wt-subtitle-host')?.shadowRoot?.querySelector('.wt-sub-box')?.textContent ?? ''`,
+    );
+    if (asrCue.includes('Hello from ASR') || asrCue.includes('[译]')) break;
+    await sleep(250);
+  }
+  check(
+    'captionless video mock /audio/transcriptions called exactly once',
+    mock.asrCount() === asrBefore + 1,
+    `asr=${mock.asrCount()} before=${asrBefore}`,
+  );
+  check(
+    'captionless ASR injects bilingual memory cues',
+    asrCue.includes('Hello from ASR') || asrCue.includes('[译]'),
+    JSON.stringify(asrCue.slice(0, 160)),
+  );
+  await ext.eval(sendToTabWithUrl(asrUrl, `{ type: 'wt:transcribe-media' }`), 5000);
+  check(
+    'ASR close leaves zero residue',
+    (await asrClient.eval(`document.querySelector('.wt-subtitle-host') === null`)) === true,
+  );
+  await closePage(browserCdp, asrUrl);
+  asrClient.close();
 
   /* ========================= 3.0 PDF bilingual reader (E) ==================== */
 
@@ -1669,10 +1775,21 @@ try {
   );
   const scannedHint = await viewer.eval(`document.querySelector('.scanned-hint')?.textContent ?? ''`);
   check('scanned page shows explicit no-text-layer hint', scannedHint.includes('没有文本层'), JSON.stringify(scannedHint));
+  const ocrPageBtn = await viewer.eval(`document.querySelector('.ocr-page-btn')?.textContent ?? ''`);
+  check('scanned page offers 识别本页', ocrPageBtn.includes('识别本页'), JSON.stringify(ocrPageBtn));
   const pdfProgress = await viewer.eval(`document.getElementById('progress')?.textContent ?? ''`);
   check('reader toolbar reports translated/total progress', pdfProgress.includes('已译'), JSON.stringify(pdfProgress));
   const canvases = await viewer.eval(`document.querySelectorAll('.page canvas').length`);
   check('reader renders page canvases', canvases >= 1, `canvases=${canvases}`);
+  // Drain in-flight PDF batches before snapshotting; otherwise a late
+  // first-open completion inflates mock.count() during reopen.
+  let drained = mock.count();
+  for (let i = 0; i < 15; i++) {
+    await sleep(200);
+    const n = mock.count();
+    if (n === drained) break;
+    drained = n;
+  }
   await closePage(browserCdp, viewerUrl);
   viewer.close();
 

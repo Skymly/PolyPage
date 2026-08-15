@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using PolyPage.Gateway.Backends;
@@ -14,20 +15,33 @@ namespace PolyPage.Gateway;
 public sealed class GatewayServer
 {
     public const string Name = "PolyPage Gateway";
-    public const string Version = "2.0.0";
-    public const int ProtocolVersion = 1;
+    public const string Version = "4.0.0";
+    public const int ProtocolVersion = 2;
+    public const int DefaultMaxBinaryBytes = 32 * 1024 * 1024;
 
     private readonly IReadOnlyDictionary<string, IGatewayBackend> _backends;
     private readonly string _defaultBackendId;
     private readonly GatewayLog _log;
     private readonly Dictionary<long, CancellationTokenSource> _pending = new();
+    private readonly Dictionary<string, BinaryTransfer> _transfers = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly int _maxBinaryBytes;
 
-    public GatewayServer(IEnumerable<IGatewayBackend> backends, string defaultBackendId, GatewayLog log)
+    private sealed class BinaryTransfer
+    {
+        public required string Mime { get; init; }
+        public required int Total { get; init; }
+        public string? Sha256 { get; set; }
+        public Dictionary<int, byte[]> Parts { get; } = new();
+        public byte[]? Assembled { get; set; }
+    }
+
+    public GatewayServer(IEnumerable<IGatewayBackend> backends, string defaultBackendId, GatewayLog log, int maxBinaryBytes = DefaultMaxBinaryBytes)
     {
         _backends = backends.ToDictionary(b => b.Id, b => b);
         _defaultBackendId = defaultBackendId;
         _log = log;
+        _maxBinaryBytes = maxBinaryBytes > 0 ? maxBinaryBytes : DefaultMaxBinaryBytes;
     }
 
     public async Task RunAsync(Stream input, Stream output, CancellationToken ct)
@@ -157,6 +171,8 @@ public sealed class GatewayServer
             case "capabilities":
             {
                 var streaming = _backends.Values.Any(b => b.Capabilities.SupportsStreaming);
+                var vision = _backends.Values.Any(b => b.Capabilities.SupportsVision);
+                var asr = _backends.Values.Any(b => b.Capabilities.SupportsAsr);
                 return JsonRpc.Ok(request.Id, new
                 {
                     name = Name,
@@ -164,6 +180,9 @@ public sealed class GatewayServer
                     protocol = ProtocolVersion,
                     backends = _backends.Keys.ToArray(),
                     supportsStreaming = streaming,
+                    supportsVision = vision,
+                    supportsAsr = asr,
+                    maxBinaryBytes = _maxBinaryBytes,
                     maxBatchItems = 50,
                     maxBatchChars = 20000,
                 });
@@ -205,6 +224,15 @@ public sealed class GatewayServer
                 }
                 return JsonRpc.Ok(request.Id, new { ok = true });
             }
+
+            case "binary.chunk":
+                return HandleBinaryChunk(request);
+
+            case "translate.image":
+                return await HandleTranslateImageAsync(request, ct);
+
+            case "transcribe":
+                return await HandleTranscribeAsync(request, ct);
 
             default:
                 throw new GatewayBackendException(JsonRpc.MethodNotFound, $"未知方法: {request.Method}");
@@ -268,6 +296,180 @@ public sealed class GatewayServer
         return JsonRpc.Ok(request.Id, new { translation = accumulated.ToString(), backend = backend.Id });
     }
 
+    private JsonRpcResponse HandleBinaryChunk(JsonRpcRequest request)
+    {
+        var transferId = GetString(request.Params, "transferId")
+            ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "binary.chunk 需要 transferId");
+        var index = GetInt(request.Params, "index")
+            ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "binary.chunk 需要 index");
+        var total = GetInt(request.Params, "total")
+            ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "binary.chunk 需要 total");
+        var mime = GetString(request.Params, "mime") ?? "application/octet-stream";
+        var data = GetString(request.Params, "data") ?? "";
+        var sha256 = GetString(request.Params, "sha256");
+        if (total <= 0 || index < 0 || index >= total)
+        {
+            throw new GatewayBackendException(RpcCodes.Config, "binary.chunk 的 index/total 无效");
+        }
+        byte[] part;
+        try
+        {
+            part = Convert.FromBase64String(data);
+        }
+        catch (FormatException)
+        {
+            throw new GatewayBackendException(RpcCodes.Config, "binary.chunk data 不是合法 Base64");
+        }
+
+        BinaryTransfer transfer;
+        lock (_transfers)
+        {
+            if (!_transfers.TryGetValue(transferId, out transfer!))
+            {
+                transfer = new BinaryTransfer { Mime = mime, Total = total };
+                _transfers[transferId] = transfer;
+            }
+            if (transfer.Total != total)
+            {
+                throw new GatewayBackendException(RpcCodes.Config, "binary.chunk total 与已有传输不一致");
+            }
+            transfer.Parts[index] = part;
+            if (!string.IsNullOrWhiteSpace(sha256)) transfer.Sha256 = sha256;
+            if (transfer.Parts.Count < transfer.Total)
+            {
+                return JsonRpc.Ok(request.Id, new { transferId, received = transfer.Parts.Count, total = transfer.Total, complete = false });
+            }
+            var assembled = new byte[transfer.Parts.OrderBy(p => p.Key).Sum(p => p.Value.Length)];
+            var offset = 0;
+            foreach (var kv in transfer.Parts.OrderBy(p => p.Key))
+            {
+                Buffer.BlockCopy(kv.Value, 0, assembled, offset, kv.Value.Length);
+                offset += kv.Value.Length;
+            }
+            if (assembled.Length > _maxBinaryBytes)
+            {
+                _transfers.Remove(transferId);
+                throw new GatewayBackendException(RpcCodes.Config,
+                    $"拼装后二进制超过上限（{assembled.Length} > {_maxBinaryBytes}）");
+            }
+            if (!string.IsNullOrWhiteSpace(transfer.Sha256))
+            {
+                var hex = Convert.ToHexString(SHA256.HashData(assembled)).ToLowerInvariant();
+                if (!string.Equals(hex, transfer.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    _transfers.Remove(transferId);
+                    throw new GatewayBackendException(RpcCodes.Config, "binary.chunk sha256 校验失败");
+                }
+            }
+            transfer.Assembled = assembled;
+            transfer.Parts.Clear();
+            return JsonRpc.Ok(request.Id, new
+            {
+                transferId,
+                received = total,
+                total,
+                complete = true,
+                bytes = assembled.Length,
+                sha256 = transfer.Sha256 ?? Convert.ToHexString(SHA256.HashData(assembled)).ToLowerInvariant(),
+                mime = transfer.Mime,
+            });
+        }
+    }
+
+    private async Task<JsonRpcResponse> HandleTranslateImageAsync(JsonRpcRequest request, CancellationToken ct)
+    {
+        var backend = ResolveBackend(request.Params);
+        var (bytes, mime) = ResolveImagePayload(request.Params);
+        var source = GetString(request.Params, "source") ?? "auto";
+        var target = GetString(request.Params, "target") ?? "zh-CN";
+        var result = await backend.TranslateImageAsync(bytes, mime, new TranslateContext(source, target), ct);
+        if (result is null)
+        {
+            throw new GatewayBackendException(RpcCodes.Config, $"后端 \"{backend.Id}\" 不支持视觉翻译");
+        }
+        return JsonRpc.Ok(request.Id, new
+        {
+            segments = result.Segments.Select(s => new { text = s.Text, translation = s.Translation }).ToArray(),
+            backend = backend.Id,
+        });
+    }
+
+    private async Task<JsonRpcResponse> HandleTranscribeAsync(JsonRpcRequest request, CancellationToken ct)
+    {
+        var backend = ResolveBackend(request.Params);
+        var transferId = GetString(request.Params, "transferId")
+            ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "transcribe 需要 transferId（音频必须分块上传）");
+        if (GetString(request.Params, "dataUrl") is not null)
+        {
+            throw new GatewayBackendException(JsonRpc.InvalidParams, "transcribe 不接受内联音频");
+        }
+        var (bytes, mime) = TakeTransfer(transferId);
+        var source = GetString(request.Params, "source") ?? "auto";
+        var target = GetString(request.Params, "target") ?? "zh-CN";
+        var hint = GetString(request.Params, "languageHint");
+        var ctx = new TranslateContext(hint ?? source, target);
+        var result = await backend.TranscribeAsync(bytes, mime, ctx, ct);
+        if (result is null)
+        {
+            throw new GatewayBackendException(RpcCodes.Config, $"后端 \"{backend.Id}\" 不支持转写");
+        }
+        return JsonRpc.Ok(request.Id, new
+        {
+            text = result.Text,
+            segments = result.Segments?.Select(s => new { start = s.Start, end = s.End, text = s.Text }).ToArray(),
+            backend = backend.Id,
+        });
+    }
+
+    private (byte[] bytes, string mime) ResolveImagePayload(JsonElement? paramsElement)
+    {
+        var transferId = GetString(paramsElement, "transferId");
+        if (!string.IsNullOrWhiteSpace(transferId)) return TakeTransfer(transferId);
+        var dataUrl = GetString(paramsElement, "dataUrl")
+            ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "translate.image 需要 transferId 或 dataUrl");
+        return DecodeDataUrl(dataUrl);
+    }
+
+    private (byte[] bytes, string mime) TakeTransfer(string transferId)
+    {
+        lock (_transfers)
+        {
+            if (!_transfers.TryGetValue(transferId, out var transfer) || transfer.Assembled is null)
+            {
+                throw new GatewayBackendException(RpcCodes.Config, $"未知或未完成的 transferId: {transferId}");
+            }
+            var bytes = transfer.Assembled;
+            var mime = transfer.Mime;
+            _transfers.Remove(transferId);
+            return (bytes, mime);
+        }
+    }
+
+    private (byte[] bytes, string mime) DecodeDataUrl(string dataUrl)
+    {
+        var comma = dataUrl.IndexOf(',');
+        var header = comma >= 0 ? dataUrl[..comma] : "";
+        var payload = comma >= 0 ? dataUrl[(comma + 1)..] : dataUrl;
+        var mime = "image/png";
+        var start = header.IndexOf(':');
+        var end = header.IndexOf(';');
+        if (start >= 0 && end > start) mime = header[(start + 1)..end];
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(payload);
+        }
+        catch (FormatException)
+        {
+            throw new GatewayBackendException(RpcCodes.Config, "dataUrl 不是合法 Base64");
+        }
+        if (bytes.Length > _maxBinaryBytes)
+        {
+            throw new GatewayBackendException(RpcCodes.Config, $"内联图片超过上限（{bytes.Length} > {_maxBinaryBytes}）");
+        }
+        return (bytes, mime);
+    }
+
     private static void ValidateBatch(IGatewayBackend backend, IReadOnlyList<string> texts)
     {
         var caps = backend.Capabilities;
@@ -323,6 +525,14 @@ public sealed class GatewayServer
         return el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()
             : null;
+    }
+
+    private static int? GetInt(JsonElement? element, string name)
+    {
+        if (element is not { } el || el.ValueKind != JsonValueKind.Object) return null;
+        if (!el.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number) return null;
+        if (v.TryGetInt32(out var i)) return i;
+        return (int)v.GetInt64();
     }
 
     private static long? GetLong(JsonElement? element, string name)

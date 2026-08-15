@@ -14,8 +14,8 @@ export const FEEDBACK_LOG_MAX = 200;
 /** 3.0: resume task table ring size (spec 3.0 §8.4). */
 export const TASK_TABLE_MAX = 5000;
 
-/** Current settings schema version (3.0). */
-export const SCHEMA_VERSION = 3;
+/** Current settings schema version (4.0). */
+export const SCHEMA_VERSION = 4;
 
 /** How long the background waits to merge incoming items into one batch. */
 export const BATCH_WINDOW_MS = 80;
@@ -110,6 +110,19 @@ export const LANGUAGE_DETECT_MAX_SAMPLES = 12;
 /** Max characters per sampled paragraph for language detection. */
 export const LANGUAGE_DETECT_SAMPLE_CHARS = 240;
 
+/* ------------------------------ 4.0 defaults -------------------------------- */
+
+/** ASR capture window in seconds (spec 4.0 §9.3). */
+export const DEFAULT_ASR_MAX_SECONDS = 90;
+/** ASR upload size cap in MiB (spec 4.0 §9.3). */
+export const DEFAULT_ASR_MAX_UPLOAD_MB = 20;
+/** Default subtitle cue background (spec 4.0 §9.3). */
+export const DEFAULT_SUBTITLE_BACKGROUND = 'rgba(0,0,0,.62)';
+/** Sentence TM ring size (spec 4.0 §9.3). */
+export const DEFAULT_TM_MAX_ENTRIES = 5000;
+/** Default tesseract language packs (spec 4.0 §9.3). */
+export const DEFAULT_TESS_LANGS: string[] = ['eng', 'chi_sim'];
+
 /** Built-in site rules shipped with the extension (spec 2.0 §6.4 item 5). */
 export const BUILTIN_SITE_RULES: SiteRule[] = [
   {
@@ -183,19 +196,35 @@ export function defaultSettings(): Settings {
       skipHeadersFooters: true,
       maxConcurrentPages: 3,
       autoOpen: false,
+      scannedPageOcr: true,
     },
     imageTranslate: {
       enabled: true,
       trigger: 'both',
       engine: 'llm-vision',
       maxEdgePx: DEFAULT_IMAGE_MAX_EDGE_PX,
+      tessLangs: [...DEFAULT_TESS_LANGS],
     },
     subtitles: {
       enabled: true,
       bilingual: 'both',
       fontSizePct: DEFAULT_SUBTITLE_FONT_PCT,
+      swapSrcDst: false,
+      background: DEFAULT_SUBTITLE_BACKGROUND,
+      position: 'bottom',
     },
     languageDetection: 'auto',
     selectionSpeak: true,
+    /* 4.0 */
+    asr: {
+      enabled: true,
+      maxSeconds: DEFAULT_ASR_MAX_SECONDS,
+      maxUploadMb: DEFAULT_ASR_MAX_UPLOAD_MB,
+      confirmFull: true,
+    },
+    translationMemory: {
+      enabled: false,
+      maxEntries: DEFAULT_TM_MAX_ENTRIES,
+    },
   };
 }

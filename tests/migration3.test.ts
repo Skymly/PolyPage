@@ -56,8 +56,8 @@ const v2Settings = {
 describe('v2 -> v3 migration', () => {
   const migrated = normalizeSettings(v2Settings);
 
-  it('bumps schemaVersion to 3', () => {
-    expect(migrated.schemaVersion).toBe(3);
+  it('bumps schemaVersion to 4', () => {
+    expect(migrated.schemaVersion).toBe(4);
   });
 
   it('keeps every existing v2 field intact', () => {

@@ -68,6 +68,15 @@ export interface TranslationProvider {
    * the provider does not support vision (entries grey out, spec §6.2.3).
    */
   translateImage?(dataUrl: string, ctx: TranslationContext, signal: AbortSignal): Promise<string>;
+  /**
+   * Optional ASR (spec 4.0 §5.4). Absence means the provider does not
+   * support transcription (entries grey out).
+   */
+  transcribe?(
+    input: { mime: string; bytes: Uint8Array },
+    ctx: TranslationContext & { languageHint?: string },
+    signal: AbortSignal,
+  ): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }>;
 }
 
 /** True when the provider instance supports streaming. */
@@ -78,6 +87,11 @@ export function providerSupportsStreaming(provider: TranslationProvider): boolea
 /** True when the provider instance implements the vision capability (3.0). */
 export function providerSupportsVision(provider: TranslationProvider): boolean {
   return typeof provider.translateImage === 'function';
+}
+
+/** True when the provider instance implements ASR (4.0). */
+export function providerSupportsAsr(provider: TranslationProvider): boolean {
+  return typeof provider.transcribe === 'function';
 }
 
 /* ------------------------------ factory registry ----------------------------- */

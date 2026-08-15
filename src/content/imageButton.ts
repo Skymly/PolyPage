@@ -17,7 +17,9 @@ export interface ImageButtonConfig {
   enabled: boolean;
   trigger: ImageTranslateTrigger;
   visionSupported: boolean;
-  /** Reason shown when entries are greyed out (provider lacks vision). */
+  /** 4.0: OCR can run (vision provider or tesseract-wasm). */
+  ocrAvailable: boolean;
+  /** Reason shown when entries are greyed out. */
   disabledReason: string | null;
 }
 
@@ -30,6 +32,7 @@ export class ImageTranslateController {
     enabled: true,
     trigger: 'both',
     visionSupported: true,
+    ocrAvailable: true,
     disabledReason: null,
   };
 
@@ -79,7 +82,7 @@ export class ImageTranslateController {
     btn.className = 'wt-img-btn';
     btn.textContent = '译图';
     const reason = this.config.disabledReason;
-    btn.title = this.config.visionSupported
+    btn.title = this.config.ocrAvailable
       ? '翻译图片文字 (PolyPage)'
       : reason ?? '当前翻译服务不支持视觉翻译';
     btn.style.cssText = [
@@ -95,7 +98,7 @@ export class ImageTranslateController {
       'box-shadow:0 2px 8px rgba(0,0,0,.3)',
       'font-family:system-ui,sans-serif',
     ].join(';');
-    if (!this.config.visionSupported) {
+    if (!this.config.ocrAvailable) {
       btn.style.background = '#9ca3af';
       btn.style.cursor = 'not-allowed';
     }
@@ -105,7 +108,7 @@ export class ImageTranslateController {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      if (!this.config.visionSupported) return;
+      if (!this.config.ocrAvailable) return;
       this.translateImage(img.src, img);
     });
     document.documentElement.appendChild(btn);
@@ -122,7 +125,7 @@ export class ImageTranslateController {
   /** Entry for both hover button and background context-menu command. */
   translateImage(url: string, near?: Element): void {
     if (!this.config.enabled) return;
-    if (!this.config.visionSupported) {
+    if (!this.config.ocrAvailable) {
       this.panel.setCallbacks({ onCancel: () => undefined, onClose: () => undefined });
       this.panel.showLoading(near);
       this.panel.showError(this.config.disabledReason ?? '当前翻译服务不支持视觉翻译');

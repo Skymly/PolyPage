@@ -222,6 +222,7 @@ async function refresh(): Promise<void> {
 async function loadSummary(): Promise<void> {
   try {
     const summary = await sendRuntime({ type: 'get-settings-summary' });
+    lastSummary = { asrEnabled: summary.asrEnabled, asrSupported: summary.asrSupported };
     $<HTMLElement>('info-provider').textContent = summary.providerConfigured
       ? summary.providerName
       : `${summary.providerName}（未配置）`;
@@ -337,9 +338,12 @@ function looksLikePdf(url: string): boolean {
 }
 
 /** Show PDF reader / subtitle entries based on the current tab + page state. */
+let lastSummary: { asrEnabled?: boolean; asrSupported?: boolean } | null = null;
+
 function renderMediaRow(state: PageState | null): void {
   const pdfBtn = $<HTMLButtonElement>('btn-open-pdf');
   const subBtn = $<HTMLButtonElement>('btn-toggle-subtitles');
+  const asrBtn = $<HTMLButtonElement>('btn-transcribe');
   const hint = $<HTMLDivElement>('media-hint');
 
   pdfBtn.classList.toggle('hidden', !looksLikePdf(activeTabUrl));
@@ -350,6 +354,12 @@ function renderMediaRow(state: PageState | null): void {
   if (hasSubtitles || subtitleVideos > 0) {
     subBtn.textContent = state?.subtitles === 'on' ? '关闭字幕翻译' : '字幕翻译';
   }
+  const captionless = state?.captionlessMedia ?? 0;
+  const showAsr = (lastSummary?.asrEnabled ?? true) && captionless > 0 && subtitleVideos === 0;
+  asrBtn.classList.toggle('hidden', !showAsr);
+  asrBtn.disabled = !(lastSummary?.asrSupported ?? false);
+  asrBtn.title = lastSummary?.asrSupported ? '从当前播放位置转写并翻译' : '当前翻译服务不支持转写';
+  asrBtn.textContent = state?.asrActive ? '关闭转写字幕' : '转写并翻译';
 
   if (state?.pageLanguage) {
     const row = $<HTMLDivElement>('row-language');
@@ -363,6 +373,7 @@ function renderMediaRow(state: PageState | null): void {
   } else {
     if (looksLikePdf(activeTabUrl)) hints.push('检测到 PDF：可用双语阅读器逐页翻译');
     if (subtitleVideos > 0) hints.push(`检测到 ${subtitleVideos} 个带字幕的视频`);
+    if (showAsr) hints.push(`检测到 ${captionless} 个无字幕媒体`);
     hint.textContent = hints.join('；');
     hint.classList.toggle('hidden', hints.length === 0);
   }
@@ -392,6 +403,12 @@ async function main(): Promise<void> {
     if (activeTabId === null) return;
     void sendTabCommand(activeTabId, { type: 'wt:toggle-subtitles' })
       .then(() => setTimeout(() => void refresh(), 250))
+      .catch(() => undefined);
+  });
+  $<HTMLButtonElement>('btn-transcribe').addEventListener('click', () => {
+    if (activeTabId === null) return;
+    void sendTabCommand(activeTabId, { type: 'wt:transcribe-media' })
+      .then(() => setTimeout(() => void refresh(), 400))
       .catch(() => undefined);
   });
 

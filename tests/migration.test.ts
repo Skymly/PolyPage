@@ -48,8 +48,8 @@ const v1Settings = {
 describe('v1 -> v3 migration', () => {
   const migrated = normalizeSettings(v1Settings);
 
-  it('bumps schemaVersion to 3', () => {
-    expect(migrated.schemaVersion).toBe(3);
+  it('bumps schemaVersion to 4', () => {
+    expect(migrated.schemaVersion).toBe(4);
   });
 
   it('keeps every existing v1 field intact', () => {
@@ -91,14 +91,23 @@ describe('v1 -> v3 migration', () => {
       skipHeadersFooters: true,
       maxConcurrentPages: 3,
       autoOpen: false,
+      scannedPageOcr: true,
     });
     expect(migrated.imageTranslate).toEqual({
       enabled: true,
       trigger: 'both',
       engine: 'llm-vision',
       maxEdgePx: DEFAULT_IMAGE_MAX_EDGE_PX,
+      tessLangs: ['eng', 'chi_sim'],
     });
-    expect(migrated.subtitles).toEqual({ enabled: true, bilingual: 'both', fontSizePct: 100 });
+    expect(migrated.subtitles).toEqual({
+      enabled: true,
+      bilingual: 'both',
+      fontSizePct: 100,
+      swapSrcDst: false,
+      background: 'rgba(0,0,0,.62)',
+      position: 'bottom',
+    });
     expect(migrated.languageDetection).toBe('auto');
     expect(migrated.selectionSpeak).toBe(true);
   });

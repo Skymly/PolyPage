@@ -23,6 +23,12 @@ import {
 } from './pdf/segment';
 import type { PdfLine, TextItemLike } from './pdf/segment';
 import { chooseFingerprint, pdfScopedCacheText } from './pdf/fingerprint';
+import {
+  SCANNED_PAGE_OCR_BUDGET,
+  canvasToOcrDataUrl,
+  imageHashFromDataUrl,
+  scannedPageCacheText,
+} from './pdf/scannedOcr';
 
 /* --------------------------------- DOM handles -------------------------------- */
 
@@ -76,6 +82,10 @@ let fingerprint = '';
 let degradedViewport = false;
 let maxConcurrentPages = 3;
 let skipHeadersFooters = true;
+let scannedPageOcr = true;
+let maxEdgePx = 4096;
+let ocrEngineId = 'llm-vision';
+let scannedOcrCount = 0;
 let activeCount = 0;
 const waiters: (() => void)[] = [];
 
@@ -155,6 +165,9 @@ async function main(): Promise<void> {
   const settings = await loadSettings();
   maxConcurrentPages = settings.pdfViewer.maxConcurrentPages;
   skipHeadersFooters = settings.pdfViewer.skipHeadersFooters;
+  scannedPageOcr = settings.pdfViewer.scannedPageOcr;
+  maxEdgePx = settings.imageTranslate.maxEdgePx;
+  ocrEngineId = settings.imageTranslate.engine;
   mode = settings.pdfViewer.defaultMode;
   modeSelect.value = mode;
 
@@ -428,9 +441,76 @@ function showScannedHint(page: PageState): void {
   if (page.container.querySelector('.scanned-hint')) return;
   const hint = document.createElement('div');
   hint.className = 'scanned-hint';
-  hint.textContent =
-    '此页没有文本层（可能是扫描图片），3.0 P0 暂不翻译扫描页。可尝试使用图片翻译功能处理页面截图。';
+  const text = document.createElement('div');
+  text.textContent =
+    '此页没有文本层（可能是扫描图片）。点击「识别本页」将该页渲染为图片后走当前 OCR 引擎。';
+  hint.appendChild(text);
+  if (scannedPageOcr) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ocr-page-btn';
+    btn.textContent = '识别本页';
+    btn.addEventListener('click', () => {
+      void recognizeScannedPage(page, btn, hint);
+    });
+    hint.appendChild(btn);
+  }
   page.container.appendChild(hint);
+}
+
+async function recognizeScannedPage(
+  page: PageState,
+  btn: HTMLButtonElement,
+  hint: HTMLElement,
+): Promise<void> {
+  if (scannedOcrCount >= SCANNED_PAGE_OCR_BUDGET) {
+    const ok = window.confirm(
+      `本文档已识别 ${scannedOcrCount} 页扫描页（上限 ${SCANNED_PAGE_OCR_BUDGET}）。继续将产生额外 OCR / 翻译费用，是否继续？`,
+    );
+    if (!ok) return;
+  }
+  btn.disabled = true;
+  btn.textContent = '识别中…';
+  try {
+    if (!page.rendered) await renderPage(page);
+    const dataUrl = canvasToOcrDataUrl(page.canvas, maxEdgePx);
+    const imageHash = imageHashFromDataUrl(dataUrl);
+    const cacheIdentity = scannedPageCacheText(fingerprint, page.index, imageHash, ocrEngineId);
+    const requestId = `pdfocr-${page.index}-${Date.now()}`;
+    const res = await sendRuntime({
+      type: 'ocr-request',
+      requestId,
+      url: dataUrl,
+      cacheIdentity,
+    });
+    if (!res?.ok) {
+      throw new Error(res && 'error' in res ? res.error : '识别失败');
+    }
+    scannedOcrCount += 1;
+    page.paragraphs = res.segments.map((seg) => ({
+      text: seg.text,
+      status: 'done' as const,
+      translated: seg.translation.trim() !== '' ? seg.translation : seg.text,
+      error: null,
+      el: null,
+    }));
+    page.scanned = false;
+    hint.remove();
+    ensureParasDom(page);
+    renderPageParas(page);
+    updateProgress();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    let errEl = hint.querySelector('.ocr-page-error') as HTMLElement | null;
+    if (!errEl) {
+      errEl = document.createElement('div');
+      errEl.className = 'ocr-page-error';
+      hint.appendChild(errEl);
+    }
+    errEl.textContent = `识别失败：${message}`;
+    btn.disabled = false;
+    btn.textContent = '识别本页';
+  }
 }
 
 function renderPageParas(page: PageState): void {

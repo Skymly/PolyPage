@@ -115,7 +115,7 @@ public class GatewayServerTests
     {
         var responses = await Pipe.RunAsync(new[] { Pipe.Request(1, "ping") }, new FakeBackend());
         var result = responses.Single().GetProperty("result");
-        Assert.Equal(1, result.GetProperty("protocol").GetInt32());
+        Assert.Equal(2, result.GetProperty("protocol").GetInt32());
         Assert.Equal(GatewayServer.Version, result.GetProperty("version").GetString());
         Assert.Equal(GatewayServer.Name, result.GetProperty("name").GetString());
     }
@@ -127,6 +127,9 @@ public class GatewayServerTests
         var result = responses.Single().GetProperty("result");
         Assert.Contains("fake", result.GetProperty("backends").EnumerateArray().Select(e => e.GetString()));
         Assert.True(result.GetProperty("supportsStreaming").GetBoolean());
+        Assert.False(result.GetProperty("supportsVision").GetBoolean());
+        Assert.False(result.GetProperty("supportsAsr").GetBoolean());
+        Assert.Equal(GatewayServer.DefaultMaxBinaryBytes, result.GetProperty("maxBinaryBytes").GetInt32());
     }
 
     [Fact]
@@ -255,4 +258,112 @@ public class GatewayServerTests
         var health = responses.First(r => r.GetProperty("id").GetInt32() == 11);
         Assert.True(health.GetProperty("result").GetProperty("backends")[0].GetProperty("ok").GetBoolean());
     }
+
+    [Fact]
+    public async Task BinaryChunkAssemblesAndOptionalSha256()
+    {
+        var payload = Enumerable.Range(0, 100).Select(i => (byte)i).ToArray();
+        var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+        var mid = payload.Length / 2;
+        var chunks = new object[]
+        {
+            Pipe.Request(30, "binary.chunk", new
+            {
+                transferId = "t-sha",
+                index = 0,
+                total = 2,
+                mime = "application/octet-stream",
+                sha256 = sha,
+                data = Convert.ToBase64String(payload[..mid]),
+            }),
+            Pipe.Request(31, "binary.chunk", new
+            {
+                transferId = "t-sha",
+                index = 1,
+                total = 2,
+                mime = "application/octet-stream",
+                sha256 = sha,
+                data = Convert.ToBase64String(payload[mid..]),
+            }),
+        };
+        var responses = await Pipe.RunAsync(chunks, new MultimodalFakeBackend());
+        var last = responses.Single(r => r.GetProperty("id").GetInt32() == 31).GetProperty("result");
+        Assert.True(last.GetProperty("complete").GetBoolean());
+        Assert.Equal(payload.Length, last.GetProperty("bytes").GetInt32());
+        Assert.Equal(sha, last.GetProperty("sha256").GetString());
+    }
+
+    [Fact]
+    public async Task TranslateImageViaSmallDataUrl()
+    {
+        var dataUrl = "data:image/png;base64," + Convert.ToBase64String(new byte[] { 1, 2, 3 });
+        var responses = await Pipe.RunAsync(new[]
+        {
+            Pipe.Request(40, "translate.image", new { dataUrl, source = "en", target = "zh" }),
+        }, new MultimodalFakeBackend());
+        var segs = responses.Single().GetProperty("result").GetProperty("segments");
+        Assert.Equal("hello", segs[0].GetProperty("text").GetString());
+        Assert.Equal("[img] hello", segs[0].GetProperty("translation").GetString());
+    }
+
+    [Fact]
+    public async Task TranscribeRequiresTransferId()
+    {
+        var inline = await Pipe.RunAsync(new[]
+        {
+            Pipe.Request(41, "transcribe", new { dataUrl = "data:audio/webm;base64,AA==" }),
+        }, new MultimodalFakeBackend());
+        Assert.Equal(-32602, inline.Single().GetProperty("error").GetProperty("code").GetInt32());
+
+        var audio = new byte[] { 9, 8, 7, 6 };
+        var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(audio)).ToLowerInvariant();
+        var ok = await Pipe.RunAsync(new[]
+        {
+            Pipe.Request(42, "binary.chunk", new
+            {
+                transferId = "aud1",
+                index = 0,
+                total = 1,
+                mime = "audio/webm",
+                sha256 = sha,
+                data = Convert.ToBase64String(audio),
+            }),
+            Pipe.Request(43, "transcribe", new { transferId = "aud1", source = "en" }),
+        }, new MultimodalFakeBackend());
+        var result = ok.Single(r => r.GetProperty("id").GetInt32() == 43).GetProperty("result");
+        Assert.Equal("hello from audio", result.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task TranslateStillWorksOnMultimodalGateway()
+    {
+        var responses = await Pipe.RunAsync(new[]
+        {
+            Pipe.Request(7, "translate", new { texts = new[] { "hello" }, source = "en", target = "zh" }),
+        }, new MultimodalFakeBackend());
+        Assert.Equal("[fake] hello", responses.Single().GetProperty("result").GetProperty("translations")[0].GetString());
+    }
+}
+
+/// <summary>Fake backend that implements vision + ASR for protocol v2 tests.</summary>
+internal sealed class MultimodalFakeBackend : IGatewayBackend
+{
+    public string Id => "multi";
+    public string Name => "Multimodal fake";
+    public string Kind => "fake";
+    public BackendCapabilities Capabilities => new(true, 10, 6000, SupportsVision: true, SupportsAsr: true);
+
+    public Task<string[]> TranslateAsync(IReadOnlyList<string> texts, TranslateContext ctx, CancellationToken ct)
+        => Task.FromResult(texts.Select(x => "[fake] " + x).ToArray());
+
+    public IAsyncEnumerable<string>? StreamAsync(string text, TranslateContext ctx, CancellationToken ct) => null;
+
+    public Task<BackendHealth> ProbeAsync(CancellationToken ct)
+        => Task.FromResult(new BackendHealth(true, "ok"));
+
+    public Task<ImageTranslateResult?> TranslateImageAsync(byte[] image, string mime, TranslateContext ctx, CancellationToken ct)
+        => Task.FromResult<ImageTranslateResult?>(new ImageTranslateResult(new[] { new ImageSegment("hello", "[img] hello") }));
+
+    public Task<TranscriptResult?> TranscribeAsync(byte[] audio, string mime, TranslateContext ctx, CancellationToken ct)
+        => Task.FromResult<TranscriptResult?>(new TranscriptResult("hello from audio", new[] { new TranscriptSegment(0, 1, "hello from audio") }));
 }

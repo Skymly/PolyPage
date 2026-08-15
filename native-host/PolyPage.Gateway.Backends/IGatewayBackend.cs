@@ -4,7 +4,24 @@ namespace PolyPage.Gateway.Backends;
 public sealed record TranslateContext(string Source, string Target);
 
 /// <summary>Capabilities a backend advertises.</summary>
-public sealed record BackendCapabilities(bool SupportsStreaming, int MaxBatchItems, int MaxBatchChars);
+public sealed record BackendCapabilities(
+    bool SupportsStreaming,
+    int MaxBatchItems,
+    int MaxBatchChars,
+    bool SupportsVision = false,
+    bool SupportsAsr = false);
+
+/// <summary>One OCR/vision segment (spec 4.0 §6.2 translate.image).</summary>
+public sealed record ImageSegment(string Text, string Translation);
+
+/// <summary>Vision translation result.</summary>
+public sealed record ImageTranslateResult(IReadOnlyList<ImageSegment> Segments);
+
+/// <summary>One ASR segment with optional timestamps.</summary>
+public sealed record TranscriptSegment(double Start, double End, string Text);
+
+/// <summary>ASR result (spec 4.0 §6.2 transcribe).</summary>
+public sealed record TranscriptResult(string Text, IReadOnlyList<TranscriptSegment>? Segments);
 
 /// <summary>Backend metadata returned by backends.list / capabilities.</summary>
 public sealed record BackendInfo(string Id, string Name, string Kind);
@@ -34,6 +51,20 @@ public interface IGatewayBackend
 
     /// <summary>Lightweight reachability probe used by the health method.</summary>
     Task<BackendHealth> ProbeAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Optional vision translation. Return null when the backend does not
+    /// support images (spec 4.0 §6.3).
+    /// </summary>
+    Task<ImageTranslateResult?> TranslateImageAsync(byte[] image, string mime, TranslateContext ctx, CancellationToken ct)
+        => Task.FromResult<ImageTranslateResult?>(null);
+
+    /// <summary>
+    /// Optional ASR. Return null when the backend does not support
+    /// transcription (spec 4.0 §6.3).
+    /// </summary>
+    Task<TranscriptResult?> TranscribeAsync(byte[] audio, string mime, TranslateContext ctx, CancellationToken ct)
+        => Task.FromResult<TranscriptResult?>(null);
 }
 
 /// <summary>Backend error with a JSON-RPC-mappable code (spec 2.0 §5.2 item 5).</summary>

@@ -14,6 +14,7 @@ import type { ProviderConfig } from '../shared/types';
 import { DEFAULT_NATIVE_HOST_NAME } from '../shared/constants';
 import type { GatewayCapabilities } from '../shared/nativeRpc';
 import { nativeNotify, nativeRequest } from '../background/nativePort';
+import { base64ToBytes, sha256Hex, splitBinaryChunks } from '../shared/binaryChunk';
 import {
   ProviderError,
   registerProviderFactory,
@@ -117,6 +118,105 @@ export class NativeHostProvider implements TranslationProvider {
     return nativeRequest<GatewayCapabilities>(this.hostName, 'capabilities', {}, { timeoutMs: 8000 });
   }
 
+  async translateImage(
+    dataUrl: string,
+    ctx: TranslationContext,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const caps = await this.capabilities();
+    if ((caps.protocol ?? 1) < 2 || !caps.supportsVision) {
+      throw new ProviderError('config', '本地网关不支持视觉翻译（需要协议 v2 且 supportsVision）');
+    }
+    const inline = dataUrl.length < 600_000;
+    const params: Record<string, unknown> = { ...this.baseParams(ctx) };
+    if (inline) {
+      params.dataUrl = dataUrl;
+    } else {
+      const bytes = dataUrlToBytes(dataUrl);
+      params.transferId = await this.uploadBinary(bytes, mimeFromDataUrl(dataUrl), signal);
+    }
+    const result = await this.rpc<{ segments?: unknown }>(
+      'translate.image',
+      params,
+      signal,
+    );
+    const segments = result?.segments;
+    if (!Array.isArray(segments)) {
+      throw new ProviderError('invalid_response', '本地网关视觉响应缺少 segments');
+    }
+    return JSON.stringify(segments);
+  }
+
+  async transcribe(
+    input: { mime: string; bytes: Uint8Array },
+    ctx: TranslationContext & { languageHint?: string },
+    signal: AbortSignal,
+  ): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }> {
+    const caps = await this.capabilities();
+    if ((caps.protocol ?? 1) < 2 || !caps.supportsAsr) {
+      throw new ProviderError('config', '本地网关不支持转写（需要协议 v2 且 supportsAsr）');
+    }
+    const transferId = await this.uploadBinary(input.bytes, input.mime, signal);
+    const result = await this.rpc<{ text?: unknown; segments?: unknown }>(
+      'transcribe',
+      {
+        transferId,
+        languageHint: ctx.languageHint,
+        ...this.baseParams(ctx),
+      },
+      signal,
+    );
+    const text = typeof result?.text === 'string' ? result.text : '';
+    const segments = Array.isArray(result?.segments)
+      ? result.segments
+          .map((s) => {
+            if (!s || typeof s !== 'object') return null;
+            const row = s as { start?: unknown; end?: unknown; text?: unknown };
+            if (typeof row.text !== 'string') return null;
+            return {
+              start: typeof row.start === 'number' ? row.start : 0,
+              end: typeof row.end === 'number' ? row.end : 0,
+              text: row.text,
+            };
+          })
+          .filter((s): s is { start: number; end: number; text: string } => s !== null)
+      : undefined;
+    if (text === '' && (!segments || segments.length === 0)) {
+      throw new ProviderError('invalid_response', '本地网关转写响应为空');
+    }
+    return { text, ...(segments ? { segments } : {}) };
+  }
+
+  private async uploadBinary(bytes: Uint8Array, mime: string, signal: AbortSignal): Promise<string> {
+    const transferId = `xfer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const digest = await sha256Hex(bytes);
+    const chunks = splitBinaryChunks(bytes, mime, transferId, digest);
+    for (const chunk of chunks) {
+      if (signal.aborted) throw new ProviderError('aborted', '请求已取消');
+      await nativeRequest(this.hostName, 'binary.chunk', chunk, { timeoutMs: this.config.timeoutMs });
+    }
+    return transferId;
+  }
+
+  private async rpc<T>(method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<T> {
+    let requestId = 0;
+    const onAbort = () => {
+      if (requestId > 0) nativeNotify(this.hostName, 'cancel', { id: requestId });
+    };
+    signal.addEventListener('abort', onAbort);
+    try {
+      return await nativeRequest<T>(this.hostName, method, params, {
+        timeoutMs: this.config.timeoutMs,
+        onId: (id) => {
+          requestId = id;
+          if (signal.aborted) onAbort();
+        },
+      });
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+
   private parseTranslations(result: GatewayTranslateResult | undefined, expected: number): string[] {
     const list = result?.translations;
     if (!Array.isArray(list)) {
@@ -131,6 +231,17 @@ export class NativeHostProvider implements TranslationProvider {
     }
     return out;
   }
+}
+
+function mimeFromDataUrl(dataUrl: string): string {
+  const match = /^data:([^;,]+)/.exec(dataUrl);
+  return match?.[1] || 'image/png';
+}
+
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const comma = dataUrl.indexOf(',');
+  const payload = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  return base64ToBytes(payload);
 }
 
 registerProviderFactory('native-host', (config) => new NativeHostProvider(config));

@@ -20,6 +20,10 @@
  *    pdf-progress (PDF reader), detect-language;
  *  - new TabCommands: wt:open-pdf-viewer, wt:translate-image,
  *    wt:toggle-subtitles, wt:repeat-selection, wt:resume-inflight.
+ *
+ * 4.0 (protocol v4, spec 4.0 §9.2):
+ *  - every message carries v: 4; messages without v stay compatible;
+ *  - new: asr-start / asr-cancel; TabCommand wt:transcribe-media.
  */
 import type {
   ContentSettings,
@@ -36,7 +40,7 @@ import type {
   TranslationItem,
 } from '../shared/types';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /* --------------------------- content -> background --------------------------- */
 
@@ -68,7 +72,7 @@ export type RuntimeMessage =
   | { type: 'get-export-payload'; v?: number; tabId?: number }
   /* ------------------------------ 3.0 additions ----------------------------- */
   /** 3.0 (pillar F): translate an image through the vision pipeline. */
-  | { type: 'ocr-request'; v?: number; requestId: string; url: string; naturalWidth?: number; naturalHeight?: number }
+  | { type: 'ocr-request'; v?: number; requestId: string; url: string; naturalWidth?: number; naturalHeight?: number; cacheIdentity?: string }
   /** 3.0 (pillar F): abort an in-flight OCR request. */
   | { type: 'ocr-cancel'; v?: number; requestId: string }
   /** 3.0 (pillar H): mark a bad translation into the feedback log. */
@@ -81,7 +85,18 @@ export type RuntimeMessage =
   /** 3.0 (pillar E): viewer progress report (popup hint). */
   | { type: 'pdf-progress'; v?: number; url: string; done: number; total: number; failed: number }
   /** 3.0 (pillar H): detect the dominant language of text samples. */
-  | { type: 'detect-language'; v?: number; texts: string[] };
+  | { type: 'detect-language'; v?: number; texts: string[] }
+  | {
+      type: 'asr-start';
+      v?: number;
+      requestId: string;
+      mime: string;
+      base64: string;
+      windowStart: number;
+      windowDuration: number;
+      languageHint?: string;
+    }
+  | { type: 'asr-cancel'; v?: number; requestId: string };
 
 export type OcrResponse =
   | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string }
@@ -115,7 +130,16 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'pdf-open' } ? { ok: boolean; tabId?: number; error?: string } :
   M extends { type: 'pdf-progress' } ? { ok: true } :
   M extends { type: 'detect-language' } ? { language: string | null; confident: boolean } :
+  M extends { type: 'asr-start' } ? AsrResponse :
+  M extends { type: 'asr-cancel' } ? { ok: true } :
   never;
+
+export type AsrResponse =
+  | {
+      ok: true;
+      cues: Array<{ start: number; end: number; text: string; translation: string }>;
+    }
+  | { ok: false; kind: string; error: string };
 
 export interface ExportEntry {
   original: string;
@@ -176,12 +200,14 @@ export type TabCommand =
   /** 3.0 (pillar H): repeat the last selection translation (Alt+Q). */
   | { type: 'wt:repeat-selection'; v?: number }
   /** 3.0 (pillar H): re-submit persisted in-flight tasks after SW restart. */
-  | { type: 'wt:resume-inflight'; v?: number; keys: string[] };
+  | { type: 'wt:resume-inflight'; v?: number; keys: string[] }
+  | { type: 'wt:transcribe-media'; v?: number; force?: boolean };
 
 export type TabCommandResponse<C extends TabCommand> =
   C extends { type: 'wt:get-state' } ? PageState :
   C extends { type: 'wt:collect-export' } ? { entries: ExportEntry[]; title: string } :
   C extends { type: 'wt:open-pdf-viewer' } ? { ok: true; url: string } :
+  C extends { type: 'wt:transcribe-media' } ? { ok: boolean; skipped?: string; error?: string } :
   { ok: true };
 
 export function sendTabCommand<C extends TabCommand>(

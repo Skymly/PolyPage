@@ -44,6 +44,7 @@ export interface OcrPanelCallbacks {
 export class OcrResultPanel {
   private host: HTMLElement | null = null;
   private body: HTMLElement | null = null;
+  private titleEl: HTMLElement | null = null;
   private callbacks: OcrPanelCallbacks | null = null;
 
   private ensureHost(): void {
@@ -94,6 +95,7 @@ export class OcrResultPanel {
 
     this.host = host;
     this.body = body;
+    this.titleEl = title;
   }
 
   /** Position near a source element (image) or at viewport center. */
@@ -133,6 +135,8 @@ export class OcrResultPanel {
     this.ensureHost();
     const body = this.body!;
     body.innerHTML = '';
+    const ocrOnly = segments.length > 0 && segments.every((s) => s.translation.trim() === '');
+    if (this.titleEl) this.titleEl.textContent = ocrOnly ? '仅识别' : '图片文字翻译';
     if (segments.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'wt-ocr-skel';
@@ -178,6 +182,7 @@ export class OcrResultPanel {
     this.host?.remove();
     this.host = null;
     this.body = null;
+    this.titleEl = null;
   }
 
   get visible(): boolean {

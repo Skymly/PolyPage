@@ -425,6 +425,11 @@
             </label>
             <span id="pdf-perm-status" class="hint"></span>
           </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="pdf-scanned-ocr" /> 扫描页显示「识别本页」（用户点击后走当前 OCR 引擎）
+            </label>
+          </div>
         </section>
 
         <section id="imagetranslate" class="card">
@@ -449,7 +454,7 @@
             <label for="img-engine">识别引擎</label>
             <select id="img-engine">
               <option value="llm-vision">llm-vision（多模态一步翻译）</option>
-              <option value="tesseract-wasm">tesseract-wasm（本地 OCR，3.1 提供）</option>
+              <option value="tesseract-wasm">tesseract-wasm（本地 OCR，WASM）</option>
             </select>
           </div>
           <div class="field-row">
@@ -479,6 +484,54 @@
             <label for="sub-font">字幕字号（%）</label>
             <input id="sub-font" type="number" min="50" max="250" step="5" />
           </div>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="sub-swap" /> 译文在上、原文在下</label>
+          </div>
+          <div class="field-row">
+            <label for="sub-position">字幕位置</label>
+            <select id="sub-position">
+              <option value="bottom">底部</option>
+              <option value="top">顶部</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="sub-bg">字幕背景</label>
+            <select id="sub-bg">
+              <option value="rgba(0,0,0,.62)">默认半透明黑</option>
+              <option value="rgba(0,0,0,.85)">更深</option>
+              <option value="rgba(0,0,0,.35)">更浅</option>
+              <option value="transparent">透明</option>
+              <option value="custom">自定义…</option>
+            </select>
+            <input id="sub-bg-custom" type="text" placeholder="CSS 颜色，如 rgba(0,0,0,.62)" />
+          </div>
+        </section>
+
+        <section id="asr" class="card">
+          <h2>语音转写（无字幕视频 / 音频）</h2>
+          <p class="hint">
+            用户点击后从当前播放位置采集有限窗口（默认 90 秒），经当前 Provider 的 transcribe
+            或本地网关 Whisper 得到文本，再复用字幕层翻译。不申请麦克风；不自动转写整页。
+          </p>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="asr-enabled" /> 启用转写入口（仍需用户点击）</label>
+          </div>
+          <div class="field-row">
+            <label for="asr-maxsec">默认窗口（秒）</label>
+            <input id="asr-maxsec" type="number" min="10" max="600" step="10" />
+          </div>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="asr-confirm-full" /> 超过窗口 / 整段转写需二次确认</label>
+          </div>
+        </section>
+
+        <section id="compat" class="card">
+          <h2>浏览器兼容</h2>
+          <p class="hint">
+            Chrome / Edge 为发行主线。Firefox MV3 临时加载可用网页六模式与划词；
+            Native Host / PDF / ASR 若 API 缺失会置灰并在此说明，不会抛未捕获异常。
+            详见仓库 <code>docs/FIREFOX-MV3.md</code>。
+          </p>
         </section>
 
         <div class="save-bar">

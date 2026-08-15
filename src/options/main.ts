@@ -113,6 +113,7 @@ function renderMediaSections(): void {
   $<HTMLInputElement>('pdf-skip-hf').checked = draft.pdfViewer.skipHeadersFooters;
   $<HTMLInputElement>('pdf-concurrency').value = String(draft.pdfViewer.maxConcurrentPages);
   $<HTMLInputElement>('pdf-autoopen').checked = draft.pdfViewer.autoOpen;
+  $<HTMLInputElement>('pdf-scanned-ocr').checked = draft.pdfViewer.scannedPageOcr;
   $<HTMLInputElement>('img-enabled').checked = draft.imageTranslate.enabled;
   $<HTMLSelectElement>('img-trigger').value = draft.imageTranslate.trigger;
   $<HTMLSelectElement>('img-engine').value = draft.imageTranslate.engine;
@@ -120,12 +121,26 @@ function renderMediaSections(): void {
   $<HTMLInputElement>('sub-enabled').checked = draft.subtitles.enabled;
   $<HTMLSelectElement>('sub-bilingual').value = draft.subtitles.bilingual;
   $<HTMLInputElement>('sub-font').value = String(draft.subtitles.fontSizePct);
+  $<HTMLInputElement>('sub-swap').checked = draft.subtitles.swapSrcDst;
+  $<HTMLSelectElement>('sub-position').value = draft.subtitles.position;
+  const bgPresets = ['rgba(0,0,0,.62)', 'rgba(0,0,0,.85)', 'rgba(0,0,0,.35)', 'transparent'];
+  if (bgPresets.includes(draft.subtitles.background)) {
+    $<HTMLSelectElement>('sub-bg').value = draft.subtitles.background;
+    $<HTMLInputElement>('sub-bg-custom').value = '';
+  } else {
+    $<HTMLSelectElement>('sub-bg').value = 'custom';
+    $<HTMLInputElement>('sub-bg-custom').value = draft.subtitles.background;
+  }
+  $<HTMLInputElement>('asr-enabled').checked = draft.asr.enabled;
+  $<HTMLInputElement>('asr-maxsec').value = String(draft.asr.maxSeconds);
+  $<HTMLInputElement>('asr-confirm-full').checked = draft.asr.confirmFull;
   void refreshPdfPermStatus();
 }
 
 function collectMediaSections(): void {
   if (!draft) return;
   draft.pdfViewer = {
+    ...draft.pdfViewer,
     enabled: $<HTMLInputElement>('pdf-enabled').checked,
     defaultMode:
       $<HTMLSelectElement>('pdf-mode').value === 'translated_hover_original'
@@ -134,8 +149,10 @@ function collectMediaSections(): void {
     skipHeadersFooters: $<HTMLInputElement>('pdf-skip-hf').checked,
     maxConcurrentPages: Math.round(num($<HTMLInputElement>('pdf-concurrency').value, draft.pdfViewer.maxConcurrentPages)),
     autoOpen: $<HTMLInputElement>('pdf-autoopen').checked,
+    scannedPageOcr: $<HTMLInputElement>('pdf-scanned-ocr').checked,
   };
   draft.imageTranslate = {
+    ...draft.imageTranslate,
     enabled: $<HTMLInputElement>('img-enabled').checked,
     trigger: (() => {
       const v = $<HTMLSelectElement>('img-trigger').value;
@@ -145,12 +162,29 @@ function collectMediaSections(): void {
     maxEdgePx: Math.round(num($<HTMLInputElement>('img-maxedge').value, draft.imageTranslate.maxEdgePx)),
   };
   draft.subtitles = {
+    ...draft.subtitles,
     enabled: $<HTMLInputElement>('sub-enabled').checked,
     bilingual: (() => {
       const v = $<HTMLSelectElement>('sub-bilingual').value;
       return v === 'src' || v === 'dst' ? v : 'both';
     })(),
     fontSizePct: Math.round(num($<HTMLInputElement>('sub-font').value, draft.subtitles.fontSizePct)),
+    swapSrcDst: $<HTMLInputElement>('sub-swap').checked,
+    position: $<HTMLSelectElement>('sub-position').value === 'top' ? 'top' : 'bottom',
+    background: (() => {
+      const preset = $<HTMLSelectElement>('sub-bg').value;
+      if (preset === 'custom') {
+        const custom = $<HTMLInputElement>('sub-bg-custom').value.trim();
+        return custom !== '' ? custom : draft.subtitles.background;
+      }
+      return preset;
+    })(),
+  };
+  draft.asr = {
+    ...draft.asr,
+    enabled: $<HTMLInputElement>('asr-enabled').checked,
+    maxSeconds: Math.round(num($<HTMLInputElement>('asr-maxsec').value, draft.asr.maxSeconds)),
+    confirmFull: $<HTMLInputElement>('asr-confirm-full').checked,
   };
 }
 
@@ -1055,7 +1089,7 @@ function exportSettings(): void {
   if (!draft) return;
   collectGeneral();
   collectEditor();
-  const payload = { app: 'polypage-web-translator', version: 3, exportedAt: new Date().toISOString(), settings: draft };
+  const payload = { app: 'polypage-web-translator', version: 4, exportedAt: new Date().toISOString(), settings: draft };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

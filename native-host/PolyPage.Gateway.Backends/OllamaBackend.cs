@@ -15,6 +15,8 @@ public sealed class OllamaBackendConfig
     public string Model { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public int TimeoutMs { get; set; } = 180000;
+    /// <summary>4.0: model can accept image_url content (spec 4.0 §6.3).</summary>
+    public bool SupportsVision { get; set; }
 }
 
 /// <summary>
@@ -33,7 +35,8 @@ public sealed class OllamaBackend : IGatewayBackend
     public string Id => _config.Id;
     public string Name => _config.Name;
     public string Kind => "ollama";
-    public BackendCapabilities Capabilities => new(SupportsStreaming: true, MaxBatchItems: 10, MaxBatchChars: 6000);
+    public BackendCapabilities Capabilities =>
+        new(SupportsStreaming: true, MaxBatchItems: 10, MaxBatchChars: 6000, SupportsVision: _config.SupportsVision);
 
     public async Task<string[]> TranslateAsync(IReadOnlyList<string> texts, TranslateContext ctx, CancellationToken ct)
     {
@@ -63,6 +66,19 @@ public sealed class OllamaBackend : IGatewayBackend
     public IAsyncEnumerable<string>? StreamAsync(string text, TranslateContext ctx, CancellationToken ct)
     {
         return ChatStreamAsync(BuildSinglePrompt(text, ctx), ct);
+    }
+
+    public async Task<ImageTranslateResult?> TranslateImageAsync(byte[] image, string mime, TranslateContext ctx, CancellationToken ct)
+    {
+        if (!_config.SupportsVision) return null;
+        var dataUrl = $"data:{mime};base64,{Convert.ToBase64String(image)}";
+        var prompt =
+            $"You are an OCR + translation engine. Extract ALL visible text fragments from this image, in reading order. " +
+            $"Translate every fragment from {ctx.Source} to {ctx.Target}. " +
+            "Respond with ONLY a JSON array: [{\"text\":\"original\",\"translation\":\"translated\"}]";
+        var reply = await ChatVisionAsync(prompt, dataUrl, ct);
+        var segments = ParseVisionSegments(reply);
+        return new ImageTranslateResult(segments);
     }
 
     public async Task<BackendHealth> ProbeAsync(CancellationToken ct)
@@ -147,6 +163,85 @@ public sealed class OllamaBackend : IGatewayBackend
             req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_config.ApiKey}");
         }
         return req;
+    }
+
+    private async Task<string> ChatVisionAsync(string prompt, string dataUrl, CancellationToken ct)
+    {
+        var model = await ResolveModelAsync(ct);
+        if (string.IsNullOrEmpty(_config.Model)) _config.Model = model;
+        var url = $"{_config.BaseUrl.TrimEnd('/')}/v1/chat/completions";
+        var body = new Dictionary<string, object?>
+        {
+            ["model"] = _config.Model,
+            ["stream"] = false,
+            ["temperature"] = 0.2,
+            ["messages"] = new object[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["role"] = "user",
+                    ["content"] = new object[]
+                    {
+                        new Dictionary<string, string> { ["type"] = "text", ["text"] = prompt },
+                        new Dictionary<string, object?>
+                        {
+                            ["type"] = "image_url",
+                            ["image_url"] = new Dictionary<string, string> { ["url"] = dataUrl },
+                        },
+                    },
+                },
+            },
+        };
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(_config.TimeoutMs);
+        using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) };
+        if (!string.IsNullOrWhiteSpace(_config.ApiKey))
+            req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_config.ApiKey}");
+        try
+        {
+            using var res = await Http.SendAsync(req, timeoutCts.Token);
+            if (!res.IsSuccessStatusCode)
+            {
+                throw new GatewayBackendException(ClassifyStatus((int)res.StatusCode),
+                    $"Ollama 视觉请求失败 (HTTP {(int)res.StatusCode})");
+            }
+            using var json = JsonDocument.Parse(await res.Content.ReadAsStringAsync(timeoutCts.Token));
+            var content = json.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            if (string.IsNullOrWhiteSpace(content))
+                throw new GatewayBackendException(RpcCodes.InvalidResponse, "Ollama 视觉返回了空内容");
+            return content;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new GatewayBackendException(RpcCodes.Timeout, $"Ollama 请求超时（{_config.TimeoutMs}ms）");
+        }
+        catch (HttpRequestException e)
+        {
+            throw new GatewayBackendException(RpcCodes.Network, $"无法连接 Ollama：{e.Message}", e);
+        }
+    }
+
+    private static IReadOnlyList<ImageSegment> ParseVisionSegments(string reply)
+    {
+        var trimmed = reply.Trim();
+        if (trimmed.StartsWith("```"))
+        {
+            var firstNl = trimmed.IndexOf('\n');
+            if (firstNl >= 0) trimmed = trimmed[(firstNl + 1)..];
+            var fence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+            if (fence >= 0) trimmed = trimmed[..fence];
+        }
+        using var doc = JsonDocument.Parse(trimmed);
+        var list = new List<ImageSegment>();
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            var text = item.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+            var translation = item.TryGetProperty("translation", out var tr) ? tr.GetString() ?? "" : "";
+            if (!string.IsNullOrWhiteSpace(text)) list.Add(new ImageSegment(text, translation));
+        }
+        if (list.Count == 0)
+            throw new GatewayBackendException(RpcCodes.InvalidResponse, "Ollama 视觉结果无法解析为 segments");
+        return list;
     }
 
     private async Task<string> ChatAsync(string userContent, bool stream, Action<string>? onDelta, CancellationToken ct)

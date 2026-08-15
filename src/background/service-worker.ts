@@ -24,9 +24,13 @@
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
 import { sendTabCommand } from '../messaging/messages';
-import type { OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
+import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
-import { createProvider, providerSupportsStreaming, providerSupportsVision, toProviderError } from '../providers/provider';
+import { createProvider, providerSupportsAsr, providerSupportsStreaming, providerSupportsVision, toProviderError } from '../providers/provider';
+import { normalizeTranscript } from '../asr/engine';
+import { base64ToBytes } from '../shared/binaryChunk';
+import { nativeRequest } from './nativePort';
+import type { GatewayCapabilities } from '../shared/nativeRpc';
 import type { ProviderError, TranslationContext, TranslationProvider } from '../providers/provider';
 // Side-effect imports: register provider factories.
 import '../providers/openai-compatible';
@@ -45,6 +49,7 @@ import {
   loadFeedbackLog,
 } from '../storage/feedback';
 import { IdbTaskStore, TaskTable } from '../storage/taskTable';
+import { engineNeedsVisionProvider } from '../ocr/engine';
 import { LlmVisionEngine } from '../ocr/llm-vision';
 import { TesseractEngine } from '../ocr/tesseract';
 import { detectLanguage } from '../shared/languageDetect';
@@ -124,12 +129,31 @@ function isProviderConfigured(provider: ProviderConfig): boolean {
   return provider.baseUrl.trim() !== '';
 }
 
+/** Last probed gateway capabilities (protocol=1 greys vision/ASR). */
+let lastGatewayCaps: GatewayCapabilities | null = null;
+
 /** Vision capability probe for menu/popup greying (spec 3.0 §6.2 item 3). */
 function activeProviderSupportsVision(settings: Settings): boolean {
   const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
   if (!provider || !isProviderConfigured(provider)) return false;
+  if (provider.type === 'native-host') {
+    return (lastGatewayCaps?.protocol ?? 1) >= 2 && !!lastGatewayCaps?.supportsVision;
+  }
   try {
     return providerSupportsVision(createProvider(provider));
+  } catch {
+    return false;
+  }
+}
+
+function activeProviderSupportsAsr(settings: Settings): boolean {
+  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
+  if (!provider || !isProviderConfigured(provider)) return false;
+  if (provider.type === 'native-host') {
+    return (lastGatewayCaps?.protocol ?? 1) >= 2 && !!lastGatewayCaps?.supportsAsr;
+  }
+  try {
+    return providerSupportsAsr(createProvider(provider));
   } catch {
     return false;
   }
@@ -656,6 +680,63 @@ async function handleTranslateCue(
   }
 }
 
+async function handleAsrStart(
+  requestId: string,
+  mime: string,
+  base64: string,
+  windowStart: number,
+  windowDuration: number,
+  languageHint?: string,
+): Promise<AsrResponse> {
+  const settings = await getSettings(true);
+  if (!settings.asr.enabled) {
+    return { ok: false, kind: 'config', error: '语音转写已在设置中关闭' };
+  }
+  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
+  if (!provider || !isProviderConfigured(provider)) {
+    return { ok: false, kind: 'config', error: '翻译服务未配置或已禁用' };
+  }
+  if (!activeProviderSupportsAsr(settings)) {
+    return { ok: false, kind: 'config', error: '当前翻译服务不支持转写' };
+  }
+  let instance: TranslationProvider;
+  try {
+    instance = createProvider(provider);
+  } catch (e) {
+    return { ok: false, kind: 'config', error: toProviderError(e).message };
+  }
+  if (typeof instance.transcribe !== 'function') {
+    return { ok: false, kind: 'config', error: '当前翻译服务不支持转写' };
+  }
+  const bytes = base64ToBytes(base64);
+  const maxBytes = settings.asr.maxUploadMb * 1024 * 1024;
+  if (bytes.byteLength > maxBytes) {
+    return { ok: false, kind: 'config', error: `音频超过上传上限（${settings.asr.maxUploadMb} MB）` };
+  }
+  const controller = new AbortController();
+  asrControllers.set(requestId, controller);
+  const started = Date.now();
+  try {
+    const ctx = {
+      ...buildContext(settings, provider),
+      languageHint: languageHint && languageHint !== 'auto' ? languageHint : undefined,
+    };
+    const raw = await instance.transcribe({ mime, bytes }, ctx, controller.signal);
+    const cues = normalizeTranscript(raw, windowStart, windowDuration);
+    recordStat(provider.id, true, Date.now() - started);
+    return {
+      ok: true,
+      cues: cues.map((c) => ({ start: c.start, end: c.end, text: c.text, translation: '' })),
+    };
+  } catch (e) {
+    const err = toProviderError(e);
+    recordStat(provider.id, false, Date.now() - started, err.message);
+    return { ok: false, kind: err.kind, error: err.message };
+  } finally {
+    asrControllers.delete(requestId);
+  }
+}
+
 async function handleTestProvider(provider: ProviderConfig): Promise<{ ok: boolean; result?: string; latencyMs?: number; error?: string }> {
   const started = Date.now();
   try {
@@ -814,6 +895,7 @@ async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortIn
 /* ------------------------------ OCR pipeline (3.0 F) ------------------------- */
 
 const ocrControllers = new Map<string, AbortController>();
+const asrControllers = new Map<string, AbortController>();
 
 function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = '';
@@ -878,30 +960,45 @@ async function prepareDataUrl(
   return bytesToDataUrl(out, 'image/jpeg');
 }
 
-/** Full OCR round trip: fetch -> hash -> cache -> vision -> cache put. */
+/** Full OCR round trip: fetch -> hash -> cache -> engine -> optional translate -> cache put. */
 async function handleOcrRequest(
   requestId: string,
   url: string,
   naturalWidth: number | undefined,
   naturalHeight: number | undefined,
+  cacheIdentity?: string,
 ): Promise<OcrResponse> {
   const settings = await getSettings(true);
   if (!settings.imageTranslate.enabled) {
     return { ok: false, kind: 'config', error: '图片翻译已在设置中关闭' };
   }
+  const engineId = settings.imageTranslate.engine;
+  const needsVision = engineNeedsVisionProvider(engineId);
   const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  if (!provider || !isProviderConfigured(provider)) {
+  const providerReady = !!provider && isProviderConfigured(provider);
+
+  // llm-vision still requires a configured provider. tesseract-wasm can run
+  // OCR-only (仅识别) when the provider is missing or unconfigured.
+  if (needsVision && !providerReady) {
     return { ok: false, kind: 'config', error: '翻译服务未配置或已禁用' };
   }
-  let instance: TranslationProvider;
-  try {
-    instance = createProvider(provider);
-  } catch (e) {
-    const err = toProviderError(e);
-    return { ok: false, kind: err.kind, error: err.message };
+
+  let instance: TranslationProvider | undefined;
+  if (providerReady && provider) {
+    try {
+      instance = createProvider(provider);
+    } catch (e) {
+      const err = toProviderError(e);
+      if (needsVision) return { ok: false, kind: err.kind, error: err.message };
+    }
   }
-  if (!providerSupportsVision(instance)) {
-    return { ok: false, kind: 'config', error: '当前翻译服务不支持视觉翻译' };
+  if (needsVision) {
+    if (!instance) {
+      return { ok: false, kind: 'config', error: '翻译服务未配置或已禁用' };
+    }
+    if (!providerSupportsVision(instance)) {
+      return { ok: false, kind: 'config', error: '当前翻译服务不支持视觉翻译' };
+    }
   }
 
   const controller = new AbortController();
@@ -912,13 +1009,16 @@ async function handleOcrRequest(
     const contentHash = await sha256Hex(buffer);
     // Cache key: content hash for fetchable images; URL + natural size as
     // the fallback identity (spec 3.0 §6.4 item 1). Language pair and
-    // glossaryVersion join via the shared cache key builder.
+    // glossaryVersion join via the shared cache key builder. Engine id is
+    // always included so tesseract / vision results never collide.
     const identity = contentHash
       ? `img|${contentHash}`
       : `imgurl|${url}|${naturalWidth ?? 0}x${naturalHeight ?? 0}`;
-    const cacheText = `img:${identity}`;
-    const { source, target } = effectiveLanguages(settings, provider);
-    if (settings.cacheEnabled) {
+    const cacheText = `img:${cacheIdentity ?? identity}|${engineId}`;
+    const { source, target } = provider
+      ? effectiveLanguages(settings, provider)
+      : { source: settings.defaultSourceLanguage, target: settings.defaultTargetLanguage };
+    if (settings.cacheEnabled && provider) {
       try {
         const hits = await cacheGet(
           [{ key: 'ocr', text: cacheText }],
@@ -930,7 +1030,7 @@ async function handleOcrRequest(
         const cached = hits.get('ocr');
         if (cached !== undefined) {
           const segments = JSON.parse(cached) as { text: string; translation: string }[];
-          return { ok: true, segments, cached: true, engine: settings.imageTranslate.engine };
+          return { ok: true, segments, cached: true, engine: engineId };
         }
       } catch {
         /* fall through */
@@ -938,18 +1038,32 @@ async function handleOcrRequest(
     }
 
     const dataUrl = await prepareDataUrl(buffer, mime, settings.imageTranslate.maxEdgePx);
-    const ctx = buildContext(settings, provider);
+    const ctx = provider
+      ? buildContext(settings, provider)
+      : {
+          sourceLanguage: settings.defaultSourceLanguage,
+          targetLanguage: settings.defaultTargetLanguage,
+          glossary: renderGlossary(settings.glossary),
+        };
     const engine =
-      settings.imageTranslate.engine === 'tesseract-wasm'
-        ? new TesseractEngine()
-        : new LlmVisionEngine(instance);
+      engineId === 'tesseract-wasm'
+        ? new TesseractEngine(undefined, settings.imageTranslate.tessLangs)
+        : new LlmVisionEngine(instance!);
     const result = await engine.recognize({ dataUrl }, ctx, controller.signal);
-    recordStat(provider.id, true, Date.now() - started);
+    let segments = result.segments;
+    if (engine.id === 'tesseract-wasm' && instance) {
+      const texts = segments.map((s) => s.text);
+      const translated = texts.length > 0 ? await instance.translateTexts(texts, ctx, controller.signal) : [];
+      segments = segments.map((s, i) => ({ text: s.text, translation: translated[i] ?? '' }));
+    }
+    if (provider) {
+      recordStat(provider.id, true, Date.now() - started);
+    }
 
-    if (settings.cacheEnabled) {
+    if (settings.cacheEnabled && provider) {
       try {
         await cachePut(
-          [{ text: cacheText, translated: JSON.stringify(result.segments) }],
+          [{ text: cacheText, translated: JSON.stringify(segments) }],
           provider.id,
           source,
           target,
@@ -959,11 +1073,13 @@ async function handleOcrRequest(
         /* cache best-effort */
       }
     }
-    return { ok: true, segments: result.segments, cached: false, engine: engine.id };
+    return { ok: true, segments, cached: false, engine: engine.id };
   } catch (e) {
     const err = toProviderError(e);
-    recordStat(provider.id, false, Date.now() - started, err.message);
-    await logError('ocr', err.kind, `图片翻译失败: ${err.message}`, provider.id);
+    if (provider) {
+      recordStat(provider.id, false, Date.now() - started, err.message);
+    }
+    await logError('ocr', err.kind, `图片翻译失败: ${err.message}`, provider?.id);
     return { ok: false, kind: err.kind, error: err.message };
   } finally {
     ocrControllers.delete(requestId);
@@ -1043,6 +1159,7 @@ const MENU_TRANSLATE_PAGE = 'wt-translate-page';
 const MENU_TRANSLATE_SELECTION = 'wt-translate-selection';
 const MENU_OPEN_PDF = 'wt-open-pdf';
 const MENU_TRANSLATE_IMAGE = 'wt-translate-image';
+const MENU_TRANSCRIBE_MEDIA = 'wt-transcribe-media';
 
 function setupContextMenus(settings?: Settings): void {
   chrome.contextMenus.removeAll(() => {
@@ -1074,6 +1191,16 @@ function setupContextMenus(settings?: Settings): void {
         enabled: vision,
       });
     }
+    const asrEnabled = settings?.asr.enabled ?? true;
+    const asr = settings ? activeProviderSupportsAsr(settings) : false;
+    if (asrEnabled) {
+      chrome.contextMenus.create({
+        id: MENU_TRANSCRIBE_MEDIA,
+        title: asr ? '转写并翻译 (PolyPage)' : '转写并翻译（当前服务不支持）',
+        contexts: ['video', 'audio'],
+        enabled: asr,
+      });
+    }
   });
 }
 
@@ -1088,6 +1215,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       if (typeof info.srcUrl === 'string' && info.srcUrl !== '') {
         await sendTabCommand(tab.id, { type: 'wt:translate-image', url: info.srcUrl });
       }
+    } else if (info.menuItemId === MENU_TRANSCRIBE_MEDIA) {
+      await sendTabCommand(tab.id, { type: 'wt:transcribe-media' });
     } else if (info.menuItemId === MENU_OPEN_PDF) {
       const url =
         typeof info.linkUrl === 'string' && info.linkUrl !== ''
@@ -1180,6 +1309,16 @@ chrome.runtime.onMessage.addListener(
               subtitlesEnabled: s.subtitles.enabled,
               subtitleBilingual: s.subtitles.bilingual,
               subtitleFontSizePct: s.subtitles.fontSizePct,
+              subtitleSwapSrcDst: s.subtitles.swapSrcDst,
+              subtitleBackground: s.subtitles.background,
+              subtitlePosition: s.subtitles.position,
+              ocrEngine: s.imageTranslate.engine,
+              ocrAvailable: s.imageTranslate.enabled && (s.imageTranslate.engine === 'tesseract-wasm' || vision),
+              asrEnabled: s.asr.enabled,
+              asrSupported: activeProviderSupportsAsr(s),
+              asrMaxSeconds: s.asr.maxSeconds,
+              asrConfirmFull: s.asr.confirmFull,
+              asrMaxUploadMb: s.asr.maxUploadMb,
             };
             sendResponse(cs);
             break;
@@ -1205,6 +1344,8 @@ chrome.runtime.onMessage.addListener(
               subtitlesEnabled: s.subtitles.enabled,
               pdfViewerEnabled: s.pdfViewer.enabled,
               selectionSpeak: s.selectionSpeak,
+              asrSupported: activeProviderSupportsAsr(s),
+              asrEnabled: s.asr.enabled,
             };
             sendResponse(summary);
             break;
@@ -1249,6 +1390,20 @@ chrome.runtime.onMessage.addListener(
           case 'host-status': {
             const hostName = message.hostName?.trim() || DEFAULT_NATIVE_HOST_NAME;
             const ping = await pingNativeHost(hostName);
+            if (ping.ok) {
+              try {
+                lastGatewayCaps = await nativeRequest<GatewayCapabilities>(
+                  hostName,
+                  'capabilities',
+                  {},
+                  { timeoutMs: 8000 },
+                );
+              } catch {
+                lastGatewayCaps = { protocol: 1 };
+              }
+            } else {
+              lastGatewayCaps = null;
+            }
             sendResponse({ installed: ping.ok, version: ping.version, error: ping.error });
             break;
           }
@@ -1282,6 +1437,7 @@ chrome.runtime.onMessage.addListener(
                 message.url,
                 message.naturalWidth,
                 message.naturalHeight,
+                message.cacheIdentity,
               ),
             );
             break;
@@ -1336,6 +1492,23 @@ chrome.runtime.onMessage.addListener(
           case 'detect-language': {
             const result = detectLanguage(message.texts);
             sendResponse({ language: result.language, confident: result.confident });
+            break;
+          }
+          case 'asr-start':
+            sendResponse(
+              await handleAsrStart(
+                message.requestId,
+                message.mime,
+                message.base64,
+                message.windowStart,
+                message.windowDuration,
+                message.languageHint,
+              ),
+            );
+            break;
+          case 'asr-cancel': {
+            asrControllers.get(message.requestId)?.abort();
+            sendResponse({ ok: true });
             break;
           }
           default:

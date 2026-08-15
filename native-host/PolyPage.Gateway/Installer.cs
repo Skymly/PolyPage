@@ -16,19 +16,24 @@ public static class Installer
 {
     public const string DefaultHostName = "com.skymly.polypage.gateway";
 
+    public const string DefaultGeckoId = "polypage@skymly.com";
+
     private static readonly string[] BrowserRegistryRoots =
     {
         @"Software\Google\Chrome\NativeMessagingHosts",
         @"Software\Microsoft\Edge\NativeMessagingHosts",
     };
 
+    private const string MozillaRegistryRoot = @"Software\Mozilla\NativeMessagingHosts";
+
     public static string HostName { get; set; } = DefaultHostName;
 
     private static string InstallDir => GatewayConfig.InstallDir;
     private static string InstalledExe => Path.Combine(InstallDir, "PolyPage.Gateway.exe");
     private static string ManifestPath => Path.Combine(InstallDir, $"{HostName}.json");
+    private static string FirefoxManifestPath => Path.Combine(InstallDir, $"{HostName}.firefox.json");
 
-    public static int Install(string[] allowOrigins)
+    public static int Install(string[] allowOrigins, string[]? allowGeckoIds = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -75,6 +80,31 @@ public static class Installer
         {
             if (!origins.Contains(origin)) origins.Add(origin);
         }
+        var geckoIds = new List<string>();
+        if (File.Exists(FirefoxManifestPath))
+        {
+            try
+            {
+                var existingFx = JsonDocument.Parse(File.ReadAllText(FirefoxManifestPath));
+                if (existingFx.RootElement.TryGetProperty("allowed_extensions", out var fxArr) &&
+                    fxArr.ValueKind == JsonValueKind.Array)
+                {
+                    geckoIds.AddRange(fxArr.EnumerateArray()
+                        .Where(e => e.ValueKind == JsonValueKind.String)
+                        .Select(e => e.GetString()!));
+                }
+            }
+            catch
+            {
+                /* rebuild */
+            }
+        }
+        foreach (var id in allowGeckoIds ?? Array.Empty<string>())
+        {
+            if (!geckoIds.Contains(id)) geckoIds.Add(id);
+        }
+        if (geckoIds.Count == 0) geckoIds.Add(DefaultGeckoId);
+
         var manifest = new Dictionary<string, object>
         {
             ["name"] = HostName,
@@ -82,12 +112,26 @@ public static class Installer
             ["path"] = InstalledExe,
             ["type"] = "stdio",
             ["allowed_origins"] = origins,
+            ["allowed_extensions"] = geckoIds,
         };
         File.WriteAllText(ManifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions
         {
             WriteIndented = true,
         }));
         Console.WriteLine($"已写入 host manifest: {ManifestPath}");
+        var firefoxManifest = new Dictionary<string, object>
+        {
+            ["name"] = HostName,
+            ["description"] = "PolyPage local translation gateway",
+            ["path"] = InstalledExe,
+            ["type"] = "stdio",
+            ["allowed_extensions"] = geckoIds,
+        };
+        File.WriteAllText(FirefoxManifestPath, JsonSerializer.Serialize(firefoxManifest, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+        }));
+        Console.WriteLine($"已写入 Firefox host manifest: {FirefoxManifestPath}");
         if (origins.Count == 0)
         {
             Console.WriteLine("警告: allowed_origins 为空。请用 --allow chrome-extension://<id>/ 追加扩展来源。");
@@ -106,6 +150,16 @@ public static class Installer
             {
                 Console.Error.WriteLine($"注册 {root} 失败: {e.Message}");
             }
+        }
+        try
+        {
+            using var fxKey = Registry.CurrentUser.CreateSubKey($@"{MozillaRegistryRoot}\{HostName}");
+            fxKey.SetValue(null, FirefoxManifestPath);
+            Console.WriteLine($"已注册: HKCU\\{MozillaRegistryRoot}\\{HostName}");
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"注册 Mozilla NativeMessagingHosts 失败: {e.Message}");
         }
 
         Console.WriteLine("安装完成。请在浏览器扩展管理页重新加载扩展后测试连接。");
@@ -133,7 +187,17 @@ public static class Installer
         }
         try
         {
+            Registry.CurrentUser.DeleteSubKeyTree($@"{MozillaRegistryRoot}\{HostName}", throwOnMissingSubKey: false);
+            Console.WriteLine($"已移除注册表项: HKCU\\{MozillaRegistryRoot}\\{HostName}");
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"移除 Mozilla 键失败: {e.Message}");
+        }
+        try
+        {
             if (File.Exists(ManifestPath)) File.Delete(ManifestPath);
+            if (File.Exists(FirefoxManifestPath)) File.Delete(FirefoxManifestPath);
             if (File.Exists(InstalledExe)) File.Delete(InstalledExe);
             Console.WriteLine("已移除 manifest 与网关文件（保留 gateway.json 配置与日志）。");
         }

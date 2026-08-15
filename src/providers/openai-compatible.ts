@@ -74,6 +74,8 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       stream: true,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
+      // Ollama Qwen3-class models otherwise spend the token budget on reasoning.
+      ...(this.isLocalEndpoint() ? { think: false } : {}),
       messages: [
         ...(config.systemPrompt.trim() !== ''
           ? [{ role: 'system', content: this.renderSystemPrompt(ctx) }]
@@ -219,6 +221,58 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     );
   }
 
+  /**
+   * ASR capability (spec 4.0 §5.4): multipart POST to /audio/transcriptions.
+   * Prefers verbose_json for timestamps; falls back to plain text.
+   */
+  async transcribe(
+    input: { mime: string; bytes: Uint8Array },
+    ctx: TranslationContext & { languageHint?: string },
+    signal: AbortSignal,
+  ): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }> {
+    const { config } = this;
+    if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
+      throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
+    }
+    const url = `${config.baseUrl.replace(/\/+$/, '')}/audio/transcriptions`;
+    const headers: Record<string, string> = {
+      ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+      ...config.headers,
+    };
+    const ext = input.mime.includes('mp4') ? 'mp4' : input.mime.includes('mpeg') ? 'mp3' : 'webm';
+    const copy = new Uint8Array(input.bytes.byteLength);
+    copy.set(input.bytes);
+    const file = new File([copy], `audio.${ext}`, { type: input.mime || 'audio/webm' });
+    return withTimeoutAndRetry(
+      async (innerSignal) => {
+        const body = new FormData();
+        body.append('file', file);
+        body.append('model', config.model || 'whisper-1');
+        body.append('response_format', 'verbose_json');
+        if (ctx.languageHint && ctx.languageHint !== 'auto') {
+          body.append('language', ctx.languageHint);
+        }
+        let res: Response;
+        try {
+          res = await fetch(url, { method: 'POST', headers, body, signal: innerSignal });
+        } catch (e) {
+          throw toProviderError(e);
+        }
+        if (!res.ok) {
+          const kind = classifyHttpStatus(res.status);
+          const detail = await readApiErrorMessage(res);
+          throw new ProviderError(
+            kind,
+            `转写请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          );
+        }
+        const raw = await res.text();
+        return parseTranscriptionResponse(raw);
+      },
+      { timeoutMs: config.timeoutMs, signal, retries: 1 },
+    );
+  }
+
   private isLocalEndpoint(): boolean {
     const url = this.config.baseUrl.toLowerCase();
     return url.includes('localhost') || url.includes('127.0.0.1') || url.includes('0.0.0.0');
@@ -310,6 +364,8 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
       stream: false,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
+      // Ollama Qwen3-class models otherwise spend the token budget on reasoning.
+      ...(this.isLocalEndpoint() ? { think: false } : {}),
       messages: [
         ...(config.systemPrompt.trim() !== ''
           ? [{ role: 'system', content: this.renderSystemPrompt(ctx) }]
@@ -350,6 +406,41 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
       { timeoutMs: config.timeoutMs, signal },
     );
   }
+}
+
+export function parseTranscriptionResponse(raw: string): {
+  text: string;
+  segments?: Array<{ start: number; end: number; text: string }>;
+} {
+  const trimmed = raw.trim();
+  if (trimmed === '') throw new ProviderError('invalid_response', '转写接口返回了空内容');
+  try {
+    const json: unknown = JSON.parse(trimmed);
+    if (json && typeof json === 'object') {
+      const rec = json as { text?: unknown; segments?: unknown };
+      const text = typeof rec.text === 'string' ? rec.text : '';
+      const segments = Array.isArray(rec.segments)
+        ? rec.segments
+            .map((s) => {
+              if (!s || typeof s !== 'object') return null;
+              const row = s as { start?: unknown; end?: unknown; text?: unknown };
+              if (typeof row.text !== 'string' || row.text.trim() === '') return null;
+              return {
+                start: typeof row.start === 'number' ? row.start : 0,
+                end: typeof row.end === 'number' ? row.end : 0,
+                text: row.text,
+              };
+            })
+            .filter((s): s is { start: number; end: number; text: string } => s !== null)
+        : undefined;
+      if (text !== '' || (segments && segments.length > 0)) {
+        return { text: text || segments!.map((s) => s.text).join(' '), ...(segments ? { segments } : {}) };
+      }
+    }
+  } catch {
+    // plain-text fallback
+  }
+  return { text: trimmed };
 }
 
 registerProviderFactory('openai-compatible', (config) => new OpenAICompatibleProvider(config));

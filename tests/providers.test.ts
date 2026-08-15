@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import '../src/providers/deepl';
 import '../src/providers/azure-translator';
 import '../src/providers/google-translate';
+import '../src/providers/openai-compatible';
 import { createProvider } from '../src/providers/provider';
 import { toAzureLanguage, toDeepLLanguage, toGoogleLanguage } from '../src/providers/langCodes';
 import type { ProviderConfig } from '../src/shared/types';
@@ -202,5 +203,58 @@ describe('language code mapping', () => {
     expect(toDeepLLanguage('DE')).toBe('DE');
     expect(toAzureLanguage('fr')).toBe('fr');
     expect(toGoogleLanguage('ko')).toBe('ko');
+  });
+});
+
+describe('OpenAI-compatible transcribe', () => {
+  it('posts multipart verbose_json and parses segments', async () => {
+    const captured: { url: string; auth?: string; form: FormData }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        captured.push({
+          url: typeof input === 'string' ? input : input.toString(),
+          auth: (init?.headers as Record<string, string> | undefined)?.Authorization,
+          form: init?.body as FormData,
+        });
+        return new Response(
+          JSON.stringify({
+            text: 'Hello there',
+            segments: [{ start: 0, end: 1.5, text: 'Hello there' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+    const provider = createProvider(
+      baseConfig('openai-compatible', { baseUrl: 'http://127.0.0.1:9/v1', model: 'whisper-1' }),
+    );
+    const result = await provider.transcribe!(
+      { mime: 'audio/webm', bytes: new Uint8Array([1, 2, 3]) },
+      { ...ctx, languageHint: 'en' },
+      new AbortController().signal,
+    );
+    expect(captured[0].url).toBe('http://127.0.0.1:9/v1/audio/transcriptions');
+    expect(captured[0].auth).toBe('Bearer test-key');
+    expect(captured[0].form.get('model')).toBe('whisper-1');
+    expect(captured[0].form.get('response_format')).toBe('verbose_json');
+    expect(result.text).toBe('Hello there');
+    expect(result.segments?.[0].text).toBe('Hello there');
+  });
+
+  it('falls back to plain text when the body is not JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('just the words', { status: 200 })),
+    );
+    const provider = createProvider(
+      baseConfig('openai-compatible', { baseUrl: 'http://127.0.0.1:9/v1' }),
+    );
+    const result = await provider.transcribe!(
+      { mime: 'audio/webm', bytes: new Uint8Array([1]) },
+      ctx,
+      new AbortController().signal,
+    );
+    expect(result.text).toBe('just the words');
   });
 });

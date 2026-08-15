@@ -25,6 +25,7 @@ Installer.HostName = hostName;
 if (argsList.Contains("--install"))
 {
     var origins = new List<string>();
+    var geckoIds = new List<string>();
     for (var i = 0; i < argsList.Count; i++)
     {
         if (argsList[i] == "--allow" && i + 1 < argsList.Count)
@@ -32,8 +33,13 @@ if (argsList.Contains("--install"))
             origins.Add(argsList[i + 1]);
             i++;
         }
+        else if (argsList[i] == "--allow-id" && i + 1 < argsList.Count)
+        {
+            geckoIds.Add(argsList[i + 1]);
+            i++;
+        }
     }
-    return Installer.Install(origins.ToArray());
+    return Installer.Install(origins.ToArray(), geckoIds.ToArray());
 }
 if (argsList.Contains("--uninstall")) return Installer.Uninstall();
 if (argsList.Contains("--status")) return Installer.Status();
@@ -45,6 +51,7 @@ try
     var backends = new List<IGatewayBackend>();
     foreach (var ollama in config.Ollama) backends.Add(new OllamaBackend(ollama));
     foreach (var http in config.Http) backends.Add(new HttpBackend(http));
+    foreach (var whisper in config.Whisper) backends.Add(new WhisperBackend(whisper));
     if (backends.Count == 0)
     {
         log.Error("no backends configured in gateway.json");

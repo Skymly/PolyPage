@@ -13,6 +13,7 @@ public sealed class GatewayConfig
     public string DefaultBackend { get; set; } = "";
     public List<OllamaBackendConfig> Ollama { get; set; } = new();
     public List<HttpBackendConfig> Http { get; set; } = new();
+    public List<WhisperBackendConfig> Whisper { get; set; } = new();
 
     public static string InstallDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PolyPage");

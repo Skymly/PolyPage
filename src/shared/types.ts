@@ -5,6 +5,8 @@
  * 3.0: schema v3 types (PDF viewer, image translate, subtitles, language
  * detection, selection speak, feedback log, resume task table). See
  * PolyPage-3.0.md.
+ * 4.0: schema v4 types (ASR, translation memory, subtitle style,
+ * scanned-page OCR, tesseract langs). See PolyPage-4.0.md.
  */
 
 /** Display modes. 2.0 adds `inline` (sixth mode, spec 2.0 §7.2). */
@@ -47,7 +49,7 @@ export type SelectionTranslateMode = 'always' | 'alt' | 'off';
 /** PDF bilingual reader display modes (subset of DisplayMode, spec 3.0 §5.4). */
 export type PdfViewerMode = 'bilingual' | 'translated_hover_original';
 
-/** Settings for the PDF bilingual reader (spec 3.0 §9.3, pillar E). */
+/** Settings for the PDF bilingual reader (spec 3.0 §9.3, pillar E; 4.0 adds scannedPageOcr). */
 export interface PdfViewerSettings {
   enabled: boolean;
   defaultMode: PdfViewerMode;
@@ -57,6 +59,8 @@ export interface PdfViewerSettings {
   maxConcurrentPages: number;
   /** P1: auto-open the reader for PDF navigations (needs webNavigation). */
   autoOpen: boolean;
+  /** 4.0: show “识别本页” on scanned pages (spec 4.0 §9.3). */
+  scannedPageOcr: boolean;
 }
 
 /** OCR engine ids (spec 3.0 §6.1). tesseract-wasm is a P1 engine. */
@@ -65,24 +69,56 @@ export type OcrEngineId = 'llm-vision' | 'tesseract-wasm';
 /** Image translation trigger strategy (spec 3.0 §6.3). */
 export type ImageTranslateTrigger = 'contextMenu' | 'hoverButton' | 'both';
 
-/** Settings for image OCR translation (spec 3.0 §9.3, pillar F). */
+/** Settings for image OCR translation (spec 3.0 §9.3, pillar F; 4.0 adds tessLangs). */
 export interface ImageTranslateSettings {
   enabled: boolean;
   trigger: ImageTranslateTrigger;
   engine: OcrEngineId;
   /** Images larger than this edge are downsampled before upload. */
   maxEdgePx: number;
+  /** 4.0: tesseract language packs (spec 4.0 §9.3). */
+  tessLangs: string[];
 }
 
 /** Subtitle bilingual level (spec 3.0 §7.1). */
 export type SubtitleBilingual = 'both' | 'src' | 'dst';
 
-/** Settings for video subtitle translation (spec 3.0 §9.3, pillar G). */
+/** 4.0 subtitle overlay position (spec 4.0 §9.3). */
+export type SubtitlePosition = 'bottom' | 'top';
+
+/** Settings for video subtitle translation (spec 3.0 §9.3, pillar G; 4.0 style fields). */
 export interface SubtitleSettings {
   enabled: boolean;
   bilingual: SubtitleBilingual;
   /** Subtitle font size as percentage of the default. */
   fontSizePct: number;
+  /** 4.0: true places the translation above the source line. */
+  swapSrcDst: boolean;
+  /** 4.0: cue background CSS color. */
+  background: string;
+  /** 4.0: overlay position. */
+  position: SubtitlePosition;
+}
+
+/* ----------------------------- 4.0 schema v4 types ---------------------------- */
+
+/** Unsubtitled-media ASR capture settings (spec 4.0 §9.3, pillar I). */
+export interface AsrSettings {
+  /** Master switch: entry visible, still requires a user click. */
+  enabled: boolean;
+  /** Capture window in seconds (clamped 10–600). */
+  maxSeconds: number;
+  /** Max upload size in MiB (clamped 1–100). */
+  maxUploadMb: number;
+  /** Require confirmation when the media is longer than maxSeconds. */
+  confirmFull: boolean;
+}
+
+/** Sentence-level translation memory (spec 4.0 §9.3, P1). */
+export interface TranslationMemorySettings {
+  enabled: boolean;
+  /** Ring-buffer capacity (clamped 100–20000). */
+  maxEntries: number;
 }
 
 /** Language auto-detection mode (spec 3.0 §8.1). */
@@ -168,7 +204,7 @@ export interface ProviderConfig {
   fallbackProviderId?: string;
 }
 
-/** Global settings stored in chrome.storage.local (schema v3). */
+/** Global settings stored in chrome.storage.local (schema v4). */
 export interface Settings {
   schemaVersion: number;
   activeProviderId: string;
@@ -202,6 +238,9 @@ export interface Settings {
   languageDetection: LanguageDetectionMode;
   /** Speak translations in the selection panel via speechSynthesis. */
   selectionSpeak: boolean;
+  /* ------------------------- 4.0 additions ------------------------- */
+  asr: AsrSettings;
+  translationMemory: TranslationMemorySettings;
 }
 
 /** A single translation work item as sent from content script to background. */
@@ -262,6 +301,10 @@ export interface PageState {
   subtitles?: SubtitleState;
   /** 3.0: number of videos with subtitle/caption tracks in this frame. */
   subtitleVideos?: number;
+  /** 4.0: captionless video/audio count (ASR entry). */
+  captionlessMedia?: number;
+  /** 4.0: memory-cue ASR overlay is active. */
+  asrActive?: boolean;
   /** 3.0: auto-translate skipped because page language == target language. */
   autoSkipped?: boolean;
 }
@@ -318,6 +361,9 @@ export interface SettingsSummary {
   pdfViewerEnabled: boolean;
   /** 3.0: speak translations in the selection panel. */
   selectionSpeak: boolean;
+  /** 4.0: current provider implements transcribe. */
+  asrSupported: boolean;
+  asrEnabled: boolean;
 }
 
 /** Subset of settings the content script is allowed to see (no API keys). */
@@ -341,6 +387,17 @@ export interface ContentSettings {
   subtitlesEnabled: boolean;
   subtitleBilingual: SubtitleBilingual;
   subtitleFontSizePct: number;
+  subtitleSwapSrcDst: boolean;
+  subtitleBackground: string;
+  subtitlePosition: SubtitlePosition;
+  /** 4.0: image OCR can run without vision when tesseract-wasm is selected. */
+  ocrAvailable: boolean;
+  ocrEngine: OcrEngineId;
+  asrEnabled: boolean;
+  asrSupported: boolean;
+  asrMaxSeconds: number;
+  asrConfirmFull: boolean;
+  asrMaxUploadMb: number;
 }
 
 /** Per-provider sliding-window stats (in-memory only, spec 2.0 §8.3). */

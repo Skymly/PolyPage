@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-firefox/
+scripts/fixtures/*.webm
 *.log
 .DS_Store
 

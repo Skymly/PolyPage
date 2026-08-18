@@ -22,7 +22,7 @@
 - 术语表、双语导出、翻译缓存、批量合并、超时/重试、错误分类与日志。
 
 > 本项目按 `PolyPage.md`（1.0）、`PolyPage-2.0.md`、`PolyPage-3.0.md` 与
-> `PolyPage-4.0.md` 实现。验证记录见 `docs/VALIDATION-2.0.md`、
+> `PolyPage-4.0.md` 实现；下一版规划见 `PolyPage-4.1.md`。验证记录见 `docs/VALIDATION-2.0.md`、
 > `docs/VALIDATION-3.0.md` 与 `docs/VALIDATION-4.0.md`。Firefox 差异见
 > `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
 
@@ -41,7 +41,7 @@
 
 消息协议标记 `v: 4`（v1–v3 兼容）。设置 `schemaVersion: 4`。网关 `4.0.0`，`ProtocolVersion = 2`。
 
-顺延 4.1（见 `docs/VALIDATION-4.0.md` §8）：句子级 TM 查表、OCR 附加语言包下载器、ASR 流式 cue、Firefox 网关真联调、图片原位覆盖、PDF 双栏/表格聚类专项。
+4.1 规划见 `PolyPage-4.1.md`（消化 `docs/VALIDATION-4.0.md` §8：TM、OCR 语言包、Firefox 网关为 P0；流式 cue / 原位覆盖为 P1；双栏专项为 P2）。
 
 ## 目录结构
 

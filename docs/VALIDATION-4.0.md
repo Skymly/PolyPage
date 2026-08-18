@@ -1,6 +1,6 @@
 # PolyPage 4.0 验证记录
 
-日期：2026-08-15　环境：Windows、Node v24.18.0、.NET SDK（网关 net8.0）、
+日期：2026-08-15（2026-08-18 补手动联调）　环境：Windows、Node v24.18.0、.NET SDK（网关 net8.0）、
 Edge headless（`--headless=new`）、pdfjs-dist 4.10.38 + tesseract.js 7.0.0
 （vendor 本地打包，构建期 SHA-256 校验）。
 
@@ -13,7 +13,7 @@ Edge headless（`--headless=new`）、pdfjs-dist 4.10.38 + tesseract.js 7.0.0
 | 项 | 3.0 基线 | 4.0 结果 |
 |---|---|---|
 | strict TypeScript | 0 错误 | **0 错误** |
-| 单元测试 | 163 通过 | **187 通过**（3.0 保留 + 4.0 新增） |
+| 单元测试 | 163 通过 | **188 通过**（3.0 保留 + 4.0 新增 + 本地 Ollama 403 提示） |
 | 冒烟断言 | 103 通过 | **111 通过**（3.0 保留 + ASR / 扫描页按钮等） |
 | 网关 xunit | 28 通过 | **32 通过**（只增不减） |
 | 网关真实进程 stdio | 9 通过 | 旧项保留；ping `protocol === 2`；新增分块 / `translate.image` |
@@ -39,7 +39,7 @@ npm run smoke
 - `tests/scannedOcr.test.ts`：缓存键 = 指纹+页+图像哈希+引擎
 - `tests/asr-segment.test.ts`：backend segments / 纯文本均分 / >80 字再切 / 空段丢弃
 - `tests/native-chunk.test.ts`：512KiB 切分与 sha256 拼装
-- `tests/providers.test.ts`：OpenAI-compatible `transcribe` multipart（非 JSON body）
+- `tests/providers.test.ts`：OpenAI-compatible `transcribe` multipart（非 JSON body）；本地 Ollama HTTP 403 → `config` + `OLLAMA_ORIGINS` 提示
 
 TM 归一化命中 / 环形淘汰：**未落地**，见 §8。
 
@@ -81,11 +81,17 @@ TM 归一化命中 / 环形淘汰：**未落地**，见 §8。
 
 ## 7. 手动联调清单（§12.3）
 
+2026-08-18 本机复测：Windows、Ollama 在线、模型 `qwen3-14b-64k:latest`。
+用户环境变量 `OLLAMA_ORIGINS=*` 已存在；`GET /api/tags` 带 `Origin: chrome-extension://…` 返回 200。
+扩展侧 403→config 提示已随 commit `c6e9ba6` 落地，本次直连未再触发 403。
+
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 真实 OpenAI-compatible 转写或本地 faster-whisper | 待手动 | 自动侧已用 mock `/audio/transcriptions` 钉住路径 |
-| 真实 Ollama 视觉模型经网关 `translate.image` | 待手动 | 需本机视觉模型；契约侧 HttpBackend 返回 -32007 为预期 |
-| Firefox 临时加载：Wikipedia 类页面六模式 + 划词 | 待手动 | `about:debugging` 载入 `dist-firefox/`；完整无头冒烟以 Edge 为准 |
+| 真实 OpenAI-compatible **文本翻译**（直连 Ollama） | ✅ 2026-08-18 | headed Edge 加载 `dist/`，Wikipedia Translation：`wt:translate` 后出现双语块，样本含「来自维基百科，自由的百科全书」。Provider=`Ollama (qwen3-14b-64k:latest)` |
+| 真实网关文本翻译 / 流式 | ✅ 2026-08-18 | `node scripts/gateway-ollama-check.mjs qwen3-14b-64k:latest`：`translate` 4.4s 返回「开源软件改变了世界。」；`translate.stream` 返回中文「早上好，我的朋友。」（夹杂模型 think 残片，不影响通路） |
+| 真实 OpenAI-compatible 转写或本地 faster-whisper | 待手动 | 本机 Ollama **仅有文本模型**，未装 Whisper / 视觉权重。自动侧仍用 mock `/audio/transcriptions` |
+| 真实 Ollama 视觉模型经网关 `translate.image` | 待手动 | 同上，本机没有视觉模型；契约侧 HttpBackend 返回 -32007 为预期 |
+| Firefox 临时加载：Wikipedia 六模式 + 划词 | ✅ 2026-08-18 | Marionette `Addon:Install` 临时载入 `dist-firefox/`（id `polypage@skymly.com`，无 manifest 错误）。Popup 渲染 6 个模式 + 划词开关；Options 写入同一 Ollama provider；`wt:set-mode` 六档回到对应 mode；内容脚本注入 Wikipedia（654 段）。Computer Use 无法驱动 Firefox（浏览器 URL 策略），改用 Marionette |
 | 3.0 老设置升级 4.0 后功能正常 | ✅ 自动覆盖 | 冒烟 v2 载荷 → schema 4；`migration4.test.ts` 读兼容 |
 
 ## 8. 遗留（允许顺延 4.1，不得 silently drop）

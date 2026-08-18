@@ -23,6 +23,21 @@ import type { StreamDeltaHandler, TranslationContext, TranslationProvider } from
 /** Batches at most this size retry item-by-item on unparseable output. */
 const FANOUT_LIMIT = 6;
 
+const LOCAL_ORIGIN_403_HINT =
+  'Ollama 拒绝了扩展来源。请设置环境变量 OLLAMA_ORIGINS=*（或 chrome-extension://*）后从托盘退出并重启 Ollama';
+
+function throwHttpFailure(
+  status: number,
+  detail: string,
+  local: boolean,
+  label: string,
+): never {
+  const kind = local && status === 403 ? 'config' : classifyHttpStatus(status);
+  const suffix =
+    local && status === 403 ? `：${LOCAL_ORIGIN_403_HINT}` : detail ? `: ${detail}` : '';
+  throw new ProviderError(kind, `${label} (HTTP ${status})${suffix}`);
+}
+
 export class OpenAICompatibleProvider implements TranslationProvider {
   constructor(public readonly config: ProviderConfig) {}
 
@@ -95,9 +110,12 @@ export class OpenAICompatibleProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(kind, `API 请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`);
+          throwHttpFailure(
+            res.status,
+            await readApiErrorMessage(res),
+            this.isLocalEndpoint(),
+            'API 请求失败',
+          );
         }
         if (!res.body) {
           throw new ProviderError('invalid_response', 'API 未返回流式响应体');
@@ -197,11 +215,11 @@ export class OpenAICompatibleProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `视觉翻译请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          throwHttpFailure(
+            res.status,
+            await readApiErrorMessage(res),
+            this.isLocalEndpoint(),
+            '视觉翻译请求失败',
           );
         }
         let json: unknown;
@@ -259,11 +277,11 @@ export class OpenAICompatibleProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `转写请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          throwHttpFailure(
+            res.status,
+            await readApiErrorMessage(res),
+            this.isLocalEndpoint(),
+            '转写请求失败',
           );
         }
         const raw = await res.text();
@@ -383,11 +401,11 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `API 请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          throwHttpFailure(
+            res.status,
+            await readApiErrorMessage(res),
+            this.isLocalEndpoint(),
+            'API 请求失败',
           );
         }
         let json: unknown;

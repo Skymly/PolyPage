@@ -206,6 +206,28 @@ describe('language code mapping', () => {
   });
 });
 
+describe('OpenAI-compatible local Ollama errors', () => {
+  it('maps local HTTP 403 to a config hint about OLLAMA_ORIGINS', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('forbidden', { status: 403 })),
+    );
+    const provider = createProvider(
+      baseConfig('openai-compatible', {
+        baseUrl: 'http://localhost:11434/v1',
+        apiKey: '',
+        model: 'qwen3.8:27b',
+      }),
+    );
+    await expect(
+      provider.translateTexts(['Hello, world!'], ctx, new AbortController().signal),
+    ).rejects.toMatchObject({
+      kind: 'config',
+      message: expect.stringContaining('OLLAMA_ORIGINS'),
+    });
+  });
+});
+
 describe('OpenAI-compatible transcribe', () => {
   it('posts multipart verbose_json and parses segments', async () => {
     const captured: { url: string; auth?: string; form: FormData }[] = [];

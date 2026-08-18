@@ -138,6 +138,10 @@
               <div class="field" id="field-baseurl">
                 <label>Base URL</label>
                 <input id="f-baseurl" type="text" placeholder="https://api.openai.com/v1" />
+                <p class="hint">
+                  直连本地 Ollama 时浏览器会带上 chrome-extension Origin。若测试返回 HTTP 403，请设置环境变量
+                  OLLAMA_ORIGINS=* 后从托盘退出并重启 Ollama。本地端点无需 API Key，自定义请求头请留空。
+                </p>
               </div>
               <div class="field" id="field-apikey">
                 <label>API Key</label>

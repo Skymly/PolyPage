@@ -31,6 +31,11 @@ export const ERROR_CLASS = 'wt-error';
 /** 2.0 inline mode classes (spec 2.0 §7.2). */
 export const INLINE_SRC_CLASS = 'wt-inline-src';
 export const INLINE_DST_CLASS = 'wt-inline-dst';
+/** Compact in-place nav/menu translation suffix (Contents[目录]). */
+export const NAV_TRANSLATION_CLASS = 'wt-nav-translation';
+/** Nav labels are short; still translate them (Wikipedia sidebar / TOC). */
+export const NAV_MIN_TEXT_LENGTH = 2;
+export const NAV_CHROME_SELECTOR = 'nav, [role="navigation"]';
 /** Marker attribute for shadow-root style clones. */
 export const SHADOW_STYLE_ATTR = 'data-wt-shadow-style';
 
@@ -57,7 +62,6 @@ export const SKIP_TAGS = new Set([
   'AUDIO',
   'TEMPLATE',
   'OPTION',
-  'NAV',
 ]);
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a professional translation engine.

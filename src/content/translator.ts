@@ -29,7 +29,7 @@ import { hashText } from '../shared/utils';
 import type { ExportEntry } from '../messaging/messages';
 import { allocateInlineBudget, collectInlineSegments, renderInlineSegment } from './inline';
 import { ensureStylesFor, renderEntry } from './renderer';
-import { scanTranslatableNodesWithRule } from './scanner';
+import { isMenuChrome, scanTranslatableNodesWithRule, sourceTextOf } from './scanner';
 import { Tooltip } from './tooltip';
 
 export interface InlineSegmentState {
@@ -136,7 +136,7 @@ export class PageTranslator {
       if (existingId && this.entries.has(existingId)) continue;
       const id = existingId ?? `wt-${++this.counter}`;
       if (!existingId) el.setAttribute(DATA_ATTR, id);
-      const text = (el.textContent ?? '').trim();
+      const text = sourceTextOf(el);
       this.entries.set(id, {
         id,
         el,
@@ -405,6 +405,10 @@ export class PageTranslator {
     const pendingEntries: { entry: NodeEntry; segments: ReturnType<typeof collectInlineSegments> }[] = [];
     for (const entry of this.entries.values()) {
       if (entry.inlineSegments || entry.inlineDegraded) continue;
+      if (isMenuChrome(entry.el)) {
+        entry.inlineDegraded = true;
+        continue;
+      }
       pendingEntries.push({ entry, segments: collectInlineSegments(entry.el, entry.id) });
     }
 
@@ -672,7 +676,7 @@ export class PageTranslator {
     let changed = false;
     for (const entry of this.entries.values()) {
       if (!entry.el.isConnected) continue;
-      const current = (entry.el.textContent ?? '').trim();
+      const current = sourceTextOf(entry.el);
       if (current === '' || current === this.expectedText(entry)) continue;
       // The page replaced this node's content: drop stale mappings.
       entry.originalNodes = null;
@@ -700,6 +704,7 @@ export class PageTranslator {
   }
 
   private expectedText(entry: NodeEntry): string {
+    if (isMenuChrome(entry.el)) return entry.originalText;
     if (!this._active || this._mode === null || this._mode === 'original') {
       return entry.originalText;
     }

@@ -6,17 +6,28 @@
  *  - site-rule include/exclude selector filtering;
  *  - candidate discovery helpers are shadow-DOM aware.
  *
+ * 4.0: `<nav>` / `[role=navigation]` labels are scanned (Wikipedia sidebar
+ * and TOC). Short menu text uses NAV_MIN_TEXT_LENGTH so items like "Tools"
+ * are not dropped. Inserted nav suffixes are ignored when reading source text.
+ *
  * Rules:
  *  - candidate tags: p, h1-h6, li, blockquote, figcaption, td, th,
  *    article, section, div (div/article/section only when they hold no
  *    translatable descendant — the most specific element wins);
  *  - skip tags and their subtrees: script, style, code, pre, form controls,
- *    media, nav, etc.;
+ *    media, etc. (buttons stay skipped so interactive chrome is not rewritten);
  *  - contenteditable regions are skipped to avoid breaking editors;
  *  - text filters: too short / digits / URLs / emails / code (shared module);
  *  - hidden nodes are not translated (spec §7.3 rule 8).
  */
-import { BILINGUAL_CLASS, CANDIDATE_SELECTOR, SKIP_TAGS } from '../shared/constants';
+import {
+  BILINGUAL_CLASS,
+  CANDIDATE_SELECTOR,
+  NAV_CHROME_SELECTOR,
+  NAV_MIN_TEXT_LENGTH,
+  NAV_TRANSLATION_CLASS,
+  SKIP_TAGS,
+} from '../shared/constants';
 import { filterText } from '../shared/textFilters';
 import type { EffectiveRule } from '../shared/types';
 
@@ -93,13 +104,37 @@ export function elementMatchesWithin(el: Element, selector: string): boolean {
   return false;
 }
 
+/** Site chrome whose labels should stay clickable (sidebar / TOC / menu). */
+export function isMenuChrome(el: Element): boolean {
+  return elementMatchesWithin(el, NAV_CHROME_SELECTOR);
+}
+
+/** Original label text, ignoring our inserted translation suffixes. */
+export function sourceTextOf(el: HTMLElement): string {
+  const parts: string[] = [];
+  const walk = (node: Node): void => {
+    if (node instanceof HTMLElement) {
+      if (node.classList.contains(NAV_TRANSLATION_CLASS) || node.classList.contains(BILINGUAL_CLASS)) {
+        return;
+      }
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? '');
+      return;
+    }
+    node.childNodes.forEach(walk);
+  };
+  walk(el);
+  return parts.join('').trim();
+}
+
 /** A container (div/article/section...) is skipped when it has candidate
  *  descendants carrying their own text — those descendants are translated
  *  instead, which avoids duplicated or nested translations. */
 function hasCandidateDescendantWithText(el: Element): boolean {
   const descendants = deepQuerySelectorAll(el, CANDIDATE_SELECTOR);
   for (const d of descendants) {
-    if ((d.textContent ?? '').trim().length > 0) return true;
+    if (sourceTextOf(d as HTMLElement).length > 0) return true;
   }
   return false;
 }
@@ -135,8 +170,9 @@ export function scanTranslatableNodesWithRule(root: ParentNode, options: ScanOpt
       if (rule.excludeSelectors.some((s) => elementMatchesWithin(el, s))) continue;
     }
     if (isHidden(el)) continue;
-    const text = (el.textContent ?? '').trim();
-    if (filterText(text, options.minTextLength).skip) continue;
+    const text = sourceTextOf(el);
+    const minLen = isMenuChrome(el) ? Math.min(options.minTextLength, NAV_MIN_TEXT_LENGTH) : options.minTextLength;
+    if (filterText(text, minLen).skip) continue;
     found.push(el);
   }
   return found;

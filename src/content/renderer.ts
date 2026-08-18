@@ -7,17 +7,23 @@
  *
  * 2.0: content.css does not reach into shadow roots, so every modified
  * shadow root receives a style clone (spec 2.0 §6.1 item 2).
+ *
+ * 4.0: nav / [role=navigation] labels keep their original markup (so links
+ * stay clickable) and get a compact `原文[译文]` suffix instead of a stacked
+ * bilingual block.
  */
 import {
   BILINGUAL_CLASS,
   DATA_ATTR,
   ERROR_CLASS,
+  NAV_TRANSLATION_CLASS,
   PENDING_CLASS,
   SHADOW_STYLE_ATTR,
 } from '../shared/constants';
 import type { DisplayMode } from '../shared/types';
 import contentCss from '../styles/content.css?raw';
 import type { NodeEntry } from './translator';
+import { isMenuChrome } from './scanner';
 
 /** Elements where inserting a sibling block would produce invalid HTML
  *  (table rows, lists); for those the translation block goes inside. */
@@ -70,6 +76,47 @@ function insertBlock(el: HTMLElement, block: HTMLElement): void {
   }
 }
 
+/** Prefer the single child link so `Contents[目录]` stays on the same line. */
+export function menuLabelHost(el: HTMLElement): HTMLElement {
+  const links = Array.from(el.children).filter((child) => child.tagName === 'A');
+  if (links.length === 1) return links[0] as HTMLElement;
+  return el;
+}
+
+function menuSuffixText(entry: NodeEntry): string | null {
+  if (entry.status === 'pending') return '[翻译中…]';
+  if (entry.status === 'done' && entry.translated !== null) return `[${entry.translated}]`;
+  if (entry.status === 'error') return `[翻译失败]`;
+  return null;
+}
+
+function updateMenuSuffix(entry: NodeEntry): void {
+  const text = menuSuffixText(entry);
+  if (text === null) {
+    removeMenuSuffix(entry);
+    return;
+  }
+  let suffix = entry.bilingualEl;
+  if (!suffix || !suffix.isConnected) {
+    suffix = document.createElement('span');
+    suffix.className = NAV_TRANSLATION_CLASS;
+    suffix.setAttribute(DATA_ATTR, entry.id);
+    entry.bilingualEl = suffix;
+    menuLabelHost(entry.el).appendChild(suffix);
+    ensureStylesFor(suffix);
+  }
+  suffix.classList.toggle('wt-nav-pending', entry.status === 'pending');
+  suffix.classList.toggle('wt-nav-error', entry.status === 'error');
+  suffix.textContent = text;
+}
+
+export function removeMenuSuffix(entry: NodeEntry): void {
+  if (entry.bilingualEl) {
+    entry.bilingualEl.remove();
+    entry.bilingualEl = null;
+  }
+}
+
 /** Create/update the bilingual block for an entry (spec §7.5). */
 export function updateBilingualBlock(entry: NodeEntry): void {
   let block = entry.bilingualEl;
@@ -103,6 +150,13 @@ export function removeBilingualBlock(entry: NodeEntry): void {
   }
 }
 
+function renderMenuEntry(entry: NodeEntry, mode: DisplayMode | null): void {
+  restoreOriginal(entry);
+  const show = mode !== null && mode !== 'original';
+  if (show) updateMenuSuffix(entry);
+  else removeMenuSuffix(entry);
+}
+
 /**
  * Render one entry for the given mode. `mode === null` means "untouched
  * original page" (restores everything and removes inserted blocks).
@@ -112,6 +166,11 @@ export function removeBilingualBlock(entry: NodeEntry): void {
 export function renderEntry(entry: NodeEntry, mode: DisplayMode | null): void {
   const effective: DisplayMode | null =
     mode === 'inline' && entry.inlineDegraded ? 'bilingual' : mode;
+
+  if (isMenuChrome(entry.el)) {
+    renderMenuEntry(entry, effective === 'inline' ? 'bilingual' : effective);
+    return;
+  }
 
   if (effective === 'inline') {
     // Body keeps the original text; segment spans are managed by translator.

@@ -90,6 +90,21 @@ const selectionPage = `<!doctype html>
   <p id="sel-p">Selecting this sentence should reveal a floating translate button nearby.</p>
 </body></html>`;
 
+const navPage = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Nav</title></head>
+<body>
+  <nav id="sidebar">
+    <ul>
+      <li id="nav-contents"><a href="#toc">Contents</a></li>
+      <li id="nav-about"><a href="#about">About Wikipedia</a></li>
+      <li id="nav-tools"><a href="#tools">Tools</a></li>
+    </ul>
+  </nav>
+  <main>
+    <p id="nav-prose">The article body paragraph stays long enough for a bilingual block.</p>
+  </main>
+</body></html>`;
+
 const inlinePage = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Inline</title></head>
 <body>
@@ -251,6 +266,7 @@ function startPageServer() {
         '/iframe-child.html': iframeChildPage,
         '/selection.html': selectionPage,
         '/inline.html': inlinePage,
+        '/nav.html': navPage,
         '/image.html': imagePage,
         '/video.html': videoPage,
         '/captionless.html': captionlessPage,
@@ -885,6 +901,48 @@ try {
 
   const finalState = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`));
   check('state resets after restore', finalState?.active === false, JSON.stringify(finalState));
+
+  /* ============================== nav chrome (4.0) ============================== */
+
+  const navUrl = `http://127.0.0.1:${PORT_PAGE}/nav.html`;
+  await openPage(browserCdp, navUrl);
+  const navPageCdp = await pageFor(navUrl);
+  await ext.eval(sendToTabWithUrl(navUrl, `{ type: 'wt:translate' }`), 5000);
+  let navSnap = { contents: '', href: '', suffix: '', tools: '', about: '', navBlocks: 0, proseBlocks: 0 };
+  for (let i = 0; i < 30; i++) {
+    navSnap = await navPageCdp.eval(`(() => {
+      const contents = document.querySelector('#nav-contents a');
+      const tools = document.querySelector('#nav-tools a');
+      const about = document.querySelector('#nav-about a');
+      return {
+        contents: contents?.textContent ?? '',
+        href: contents?.getAttribute('href') ?? '',
+        suffix: contents?.querySelector('.wt-nav-translation')?.textContent ?? '',
+        tools: tools?.textContent ?? '',
+        about: about?.textContent ?? '',
+        navBlocks: document.querySelectorAll('nav .wt-bilingual-block').length,
+        proseBlocks: document.querySelectorAll('#nav-prose + .wt-bilingual-block, main .wt-bilingual-block').length,
+      };
+    })()`);
+    if (navSnap.suffix.includes('[译]') && navSnap.proseBlocks >= 1) break;
+    await sleep(400);
+  }
+  check('nav keeps the original link href', navSnap.href === '#toc', JSON.stringify(navSnap));
+  check(
+    'nav Contents gets a compact [译] suffix',
+    navSnap.contents.includes('Contents') && navSnap.suffix.includes('[译]'),
+    JSON.stringify(navSnap),
+  );
+  check('short nav label Tools is translated', navSnap.tools.includes('Tools') && navSnap.tools.includes('[译]'), navSnap.tools);
+  check('nav About Wikipedia is translated', navSnap.about.includes('About Wikipedia') && navSnap.about.includes('[译]'), navSnap.about);
+  check('nav does not use stacked bilingual blocks', navSnap.navBlocks === 0, JSON.stringify(navSnap));
+  check('article body next to nav still gets a bilingual block', navSnap.proseBlocks >= 1, JSON.stringify(navSnap));
+  await ext.eval(sendToTabWithUrl(navUrl, `{ type: 'wt:restore' }`), 5000);
+  await sleep(400);
+  const restoredNav = await navPageCdp.eval(`document.querySelector('#nav-contents a')?.textContent ?? ''`);
+  check('restore removes nav suffix', restoredNav === 'Contents', JSON.stringify(restoredNav));
+  await closePage(browserCdp, navUrl);
+  navPageCdp.close();
 
   /* ============================== 2.0 site rules ============================== */
 

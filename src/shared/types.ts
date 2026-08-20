@@ -434,6 +434,8 @@ export interface ContentSettings {
   imageOverlayEnabled: boolean;
   /** 4.1: stream ASR cues when the backend supports it. */
   asrStreaming: boolean;
+  /** Active provider can stream text translation (hover). */
+  streamingSupported: boolean;
 }
 
 /** Per-provider sliding-window stats (in-memory only, spec 2.0 §8.3). */

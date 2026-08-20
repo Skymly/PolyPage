@@ -26,7 +26,7 @@
 import { sendTabCommand } from '../messaging/messages';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
-import { createProvider, providerSupportsAsr, providerSupportsVision, toProviderError } from '../providers/provider';
+import { createProvider, toProviderError } from '../providers/provider';
 import { base64ToBytes } from '../shared/binaryChunk';
 import { nativeRequest } from './nativePort';
 import type { GatewayCapabilities } from '../shared/nativeRpc';
@@ -67,6 +67,7 @@ import { AsrRoundTrip } from '../asr/roundtrip';
 import { ChromeOcrCache } from '../ocr/resultCache';
 import { TranslationPipeline } from '../translation/pipeline';
 import { effectiveLanguages, isProviderConfigured } from '../translation/context';
+import { providerCapabilities } from '../providers/capabilities';
 import { renderGlossary } from '../shared/siteRules';
 import type {
   ContentSettings,
@@ -113,31 +114,15 @@ async function getSettings(force = false): Promise<Settings> {
 /** Last probed gateway capabilities (protocol=1 greys vision/ASR). */
 let lastGatewayCaps: GatewayCapabilities | null = null;
 
-/** Vision capability probe for menu/popup greying (spec 3.0 §6.2 item 3). */
-function activeProviderSupportsVision(settings: Settings): boolean {
+function activeProviderCapabilities(settings: Settings) {
   const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  if (!provider || !isProviderConfigured(provider)) return false;
-  if (provider.type === 'native-host') {
-    return (lastGatewayCaps?.protocol ?? 1) >= 2 && !!lastGatewayCaps?.supportsVision;
-  }
+  let instance = null;
   try {
-    return providerSupportsVision(createProvider(provider));
+    if (provider && isProviderConfigured(provider)) instance = createProvider(provider);
   } catch {
-    return false;
+    instance = null;
   }
-}
-
-function activeProviderSupportsAsr(settings: Settings): boolean {
-  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  if (!provider || !isProviderConfigured(provider)) return false;
-  if (provider.type === 'native-host') {
-    return (lastGatewayCaps?.protocol ?? 1) >= 2 && !!lastGatewayCaps?.supportsAsr;
-  }
-  try {
-    return providerSupportsAsr(createProvider(provider));
-  } catch {
-    return false;
-  }
+  return providerCapabilities(provider, instance, lastGatewayCaps);
 }
 
 /* ------------------------------- provider stats ------------------------------ */
@@ -560,7 +545,7 @@ function setupContextMenus(settings?: Settings): void {
     }
     const imageEnabled = settings?.imageTranslate.enabled ?? true;
     if (imageEnabled) {
-      const vision = settings ? activeProviderSupportsVision(settings) : true;
+      const vision = settings ? activeProviderCapabilities(settings).vision : true;
       chrome.contextMenus.create({
         id: MENU_TRANSLATE_IMAGE,
         title: vision ? '翻译图片文字 (PolyPage)' : '翻译图片文字（当前服务不支持视觉）',
@@ -569,7 +554,7 @@ function setupContextMenus(settings?: Settings): void {
       });
     }
     const asrEnabled = settings?.asr.enabled ?? true;
-    const asr = settings ? activeProviderSupportsAsr(settings) : false;
+    const asr = settings ? activeProviderCapabilities(settings).asr : false;
     if (asrEnabled) {
       chrome.contextMenus.create({
         id: MENU_TRANSCRIBE_MEDIA,
@@ -672,7 +657,7 @@ chrome.runtime.onMessage.addListener(
           }
           case 'get-content-settings': {
             const s = await getSettings();
-            const vision = activeProviderSupportsVision(s);
+            const vision = activeProviderCapabilities(s).vision;
             const cs: ContentSettings = {
               defaultDisplayMode: s.defaultDisplayMode,
               autoTranslate: s.autoTranslate,
@@ -697,12 +682,13 @@ chrome.runtime.onMessage.addListener(
               ocrEngine: s.imageTranslate.engine,
               ocrAvailable: s.imageTranslate.enabled && (s.imageTranslate.engine === 'tesseract-wasm' || vision),
               asrEnabled: s.asr.enabled,
-              asrSupported: activeProviderSupportsAsr(s),
+              asrSupported: activeProviderCapabilities(s).asr,
               asrMaxSeconds: s.asr.maxSeconds,
               asrConfirmFull: s.asr.confirmFull,
               asrMaxUploadMb: s.asr.maxUploadMb,
               imageOverlayEnabled: s.imageOverlay.enabled,
               asrStreaming: s.asr.streaming,
+              streamingSupported: activeProviderCapabilities(s).streaming,
             };
             sendResponse(cs);
             break;
@@ -723,12 +709,12 @@ chrome.runtime.onMessage.addListener(
               autoTranslate: s.autoTranslate,
               providerConfigured: !!provider && isProviderConfigured(provider),
               selectionTranslate: s.selectionTranslate,
-              visionSupported: activeProviderSupportsVision(s),
+              visionSupported: activeProviderCapabilities(s).vision,
               imageTranslateEnabled: s.imageTranslate.enabled,
               subtitlesEnabled: s.subtitles.enabled,
               pdfViewerEnabled: s.pdfViewer.enabled,
               selectionSpeak: s.selectionSpeak,
-              asrSupported: activeProviderSupportsAsr(s),
+              asrSupported: activeProviderCapabilities(s).asr,
               asrEnabled: s.asr.enabled,
             };
             sendResponse(summary);

@@ -294,14 +294,8 @@ chrome.runtime.onMessage.addListener((message: TabCommand, _sender, sendResponse
 /* ----------------------------------- init ------------------------------------ */
 
 async function init(): Promise<void> {
-  let summary: { providerType?: string; selectionSpeak?: boolean } | null = null;
   try {
-    const [settings, settingsSummary] = await Promise.all([
-      sendRuntime({ type: 'get-content-settings' }),
-      sendRuntime({ type: 'get-settings-summary' }).catch(() => null),
-    ]);
-    contentSettings = settings;
-    summary = settingsSummary;
+    contentSettings = await sendRuntime({ type: 'get-content-settings' });
   } catch {
     return; // background unavailable; popup actions will still work when it wakes up
   }
@@ -314,7 +308,7 @@ async function init(): Promise<void> {
     rule: effectiveRule,
     inlineBudget: contentSettings.inlineBudget,
     viewportBudget: contentSettings.viewportBudget,
-    streamingAvailable: summary?.providerType === 'openai-compatible',
+    streamingAvailable: contentSettings.streamingSupported === true,
   });
 
   // Blacklist applies by top-level domain; frames follow the top page

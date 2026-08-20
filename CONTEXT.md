@@ -24,6 +24,10 @@ _Avoid_: service, API, engine
 Restoring in-flight webpage or PDF node translations after the background restarts.
 _Avoid_: 用续译指字幕 cue 或流式条目
 
+**网页翻译**:
+The module that scans page nodes, applies a display mode, and restores the original DOM. It talks to 翻译管线 through chrome.runtime adapters; it does not call a Provider.
+_Avoid_: PageTranslator, 页面翻译, renderer（渲染是内部 seam）
+
 **探活**:
 Checking that a Provider answers. Not a translation.
 _Avoid_: 测试翻译, test translation

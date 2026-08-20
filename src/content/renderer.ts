@@ -22,7 +22,7 @@ import {
 } from '../shared/constants';
 import type { DisplayMode } from '../shared/types';
 import contentCss from '../styles/content.css?raw';
-import type { NodeEntry } from './translator';
+import type { NodeEntry } from './nodeEntry';
 import { isMenuChrome } from './scanner';
 
 /** Elements where inserting a sibling block would produce invalid HTML

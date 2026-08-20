@@ -15,8 +15,6 @@
  *  - frame state reporting + bilingual export collection.
  */
 import { sendRuntime } from '../messaging/messages';
-import { STREAM_PORT_NAME } from '../messaging/messages';
-import type { StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { BILINGUAL_CLASS, DATA_ATTR } from '../shared/constants';
 import type {
   DisplayMode,
@@ -28,38 +26,12 @@ import type {
 import { hashText } from '../shared/utils';
 import type { ExportEntry } from '../messaging/messages';
 import { allocateInlineBudget, collectInlineSegments, renderInlineSegment } from './inline';
+import type { InlineSegmentState, NodeEntry } from './nodeEntry';
 import { ensureStylesFor, renderEntry } from './renderer';
+import { defaultRuntimeTranslateItems } from './runtimeTranslate';
+import type { TranslateItemsFn } from './runtimeTranslate';
 import { isMenuChrome, scanTranslatableNodesWithRule, sourceTextOf } from './scanner';
 import { Tooltip } from './tooltip';
-
-export interface InlineSegmentState {
-  key: string;
-  text: string;
-  dstEl: HTMLElement | null;
-  status: NodeStatus;
-  translated: string | null;
-  error: string | null;
-}
-
-export interface NodeEntry {
-  id: string;
-  el: HTMLElement;
-  originalText: string;
-  /** Hash of originalText, used for recycle detection (spec 2.0 §6.3). */
-  textHash: string;
-  /** Saved original child nodes while content is replaced; null = untouched. */
-  originalNodes: ChildNode[] | null;
-  translated: string | null;
-  status: NodeStatus;
-  error: string | null;
-  bilingualEl: HTMLElement | null;
-  /** inline mode segments; null = not segmented. */
-  inlineSegments: InlineSegmentState[] | null;
-  /** inline mode over budget -> paragraph-level bilingual fallback. */
-  inlineDegraded: boolean;
-  /** viewport gating (spec 2.0 §6.3). */
-  visible: boolean;
-}
 
 /** Items per runtime message: small enough for progressive updates. */
 const CHUNK_SIZE = 8;
@@ -75,7 +47,12 @@ export interface TranslatorConfig {
   pageLanguage: string | null;
 }
 
+export interface PageTranslatorDeps {
+  translateItems?: TranslateItemsFn;
+}
+
 export class PageTranslator {
+  private readonly translateItems: TranslateItemsFn;
   private entries = new Map<string, NodeEntry>();
   private counter = 0;
   private _mode: DisplayMode | null = null;
@@ -100,6 +77,10 @@ export class PageTranslator {
   actualProvider: string | null = null;
   /** Called whenever the page state changed (frame reporting). */
   onStateChange: ((state: PageState) => void) | null = null;
+
+  constructor(deps: PageTranslatorDeps = {}) {
+    this.translateItems = deps.translateItems ?? defaultRuntimeTranslateItems;
+  }
 
   get active(): boolean {
     return this._active;
@@ -481,10 +462,8 @@ export class PageTranslator {
       const chunk = tasks.slice(i, i + CHUNK_SIZE);
       const items: TranslationItem[] = chunk.map((t) => ({ key: t.segment.key, text: t.segment.text }));
       try {
-        const response = await sendRuntime({
-          type: 'translate',
-          items,
-          domain: location.hostname,
+        const response = await this.translateItems(items, {
+          domain: typeof location !== 'undefined' ? location.hostname : undefined,
           pageLanguage: this.config.pageLanguage,
         });
         if (!this._active) return;
@@ -553,10 +532,8 @@ export class PageTranslator {
       const chunk = targets.slice(i, i + CHUNK_SIZE);
       const items: TranslationItem[] = chunk.map((e) => ({ key: e.id, text: e.originalText }));
       try {
-        const response = await sendRuntime({
-          type: 'translate',
-          items,
-          domain: location.hostname,
+        const response = await this.translateItems(items, {
+          domain: typeof location !== 'undefined' ? location.hostname : undefined,
           pageLanguage: this.config.pageLanguage,
         });
         if (!this._active) return;
@@ -591,66 +568,47 @@ export class PageTranslator {
   }
 
   /** Streaming single-entry translation (spec 2.0 §7.3, on-demand hover). */
-  translateEntryStreaming(entry: NodeEntry): void {
+  private translateEntryStreaming(entry: NodeEntry): void {
     entry.status = 'pending';
     entry.error = null;
     this.renderAll();
     this.report();
-    let port: chrome.runtime.Port;
-    try {
-      port = chrome.runtime.connect({ name: STREAM_PORT_NAME });
-    } catch (e) {
-      entry.status = 'error';
-      entry.error = e instanceof Error ? e.message : String(e);
-      this.renderAll();
-      return;
-    }
     let accumulated = '';
-    port.onMessage.addListener((raw: unknown) => {
-      const msg = raw as StreamPortMessage;
-      if (msg.type === 'finished') {
-        try {
-          port.disconnect();
-        } catch {
-          /* already closed */
-        }
-        return;
-      }
-      if (msg.key !== entry.id) return;
-      if (msg.type === 'delta') {
-        accumulated += msg.delta;
+    void this.translateItems([{ key: entry.id, text: entry.originalText }], {
+      domain: typeof location !== 'undefined' ? location.hostname : undefined,
+      pageLanguage: this.config.pageLanguage,
+      onDelta: (_key, delta) => {
+        accumulated += delta;
         if (this.tooltip.currentTarget === entry.el) {
           this.tooltip.show(entry.el, accumulated, 'ready');
         }
-      } else if (msg.type === 'done') {
-        entry.translated = msg.text;
-        entry.status = 'done';
+      },
+    })
+      .then((response) => {
+        if (!this._active) return;
+        if (response.actualProviderName) this.actualProvider = response.actualProviderName;
+        const text = response.results[entry.id];
+        if (text !== undefined) {
+          entry.translated = text;
+          entry.status = 'done';
+        } else {
+          const err = response.errors[entry.id];
+          entry.status = 'error';
+          entry.error = err?.message ?? '流式连接中断';
+          this.lastError = entry.error;
+        }
         this.renderAll();
         this.refreshTooltipForChunk([entry]);
         this.report();
-        port.disconnect();
-      } else if (msg.type === 'error') {
+      })
+      .catch((e: unknown) => {
+        if (!this._active) return;
         entry.status = 'error';
-        entry.error = msg.message;
-        this.lastError = msg.message;
+        entry.error = e instanceof Error ? e.message : String(e);
+        this.lastError = entry.error;
         this.renderAll();
         this.report();
-        port.disconnect();
-      }
-    });
-    port.onDisconnect.addListener(() => {
-      if (entry.status === 'pending') {
-        entry.status = 'error';
-        entry.error = '流式连接中断';
-        this.renderAll();
-        this.report();
-      }
-    });
-    const init: StreamPortInit = {
-      items: [{ key: entry.id, text: entry.originalText }],
-      domain: location.hostname,
-    };
-    port.postMessage(init);
+      });
   }
 
   private refreshTooltipForChunk(chunk: NodeEntry[]): void {

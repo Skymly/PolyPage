@@ -9,13 +9,16 @@ export const FEEDBACK_LOG_KEY = 'feedbackLog';
 
 export const ERROR_LOG_MAX = 50;
 export const CACHE_MAX_ENTRIES = 3000;
+export const OCR_CACHE_INDEX_KEY = 'ocrCacheIndex';
+export const OCR_CACHE_KEY_PREFIX = 'ocrcache:';
+export const OCR_CACHE_MAX_ENTRIES = 500;
 /** 3.0: feedback log ring size (spec 3.0 §8.2). */
 export const FEEDBACK_LOG_MAX = 200;
 /** 3.0: resume task table ring size (spec 3.0 §8.4). */
 export const TASK_TABLE_MAX = 5000;
 
-/** Current settings schema version (4.0). */
-export const SCHEMA_VERSION = 4;
+/** Current settings schema version (4.2). */
+export const SCHEMA_VERSION = 6;
 
 /** How long the background waits to merge incoming items into one batch. */
 export const BATCH_WINDOW_MS = 80;
@@ -201,6 +204,7 @@ export function defaultSettings(): Settings {
       maxConcurrentPages: 3,
       autoOpen: false,
       scannedPageOcr: true,
+      layoutPreset: 'auto',
     },
     imageTranslate: {
       enabled: true,
@@ -225,10 +229,22 @@ export function defaultSettings(): Settings {
       maxSeconds: DEFAULT_ASR_MAX_SECONDS,
       maxUploadMb: DEFAULT_ASR_MAX_UPLOAD_MB,
       confirmFull: true,
+      streaming: false,
     },
     translationMemory: {
       enabled: false,
       maxEntries: DEFAULT_TM_MAX_ENTRIES,
+    },
+    ocrPacks: {
+      extraLangs: [],
+    },
+    imageOverlay: {
+      enabled: false,
+    },
+    outputSanitize: {
+      enabled: true,
+      stripThink: true,
+      stripCodeFences: false,
     },
   };
 }

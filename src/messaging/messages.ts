@@ -24,6 +24,15 @@
  * 4.0 (protocol v4, spec 4.0 §9.2):
  *  - every message carries v: 4; messages without v stay compatible;
  *  - new: asr-start / asr-cancel; TabCommand wt:transcribe-media.
+ *
+ * 4.1 (protocol v5, spec 4.1 §9.2):
+ *  - every message carries v: 5; messages without v stay compatible;
+ *  - new: tm-clear / tm-stats; ocr-pack-download / ocr-pack-progress /
+ *    ocr-pack-remove; TabCommand wt:asr-partial.
+ *
+ * 4.2 (protocol v6, spec 4.2 §9.2):
+ *  - every message carries v: 6; messages without v stay compatible;
+ *  - no new bypass-queue translate API; ASR increments reuse wt:asr-partial.
  */
 import type {
   ContentSettings,
@@ -40,7 +49,7 @@ import type {
   TranslationItem,
 } from '../shared/types';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 6;
 
 /* --------------------------- content -> background --------------------------- */
 
@@ -96,7 +105,12 @@ export type RuntimeMessage =
       windowDuration: number;
       languageHint?: string;
     }
-  | { type: 'asr-cancel'; v?: number; requestId: string };
+  | { type: 'asr-cancel'; v?: number; requestId: string }
+  | { type: 'tm-clear'; v?: number }
+  | { type: 'tm-stats'; v?: number }
+  | { type: 'ocr-pack-download'; v?: number; lang: string }
+  | { type: 'ocr-pack-progress'; v?: number }
+  | { type: 'ocr-pack-remove'; v?: number; lang: string };
 
 export type OcrResponse =
   | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string }
@@ -118,7 +132,7 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'report-frame-state' } ? { ok: true } :
   M extends { type: 'cancel-translations' } ? { ok: true } :
   M extends { type: 'get-frame-states' } ? { frames: FrameStateEntry[] } :
-  M extends { type: 'host-status' } ? { installed: boolean; version?: string; error?: string } :
+  M extends { type: 'host-status' } ? { installed: boolean; version?: string; protocol?: number; error?: string; browser?: 'firefox' | 'chromium'; reason?: string } :
   M extends { type: 'get-provider-stats' } ? { stats: Record<string, ProviderStats> } :
   M extends { type: 'get-export-payload' } ? { ok: boolean; entries?: ExportEntry[]; title?: string; url?: string; error?: string } :
   M extends { type: 'ocr-request' } ? OcrResponse :
@@ -132,6 +146,11 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'detect-language' } ? { language: string | null; confident: boolean } :
   M extends { type: 'asr-start' } ? AsrResponse :
   M extends { type: 'asr-cancel' } ? { ok: true } :
+  M extends { type: 'tm-clear' } ? { ok: true } :
+  M extends { type: 'tm-stats' } ? { entries: number; hits: number; sessionHits: number; enabled: boolean } :
+  M extends { type: 'ocr-pack-download' } ? { ok: boolean; error?: string } :
+  M extends { type: 'ocr-pack-progress' } ? { packs: Array<{ id: string; name: string; bytes: number; status: string; received?: number; error?: string; bundled?: boolean }> } :
+  M extends { type: 'ocr-pack-remove' } ? { ok: boolean; error?: string } :
   never;
 
 export type AsrResponse =
@@ -201,7 +220,8 @@ export type TabCommand =
   | { type: 'wt:repeat-selection'; v?: number }
   /** 3.0 (pillar H): re-submit persisted in-flight tasks after SW restart. */
   | { type: 'wt:resume-inflight'; v?: number; keys: string[] }
-  | { type: 'wt:transcribe-media'; v?: number; force?: boolean };
+  | { type: 'wt:transcribe-media'; v?: number; force?: boolean }
+  | { type: 'wt:asr-partial'; v?: number; cues: Array<{ start: number; end: number; text: string }> };
 
 export type TabCommandResponse<C extends TabCommand> =
   C extends { type: 'wt:get-state' } ? PageState :

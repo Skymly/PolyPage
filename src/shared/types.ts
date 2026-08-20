@@ -7,6 +7,9 @@
  * PolyPage-3.0.md.
  * 4.0: schema v4 types (ASR, translation memory, subtitle style,
  * scanned-page OCR, tesseract langs). See PolyPage-4.0.md.
+ * 4.1: schema v5 types (ocrPacks, imageOverlay, asr.streaming,
+ * pdf layoutPreset). See PolyPage-4.1.md.
+ * 4.2: schema v6 types (outputSanitize). See PolyPage-4.2.md.
  */
 
 /** Display modes. 2.0 adds `inline` (sixth mode, spec 2.0 §7.2). */
@@ -49,6 +52,9 @@ export type SelectionTranslateMode = 'always' | 'alt' | 'off';
 /** PDF bilingual reader display modes (subset of DisplayMode, spec 3.0 §5.4). */
 export type PdfViewerMode = 'bilingual' | 'translated_hover_original';
 
+/** 4.1 P2: PDF clustering preset. */
+export type PdfLayoutPreset = 'auto' | 'single' | 'columns' | 'table';
+
 /** Settings for the PDF bilingual reader (spec 3.0 §9.3, pillar E; 4.0 adds scannedPageOcr). */
 export interface PdfViewerSettings {
   enabled: boolean;
@@ -61,6 +67,8 @@ export interface PdfViewerSettings {
   autoOpen: boolean;
   /** 4.0: show “识别本页” on scanned pages (spec 4.0 §9.3). */
   scannedPageOcr: boolean;
+  /** 4.1 P2: clustering preset (spec 4.1 §8.3 / §9.3). */
+  layoutPreset?: PdfLayoutPreset;
 }
 
 /** OCR engine ids (spec 3.0 §6.1). tesseract-wasm is a P1 engine. */
@@ -112,6 +120,8 @@ export interface AsrSettings {
   maxUploadMb: number;
   /** Require confirmation when the media is longer than maxSeconds. */
   confirmFull: boolean;
+  /** 4.1 P1: inject incremental cues when the backend streams. */
+  streaming: boolean;
 }
 
 /** Sentence-level translation memory (spec 4.0 §9.3, P1). */
@@ -119,6 +129,23 @@ export interface TranslationMemorySettings {
   enabled: boolean;
   /** Ring-buffer capacity (clamped 100–20000). */
   maxEntries: number;
+}
+
+/** 4.1: extra OCR language packs the user opted into. */
+export interface OcrPacksSettings {
+  extraLangs: string[];
+}
+
+/** 4.1 P1: in-place image overlay. Default off. */
+export interface ImageOverlaySettings {
+  enabled: boolean;
+}
+
+/** 4.2 pillar P: last-gate output hygiene. Default on. */
+export interface OutputSanitizeSettings {
+  enabled: boolean;
+  stripThink: boolean;
+  stripCodeFences: boolean;
 }
 
 /** Language auto-detection mode (spec 3.0 §8.1). */
@@ -204,7 +231,7 @@ export interface ProviderConfig {
   fallbackProviderId?: string;
 }
 
-/** Global settings stored in chrome.storage.local (schema v4). */
+/** Global settings stored in chrome.storage.local (schema v6). */
 export interface Settings {
   schemaVersion: number;
   activeProviderId: string;
@@ -241,6 +268,11 @@ export interface Settings {
   /* ------------------------- 4.0 additions ------------------------- */
   asr: AsrSettings;
   translationMemory: TranslationMemorySettings;
+  /* ------------------------- 4.1 additions ------------------------- */
+  ocrPacks: OcrPacksSettings;
+  imageOverlay: ImageOverlaySettings;
+  /* ------------------------- 4.2 additions ------------------------- */
+  outputSanitize: OutputSanitizeSettings;
 }
 
 /** A single translation work item as sent from content script to background. */
@@ -398,6 +430,10 @@ export interface ContentSettings {
   asrMaxSeconds: number;
   asrConfirmFull: boolean;
   asrMaxUploadMb: number;
+  /** 4.1: overlay translations on the source image. */
+  imageOverlayEnabled: boolean;
+  /** 4.1: stream ASR cues when the backend supports it. */
+  asrStreaming: boolean;
 }
 
 /** Per-provider sliding-window stats (in-memory only, spec 2.0 §8.3). */
@@ -414,6 +450,8 @@ export interface ProviderStats {
 export interface OcrSegment {
   text: string;
   translation: string;
+  /** Optional natural-image-pixel box for the 4.1 overlay. */
+  bbox?: { x0: number; y0: number; x1: number; y1: number };
 }
 
 export interface OcrResult {

@@ -119,3 +119,78 @@ export async function cacheClear(): Promise<void> {
     await chrome.storage.local.remove(keys);
   });
 }
+
+/** Seam for the translation pipeline. Two adapters: chrome.storage and memory. */
+export interface TranslationCache {
+  get(
+    texts: { key: string; text: string }[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion?: number,
+  ): Promise<Map<string, string>>;
+  put(
+    items: { text: string; translated: string }[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion?: number,
+  ): Promise<void>;
+}
+
+/** Production adapter: chrome.storage.local LRU cache. */
+export class ChromeTranslationCache implements TranslationCache {
+  get(
+    texts: { key: string; text: string }[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion = 0,
+  ): Promise<Map<string, string>> {
+    return cacheGet(texts, providerId, sourceLanguage, targetLanguage, glossaryVersion);
+  }
+
+  put(
+    items: { text: string; translated: string }[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion = 0,
+  ): Promise<void> {
+    return cachePut(items, providerId, sourceLanguage, targetLanguage, glossaryVersion);
+  }
+}
+
+/** Test adapter: in-memory map keyed like the production cache. */
+export class MemoryTranslationCache implements TranslationCache {
+  private readonly map = new Map<string, string>();
+
+  async get(
+    texts: { key: string; text: string }[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion = 0,
+  ): Promise<Map<string, string>> {
+    const hits = new Map<string, string>();
+    for (const { key, text } of texts) {
+      const hashed = buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion);
+      const hit = this.map.get(hashed);
+      if (hit !== undefined) hits.set(key, hit);
+    }
+    return hits;
+  }
+
+  async put(
+    items: { text: string; translated: string }[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion = 0,
+  ): Promise<void> {
+    for (const { text, translated } of items) {
+      const hashed = buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion);
+      this.map.set(hashed, translated);
+    }
+  }
+}

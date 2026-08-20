@@ -8,6 +8,7 @@
 import { ProviderError } from '../providers/provider';
 import type { TranslationContext, TranslationProvider } from '../providers/provider';
 import type { OcrSegment } from '../shared/types';
+import { stripThinkTags } from '../shared/sanitize';
 import { stripCodeFences } from '../shared/utils';
 import type { ImageInput, OcrEngine } from './engine';
 import type { OcrResult } from '../shared/types';
@@ -63,7 +64,7 @@ function pickString(obj: Record<string, unknown>, keys: string[]): string | null
  * key names; throws attributed ProviderError('invalid_response') otherwise.
  */
 export function parseVisionResponse(content: string): OcrSegment[] {
-  const cleaned = stripCodeFences(content).trim();
+  const cleaned = stripCodeFences(stripThinkTags(content)).trim();
   if (cleaned === '') {
     throw new ProviderError('invalid_response', '视觉模型返回了空内容');
   }

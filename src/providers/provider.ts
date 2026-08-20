@@ -77,6 +77,17 @@ export interface TranslationProvider {
     ctx: TranslationContext & { languageHint?: string },
     signal: AbortSignal,
   ): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }>;
+  /**
+   * Optional incremental ASR (spec 4.2 §7.1). Implementations push partial
+   * transcripts through onPartial. Absence means the backend has no stream
+   * and the 4.1 one-shot path is used.
+   */
+  transcribeStream?(
+    input: { mime: string; bytes: Uint8Array },
+    ctx: TranslationContext & { languageHint?: string },
+    onPartial: (partial: { text: string; segments?: Array<{ start: number; end: number; text: string }> }) => void,
+    signal: AbortSignal,
+  ): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }>;
 }
 
 /** True when the provider instance supports streaming. */
@@ -92,6 +103,11 @@ export function providerSupportsVision(provider: TranslationProvider): boolean {
 /** True when the provider instance implements ASR (4.0). */
 export function providerSupportsAsr(provider: TranslationProvider): boolean {
   return typeof provider.transcribe === 'function';
+}
+
+/** True when the provider can emit incremental ASR partials (4.2). */
+export function providerSupportsAsrStreaming(provider: TranslationProvider): boolean {
+  return typeof provider.transcribeStream === 'function';
 }
 
 /* ------------------------------ factory registry ----------------------------- */

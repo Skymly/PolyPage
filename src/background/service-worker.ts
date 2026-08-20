@@ -1,9 +1,9 @@
 /**
  * Background service worker (spec §10.1, evolved for 2.0 §9 and 3.0 §9).
  *
- * Responsibilities: settings access, translation queue with batch merging,
- * provider invocation, timeout/retry (delegated to providers), cache writes,
- * error classification + logging. Never touches page DOM.
+ * chrome.runtime adapter: settings, OCR/ASR/PDF, menus, frame state.
+ * Text translation goes through the in-process 翻译管线 module
+ * (`src/translation/pipeline.ts`). Never touches page DOM.
  *
  * 2.0 additions:
  *  - failover chain execution (spec 2.0 §5.6);
@@ -26,12 +26,12 @@
 import { sendTabCommand } from '../messaging/messages';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
-import { createProvider, providerSupportsAsr, providerSupportsStreaming, providerSupportsVision, toProviderError } from '../providers/provider';
+import { createProvider, providerSupportsAsr, providerSupportsVision, toProviderError } from '../providers/provider';
 import { normalizeTranscript } from '../asr/engine';
 import { base64ToBytes } from '../shared/binaryChunk';
 import { nativeRequest } from './nativePort';
 import type { GatewayCapabilities } from '../shared/nativeRpc';
-import type { ProviderError, TranslationContext, TranslationProvider } from '../providers/provider';
+import type { TranslationProvider } from '../providers/provider';
 // Side-effect imports: register provider factories.
 import '../providers/openai-compatible';
 import '../providers/custom-http';
@@ -40,8 +40,16 @@ import '../providers/azure-translator';
 import '../providers/google-translate';
 import '../providers/native-host';
 import { pingNativeHost } from './nativePort';
-import { cacheClear, cacheGet, cachePut, cacheStats } from '../storage/cache';
+import { cacheClear, cacheStats, ChromeTranslationCache } from '../storage/cache';
 import { loadSettings, normalizeSettings, saveSettings } from '../storage/settings';
+import { IdbTmStore, TranslationMemory } from '../storage/tm';
+import {
+  IdbOcrPackStore,
+  OcrPackManager,
+  knownPackId,
+  resolveTessLangs,
+  seedTesseractLangCache,
+} from '../ocr/packs';
 import {
   appendFeedback,
   clearFeedbackLog,
@@ -49,20 +57,17 @@ import {
   loadFeedbackLog,
 } from '../storage/feedback';
 import { IdbTaskStore, TaskTable } from '../storage/taskTable';
-import { engineNeedsVisionProvider } from '../ocr/engine';
-import { LlmVisionEngine } from '../ocr/llm-vision';
-import { TesseractEngine } from '../ocr/tesseract';
 import { detectLanguage } from '../shared/languageDetect';
-import { computeDownsample, needsDownsample } from '../shared/imageUtils';
 import {
-  BATCH_WINDOW_MS,
   DEFAULT_NATIVE_HOST_NAME,
   ERROR_LOG_KEY,
   ERROR_LOG_MAX,
-  IMAGE_MAX_BYTES,
-  MAX_CONCURRENT_REQUESTS,
   defaultSettings,
 } from '../shared/constants';
+import { OcrRoundTrip } from '../ocr/roundtrip';
+import { ChromeOcrCache } from '../ocr/resultCache';
+import { TranslationPipeline } from '../translation/pipeline';
+import { buildContext, effectiveLanguages, isProviderConfigured } from '../translation/context';
 import { renderGlossary } from '../shared/siteRules';
 import type {
   ContentSettings,
@@ -82,51 +87,28 @@ import type {
 /* --------------------------------- settings --------------------------------- */
 
 let settingsCache: Settings | null = null;
+const translationMemory = new TranslationMemory(new IdbTmStore());
+const ocrPacks = new OcrPackManager(new IdbOcrPackStore());
+let tmSessionHits = 0;
+
+function detectBrowser(): 'firefox' | 'chromium' {
+  return typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent) ? 'firefox' : 'chromium';
+}
+
+function nativeFailureReason(error?: string): string {
+  const browser = detectBrowser();
+  if (browser === 'firefox') {
+    return (
+      (error ? error + '。' : '') +
+      'Firefox 需安装器写入 HKCU\\Software\\Mozilla\\NativeMessagingHosts，且 allowed_extensions 包含 polypage@skymly.com（与 dist-firefox gecko.id 一致）。'
+    );
+  }
+  return error ?? '本地网关未安装或不可达';
+}
 
 async function getSettings(force = false): Promise<Settings> {
   if (!settingsCache || force) settingsCache = await loadSettings();
   return settingsCache;
-}
-
-function effectiveLanguages(settings: Settings, provider: ProviderConfig) {
-  return {
-    source: provider.sourceLanguage.trim() !== '' ? provider.sourceLanguage : settings.defaultSourceLanguage,
-    target: provider.targetLanguage.trim() !== '' ? provider.targetLanguage : settings.defaultTargetLanguage,
-  };
-}
-
-/**
- * Build the provider context. 3.0: when the effective source language is
- * "auto" and language detection is on, the detected page language fills in
- * (spec 3.0 §8.1 item 2); uncertain detection falls back to the original
- * auto behavior (spec §8.1 item 4).
- */
-function buildContext(
-  settings: Settings,
-  provider: ProviderConfig,
-  domain?: string,
-  pageLanguage?: string | null,
-): TranslationContext {
-  const { source, target } = effectiveLanguages(settings, provider);
-  const resolvedSource =
-    source.trim().toLowerCase() === 'auto' &&
-    settings.languageDetection === 'auto' &&
-    typeof pageLanguage === 'string' &&
-    pageLanguage !== ''
-      ? pageLanguage
-      : source;
-  return {
-    sourceLanguage: resolvedSource,
-    targetLanguage: target,
-    domain,
-    glossary: renderGlossary(settings.glossary),
-  };
-}
-
-function isProviderConfigured(provider: ProviderConfig): boolean {
-  if (!provider.enabled) return false;
-  if (provider.type === 'native-host') return (provider.hostName ?? '').trim() !== '';
-  return provider.baseUrl.trim() !== '';
 }
 
 /** Last probed gateway capabilities (protocol=1 greys vision/ASR). */
@@ -215,20 +197,6 @@ async function logError(
  *  is unavailable (never blocks translation). */
 const taskTable = new TaskTable(new IdbTaskStore());
 
-async function recordInflight(
-  tabId: number | undefined,
-  frameId: number | undefined,
-  key: string,
-  text: string,
-): Promise<void> {
-  if (tabId === undefined || key === '') return;
-  try {
-    await taskTable.markInflight(tabId, frameId ?? 0, [{ key, text }]);
-  } catch {
-    /* persistence is best-effort */
-  }
-}
-
 async function completeTasks(tabId: number | undefined, keys: string[]): Promise<void> {
   if (tabId === undefined || keys.length === 0) return;
   try {
@@ -238,351 +206,52 @@ async function completeTasks(tabId: number | undefined, keys: string[]): Promise
   }
 }
 
-/* --------------------------------- queue ------------------------------------- */
+/* ------------------------------ translation pipeline ------------------------- */
 
-interface QueueItem {
-  text: string;
-  providerId: string;
-  domain?: string;
-  tabId?: number;
-  frameId?: number;
-  key: string;
-  pageLanguage?: string | null;
-  resolve: (r: { translated?: string; error?: { kind: ErrorKind; message: string } }) => void;
-}
-
-const inflightByTab = new Map<number, Set<AbortController>>();
-function registerInflight(tabId: number | undefined, controller: AbortController): void {
-  if (tabId === undefined) return;
-  let set = inflightByTab.get(tabId);
-  if (!set) {
-    set = new Set();
-    inflightByTab.set(tabId, set);
-  }
-  set.add(controller);
-}
-
-function unregisterInflight(tabId: number | undefined, controller: AbortController): void {
-  if (tabId === undefined) return;
-  const set = inflightByTab.get(tabId);
-  if (!set) return;
-  set.delete(controller);
-  if (set.size === 0) inflightByTab.delete(tabId);
-}
-
-function cancelTabTranslations(tabId: number): void {
-  const set = inflightByTab.get(tabId);
-  if (!set) return;
-  inflightByTab.delete(tabId);
-  for (const controller of set) {
+const pipeline = new TranslationPipeline({
+  getSettings,
+  cache: new ChromeTranslationCache(),
+  tm: translationMemory,
+  createProvider,
+  recordStat,
+  logError,
+  onTmHit: () => {
+    tmSessionHits += 1;
+  },
+  recordInflight: async (tabId, frameId, items) => {
+    if (tabId === undefined || items.length === 0) return;
     try {
-      controller.abort();
+      await taskTable.markInflight(tabId, frameId ?? 0, items);
     } catch {
-      /* ignore */
+      /* persistence is best-effort */
     }
-  }
-}
+  },
+  completeTasks,
+});
 
-const queue: QueueItem[] = [];
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
-/** Set by the last flush when a failover served a batch (popup hint). */
-let lastFailoverInfo: { providerName: string } | null = null;
-
-interface EnqueueOptions {
-  domain?: string;
-  tabId?: number;
-  frameId?: number;
-  key?: string;
-  pageLanguage?: string | null;
-  /** Skip the 80ms batch window (subtitle cues need low latency). */
-  immediate?: boolean;
-}
-
-function enqueue(
-  providerId: string,
-  text: string,
-  options: EnqueueOptions = {},
-): Promise<{ translated?: string; error?: { kind: ErrorKind; message: string } }> {
-  return new Promise((resolve) => {
-    queue.push({
-      text,
-      providerId,
-      domain: options.domain,
-      tabId: options.tabId,
-      frameId: options.frameId,
-      key: options.key ?? '',
-      pageLanguage: options.pageLanguage,
-      resolve,
-    });
-    const schedule = (): void => {
-      if (!flushTimer) {
-        flushTimer = setTimeout(() => {
-          flushTimer = null;
-          void flushQueue();
-        }, BATCH_WINDOW_MS);
-      }
-    };
-    if (options.immediate) {
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
-      void flushQueue();
-    } else {
-      schedule();
-    }
-  });
-}
-
-/** Errors that justify failing over to the next provider (spec 2.0 §5.6). */
-function failoverEligible(kind: ErrorKind, providerType: string): boolean {
-  if (kind === 'network' || kind === 'timeout' || kind === 'rate_limit' || kind === 'server') return true;
-  // native host not installed / unreachable counts as a config failure.
-  return kind === 'config' && providerType === 'native-host';
-}
-
-/** Ordered list of provider ids to try after `providerId` fails. */
-function buildFailoverChain(settings: Settings, providerId: string): string[] {
-  const chain: string[] = [];
-  const configured = settings.failoverChain ?? [];
-  const index = configured.indexOf(providerId);
-  if (index >= 0) chain.push(...configured.slice(index + 1));
-  else chain.push(...configured.filter((id) => id !== providerId));
-  // native-host per-provider fallback always participates.
-  const provider = settings.providers.find((p) => p.id === providerId);
-  if (provider?.type === 'native-host' && provider.fallbackProviderId) {
-    if (!chain.includes(provider.fallbackProviderId)) chain.push(provider.fallbackProviderId);
-  }
-  // Deduplicate and drop disabled/missing providers.
-  const seen = new Set<string>();
-  return chain.filter((id) => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    const p = settings.providers.find((x) => x.id === id);
-    return !!p && isProviderConfigured(p);
-  });
-}
-
-async function flushQueue(): Promise<void> {
-  const items = queue.splice(0, queue.length);
-  if (items.length === 0) return;
-  const settings = await getSettings(true);
-
-  // Group by provider AND tab so each batch belongs to exactly one cancel
-  // scope (spec 2.0 §5.3 item 5: cancel must not hit unrelated tabs).
-  const groups = new Map<string, QueueItem[]>();
-  for (const item of items) {
-    const key = `${item.providerId}|${item.tabId ?? -1}`;
-    const list = groups.get(key) ?? [];
-    list.push(item);
-    groups.set(key, list);
-  }
-
-  const jobs: Promise<void>[] = [];
-  for (const group of groups.values()) {
-    const providerId = group[0].providerId;
-    const groupTabId = group[0].tabId;
-    const groupFrameId = group[0].frameId;
-    const provider = settings.providers.find((p) => p.id === providerId);
-    if (!provider || !isProviderConfigured(provider)) {
-      const message = !provider
-        ? '翻译服务未配置'
-        : !provider.enabled
-          ? '翻译服务已禁用'
-          : provider.type === 'native-host'
-            ? '本地网关未配置 Host 名称'
-            : '未配置 Base URL，请在设置页填写';
-      for (const item of group) item.resolve({ error: { kind: 'config', message } });
-      await logError('background', 'config', `Provider "${provider?.name ?? providerId}": ${message}`, providerId);
-      continue;
-    }
-    const { source, target } = effectiveLanguages(settings, provider);
-
-    // Cache lookup first (glossary version participates in the key).
-    let hits = new Map<string, string>();
-    if (settings.cacheEnabled) {
-      try {
-        hits = await cacheGet(
-          group.map((g, i) => ({ key: String(i), text: g.text })),
-          providerId,
-          source,
-          target,
-          settings.glossaryVersion,
-        );
-      } catch {
-        hits = new Map();
-      }
-    }
-    const misses: QueueItem[] = [];
-    group.forEach((item, i) => {
-      const cached = hits.get(String(i));
-      if (cached !== undefined) item.resolve({ translated: cached });
-      else misses.push(item);
-    });
-    if (misses.length === 0) continue;
-
-    // 3.0 resume: persist in-flight tasks before hitting the network.
-    await recordInflight(
-      groupTabId,
-      groupFrameId,
-      misses.length === 1 ? misses[0].key : '',
-      misses.length === 1 ? misses[0].text : '',
+const ocrRoundTrip = new OcrRoundTrip({
+  getSettings,
+  cache: new ChromeOcrCache(),
+  createProvider,
+  translateTexts: async (texts) => {
+    const res = await pipeline.translate(
+      texts.map((text, i) => ({ text, key: `ocr-${i}` })),
+      { immediate: true },
     );
-    if (misses.length > 1) {
-      try {
-        await taskTable.markInflight(
-          groupTabId ?? -1,
-          groupFrameId ?? 0,
-          misses.filter((m) => m.key !== '').map((m) => ({ key: m.key, text: m.text })),
-        );
-      } catch {
-        /* best-effort */
-      }
+    return texts.map((_, i) => res.results[`ocr-${i}`] ?? '');
+  },
+  prepareTesseractLangs: async (tessLangs, extraLangs) => {
+    const ready = await ocrPacks.readyIds();
+    const resolved = await resolveTessLangs(tessLangs, extraLangs, ready);
+    for (const id of resolved.langs) {
+      const pack = await ocrPacks.getReady(id);
+      if (pack) await seedTesseractLangCache(id, pack.data);
     }
-
-    // Respect batch size limits.
-    let chars = 0;
-    let batch: QueueItem[] = [];
-    const batches: QueueItem[][] = [];
-    for (const item of misses) {
-      if (
-        batch.length > 0 &&
-        (batch.length >= provider.maxBatchItems || chars + item.text.length > provider.maxBatchChars)
-      ) {
-        batches.push(batch);
-        batch = [];
-        chars = 0;
-      }
-      batch.push(item);
-      chars += item.text.length;
-    }
-    if (batch.length > 0) batches.push(batch);
-
-    for (const b of batches) {
-      jobs.push(runBatchWithFailover(settings, provider, b, groupTabId));
-    }
-  }
-
-  // Run with bounded concurrency.
-  let index = 0;
-  const workers = Array.from({ length: Math.min(MAX_CONCURRENT_REQUESTS, jobs.length) }, async () => {
-    while (index < jobs.length) {
-      const job = jobs[index++];
-      await job;
-    }
-  });
-  await Promise.all(workers);
-}
-
-/**
- * Run one batch; on an eligible whole-batch failure walk the failover chain
- * (spec 2.0 §5.6). Failover applies to the whole batch, once per provider.
- */
-async function runBatchWithFailover(
-  settings: Settings,
-  primary: ProviderConfig,
-  batch: QueueItem[],
-  tabId?: number,
-): Promise<void> {
-  const chain = buildFailoverChain(settings, primary.id);
-  const attempts: ProviderConfig[] = [primary];
-  for (const id of chain) {
-    const next = settings.providers.find((p) => p.id === id);
-    if (next) attempts.push(next);
-  }
-
-  for (let i = 0; i < attempts.length; i++) {
-    const provider = attempts[i];
-    const error = await runBatch(settings, provider, batch, tabId);
-    if (!error) {
-      if (i > 0) {
-        lastFailoverInfo = { providerName: provider.name };
-        await logError(
-          'failover',
-          'unknown',
-          `故障转移成功：${primary.name} → ${provider.name}`,
-          provider.id,
-        );
-      }
-      return;
-    }
-    const eligible = failoverEligible(error.kind, provider.type);
-    if (!eligible || i === attempts.length - 1) {
-      for (const item of batch) item.resolve({ error: { kind: error.kind, message: error.message } });
-      await completeTasks(tabId, batch.map((b) => b.key).filter((k) => k !== ''));
-      await logError('background', error.kind, `Provider "${provider.name}": ${error.message}`, provider.id);
-      return;
-    }
-    await logError(
-      'failover',
-      error.kind,
-      `Provider "${provider.name}" 失败（${error.kind}），尝试链条下一个服务`,
-      provider.id,
-    );
-  }
-}
-
-/**
- * Run one provider for a batch. Returns null on success; otherwise the
- * ProviderError describing the whole-batch failure (items left unresolved).
- */
-async function runBatch(
-  settings: Settings,
-  providerConfig: ProviderConfig,
-  batch: QueueItem[],
-  tabId?: number,
-): Promise<{ kind: ErrorKind; message: string } | null> {
-  let instance: TranslationProvider;
-  try {
-    instance = createProvider(providerConfig);
-  } catch (e) {
-    const err = toProviderError(e);
-    for (const item of batch) item.resolve({ error: { kind: err.kind, message: err.message } });
-    await logError('background', err.kind, err.message, providerConfig.id);
-    return null;
-  }
-  const started = Date.now();
-  const controller = new AbortController();
-  registerInflight(tabId, controller);
-  try {
-    const texts = batch.map((b) => b.text);
-    const ctx = buildContext(settings, providerConfig, batch[0]?.domain, batch[0]?.pageLanguage);
-    const { source, target } = effectiveLanguages(settings, providerConfig);
-    const translated = await instance.translateTexts(texts, ctx, controller.signal);
-    const successes: { text: string; translated: string }[] = [];
-    const doneKeys: string[] = [];
-    batch.forEach((item, i) => {
-      const t = translated[i];
-      if (typeof t === 'string' && t.trim() !== '') {
-        item.resolve({ translated: t });
-        successes.push({ text: item.text, translated: t });
-        if (item.key !== '') doneKeys.push(item.key);
-      } else {
-        item.resolve({ error: { kind: 'invalid_response', message: '该条目缺少翻译结果' } });
-      }
-    });
-    recordStat(providerConfig.id, true, Date.now() - started);
-    if (settings.cacheEnabled && successes.length > 0) {
-      try {
-        await cachePut(successes, providerConfig.id, source, target, settings.glossaryVersion);
-      } catch {
-        // cache failures never break translation results
-      }
-    }
-    // Fire-and-forget: awaiting here would settle the batch one microtask
-    // later, letting handleTranslate read lastFailoverInfo before
-    // runBatchWithFailover writes it (actualProvider attribution race).
-    void completeTasks(tabId, doneKeys);
-    return null;
-  } catch (e) {
-    const err = toProviderError(e) as ProviderError;
-    recordStat(providerConfig.id, false, Date.now() - started, err.message);
-    return { kind: err.kind, message: err.message };
-  } finally {
-    unregisterInflight(tabId, controller);
-  }
-}
-/* ------------------------------- message router ------------------------------ */
+    return resolved.langs;
+  },
+  recordStat,
+  logError,
+});
 
 async function handleTranslate(
   items: TranslationItem[],
@@ -591,94 +260,64 @@ async function handleTranslate(
   frameId?: number,
   pageLanguage?: string | null,
 ): Promise<TranslateResults> {
-  const settings = await getSettings();
-  const activeProviderId = settings.activeProviderId;
-  const settled = await Promise.all(
-    items.map(async (item) => {
-      const outcome = await enqueue(activeProviderId, item.text, {
-        domain,
-        tabId,
-        frameId,
-        key: item.key,
-        pageLanguage,
-      });
-      return { key: item.key, outcome };
-    }),
+  return pipeline.translate(
+    items.map((item) => ({
+      text: item.text,
+      key: item.key,
+      domain,
+      tabId,
+      frameId,
+      pageLanguage,
+    })),
   );
-  const results: TranslateResults = { results: {}, errors: {} };
-  for (const { key, outcome } of settled) {
-    if (outcome.translated !== undefined) results.results[key] = outcome.translated;
-    else if (outcome.error) results.errors[key] = outcome.error;
-    else results.errors[key] = { kind: 'unknown', message: '未知错误' };
-  }
-  if (lastFailoverInfo) {
-    results.actualProviderName = lastFailoverInfo.providerName;
-    lastFailoverInfo = null;
-  }
-  return results;
 }
 
-/** 3.0 (pillar G): low-latency single-text path for subtitle cues — same
- *  provider/cache/error machinery, no batch window. */
 async function handleTranslateCue(
   text: string,
   domain?: string,
   tabId?: number,
 ): Promise<{ translated?: string; error?: string }> {
-  const settings = await getSettings();
-  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  if (!provider || !isProviderConfigured(provider)) {
-    return { error: '翻译服务未配置或已禁用' };
-  }
-  const { source, target } = effectiveLanguages(settings, provider);
-  if (settings.cacheEnabled) {
-    try {
-      const hits = await cacheGet(
-        [{ key: 'cue', text }],
-        provider.id,
-        source,
-        target,
-        settings.glossaryVersion,
-      );
-      const cached = hits.get('cue');
-      if (cached !== undefined) return { translated: cached };
-    } catch {
-      /* fall through to provider */
-    }
-  }
-  let instance: TranslationProvider;
-  try {
-    instance = createProvider(provider);
-  } catch (e) {
-    return { error: toProviderError(e).message };
-  }
-  const started = Date.now();
-  const controller = new AbortController();
-  registerInflight(tabId, controller);
-  try {
-    const ctx = buildContext(settings, provider, domain);
-    const translated = await instance.translateTexts([text], ctx, controller.signal);
-    const first = translated[0];
-    if (typeof first !== 'string' || first.trim() === '') {
-      return { error: '缺少翻译结果' };
-    }
-    recordStat(provider.id, true, Date.now() - started);
-    if (settings.cacheEnabled) {
-      try {
-        await cachePut([{ text, translated: first }], provider.id, source, target, settings.glossaryVersion);
-      } catch {
-        /* cache best-effort */
-      }
-    }
-    return { translated: first };
-  } catch (e) {
-    const err = toProviderError(e);
-    recordStat(provider.id, false, Date.now() - started, err.message);
-    return { error: err.message };
-  } finally {
-    unregisterInflight(tabId, controller);
-  }
+  const res = await pipeline.translate([{ text, domain, tabId }], { immediate: true });
+  const translated = Object.values(res.results)[0];
+  if (translated !== undefined) return { translated };
+  const err = Object.values(res.errors)[0];
+  return { error: err?.message ?? '翻译失败' };
 }
+
+async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortInit): Promise<void> {
+  const post = (msg: StreamPortMessage): void => {
+    try {
+      port.postMessage(msg);
+    } catch {
+      /* receiver closed */
+    }
+  };
+  const controller = new AbortController();
+  port.onDisconnect.addListener(() => controller.abort());
+  const res = await pipeline.translate(
+    init.items.map((item) => ({ text: item.text, key: item.key, domain: init.domain })),
+    {
+      immediate: true,
+      onDelta: (key, delta) => post({ type: 'delta', key, delta }),
+      signal: controller.signal,
+    },
+  );
+  for (const item of init.items) {
+    const text = res.results[item.key];
+    if (text !== undefined) post({ type: 'done', key: item.key, text });
+    else {
+      const err = res.errors[item.key];
+      post({
+        type: 'error',
+        key: item.key,
+        kind: err?.kind ?? 'unknown',
+        message: err?.message ?? '翻译失败',
+      });
+    }
+  }
+  post({ type: 'finished' });
+}
+
 
 async function handleAsrStart(
   requestId: string,
@@ -687,6 +326,7 @@ async function handleAsrStart(
   windowStart: number,
   windowDuration: number,
   languageHint?: string,
+  tabId?: number,
 ): Promise<AsrResponse> {
   const settings = await getSettings(true);
   if (!settings.asr.enabled) {
@@ -721,7 +361,26 @@ async function handleAsrStart(
       ...buildContext(settings, provider),
       languageHint: languageHint && languageHint !== 'auto' ? languageHint : undefined,
     };
-    const raw = await instance.transcribe({ mime, bytes }, ctx, controller.signal);
+    const emitPartials = settings.asr.streaming === true && tabId !== undefined;
+    const streamingFn = instance.transcribeStream;
+    let raw: { text: string; segments?: Array<{ start: number; end: number; text: string }> };
+    if (emitPartials && typeof streamingFn === 'function') {
+      raw = await streamingFn.call(
+        instance,
+        { mime, bytes },
+        ctx,
+        (partial) => {
+          const cues = normalizeTranscript(partial, windowStart, windowDuration);
+          void sendTabCommand(tabId, {
+            type: 'wt:asr-partial',
+            cues: cues.map((c) => ({ start: c.start, end: c.end, text: c.text })),
+          }).catch(() => undefined);
+        },
+        controller.signal,
+      );
+    } else {
+      raw = await instance.transcribe({ mime, bytes }, ctx, controller.signal);
+    }
     const cues = normalizeTranscript(raw, windowStart, windowDuration);
     recordStat(provider.id, true, Date.now() - started);
     return {
@@ -773,7 +432,7 @@ function recordFrameState(tabId: number | undefined, frameId: number | undefined
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   frameStates.delete(tabId);
-  cancelTabTranslations(tabId);
+  pipeline.cancelTab(tabId);
   void taskTable.removeTab(tabId).catch(() => undefined);
 });
 
@@ -797,8 +456,6 @@ async function handleGetFrameStates(tabId?: number): Promise<{ frames: FrameStat
   };
 }
 
-/* --------------------------------- streaming --------------------------------- */
-
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== STREAM_PORT_NAME) return;
   port.onMessage.addListener((raw: unknown) => {
@@ -810,157 +467,11 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortInit): Promise<void> {
-  const settings = await getSettings(true);
-  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  const post = (msg: StreamPortMessage): void => {
-    try {
-      port.postMessage(msg);
-    } catch {
-      /* receiver closed */
-    }
-  };
-  if (!provider || !isProviderConfigured(provider)) {
-    for (const item of init.items) {
-      post({ type: 'error', key: item.key, kind: 'config', message: '翻译服务未配置或已禁用' });
-    }
-    post({ type: 'finished' });
-    return;
-  }
-  let instance: TranslationProvider;
-  try {
-    instance = createProvider(provider);
-  } catch (e) {
-    const err = toProviderError(e);
-    for (const item of init.items) post({ type: 'error', key: item.key, kind: err.kind, message: err.message });
-    post({ type: 'finished' });
-    return;
-  }
-
-  const ctx = buildContext(settings, provider, init.domain);
-  const streaming = providerSupportsStreaming(instance);
-  const controller = new AbortController();
-  port.onDisconnect.addListener(() => controller.abort());
-
-  if (!streaming) {
-    // Fallback: batch translate, then emit each result as a single delta.
-    try {
-      const texts = init.items.map((i) => i.text);
-      const translated = await instance.translateTexts(texts, ctx, controller.signal);
-      init.items.forEach((item, i) => {
-        const text = translated[i] ?? '';
-        if (text !== '') {
-          post({ type: 'delta', key: item.key, delta: text });
-          post({ type: 'done', key: item.key, text });
-        } else {
-          post({ type: 'error', key: item.key, kind: 'invalid_response', message: '缺少翻译结果' });
-        }
-      });
-      if (settings.cacheEnabled) {
-        const successes = init.items
-          .map((item, i) => ({ text: item.text, translated: translated[i] ?? '' }))
-          .filter((x) => x.translated !== '');
-        const { source, target } = effectiveLanguages(settings, provider);
-        await cachePut(successes, provider.id, source, target, settings.glossaryVersion);
-      }
-    } catch (e) {
-      const err = toProviderError(e);
-      for (const item of init.items) post({ type: 'error', key: item.key, kind: err.kind, message: err.message });
-    }
-    post({ type: 'finished' });
-    return;
-  }
-
-  for (const item of init.items) {
-    if (controller.signal.aborted) break;
-    try {
-      const full = await instance.translateStream!(
-        item.text,
-        ctx,
-        (delta) => post({ type: 'delta', key: item.key, delta }),
-        controller.signal,
-      );
-      post({ type: 'done', key: item.key, text: full });
-      if (settings.cacheEnabled) {
-        const { source, target } = effectiveLanguages(settings, provider);
-        await cachePut([{ text: item.text, translated: full }], provider.id, source, target, settings.glossaryVersion);
-      }
-    } catch (e) {
-      const err = toProviderError(e);
-      post({ type: 'error', key: item.key, kind: err.kind, message: err.message });
-    }
-  }
-  post({ type: 'finished' });
-}
 /* ------------------------------ OCR pipeline (3.0 F) ------------------------- */
 
 const ocrControllers = new Map<string, AbortController>();
 const asrControllers = new Map<string, AbortController>();
 
-function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return `data:${mime};base64,${btoa(binary)}`;
-}
-
-async function sha256Hex(bytes: ArrayBuffer): Promise<string | null> {
-  try {
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  } catch {
-    return null;
-  }
-}
-
-/** Fetch image bytes from the background (host permissions apply). */
-async function fetchImageBytes(url: string, signal: AbortSignal): Promise<{ buffer: ArrayBuffer; mime: string }> {
-  const res = await fetch(url, { signal, credentials: 'include' });
-  if (!res.ok) throw new Error(`图片下载失败（HTTP ${res.status}）`);
-  const buffer = await res.arrayBuffer();
-  if (buffer.byteLength === 0) throw new Error('图片内容为空');
-  return { buffer, mime: res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/png' };
-}
-
-/** Downsample when edge/size limits are exceeded (spec 3.0 §6.2 item 4). */
-async function prepareDataUrl(
-  buffer: ArrayBuffer,
-  mime: string,
-  maxEdgePx: number,
-): Promise<string> {
-  const bytes = new Uint8Array(buffer);
-  let bitmap: ImageBitmap | null = null;
-  try {
-    if (!needsDownsample(1, 1, buffer.byteLength, maxEdgePx, IMAGE_MAX_BYTES)) {
-      return bytesToDataUrl(bytes, mime);
-    }
-    bitmap = await createImageBitmap(new Blob([buffer], { type: mime }));
-  } catch {
-    // Undecodable as an image bitmap: send raw bytes and let the API decide.
-    return bytesToDataUrl(bytes, mime);
-  }
-  const needsResize = needsDownsample(bitmap.width, bitmap.height, buffer.byteLength, maxEdgePx, IMAGE_MAX_BYTES);
-  if (!needsResize) {
-    bitmap.close();
-    return bytesToDataUrl(bytes, mime);
-  }
-  const target = computeDownsample(bitmap.width, bitmap.height, maxEdgePx);
-  const canvas = new OffscreenCanvas(target.width, target.height);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    bitmap.close();
-    return bytesToDataUrl(bytes, mime);
-  }
-  ctx.drawImage(bitmap, 0, 0, target.width, target.height);
-  bitmap.close();
-  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
-  const out = new Uint8Array(await blob.arrayBuffer());
-  return bytesToDataUrl(out, 'image/jpeg');
-}
-
-/** Full OCR round trip: fetch -> hash -> cache -> engine -> optional translate -> cache put. */
 async function handleOcrRequest(
   requestId: string,
   url: string,
@@ -968,119 +479,16 @@ async function handleOcrRequest(
   naturalHeight: number | undefined,
   cacheIdentity?: string,
 ): Promise<OcrResponse> {
-  const settings = await getSettings(true);
-  if (!settings.imageTranslate.enabled) {
-    return { ok: false, kind: 'config', error: '图片翻译已在设置中关闭' };
-  }
-  const engineId = settings.imageTranslate.engine;
-  const needsVision = engineNeedsVisionProvider(engineId);
-  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  const providerReady = !!provider && isProviderConfigured(provider);
-
-  // llm-vision still requires a configured provider. tesseract-wasm can run
-  // OCR-only (仅识别) when the provider is missing or unconfigured.
-  if (needsVision && !providerReady) {
-    return { ok: false, kind: 'config', error: '翻译服务未配置或已禁用' };
-  }
-
-  let instance: TranslationProvider | undefined;
-  if (providerReady && provider) {
-    try {
-      instance = createProvider(provider);
-    } catch (e) {
-      const err = toProviderError(e);
-      if (needsVision) return { ok: false, kind: err.kind, error: err.message };
-    }
-  }
-  if (needsVision) {
-    if (!instance) {
-      return { ok: false, kind: 'config', error: '翻译服务未配置或已禁用' };
-    }
-    if (!providerSupportsVision(instance)) {
-      return { ok: false, kind: 'config', error: '当前翻译服务不支持视觉翻译' };
-    }
-  }
-
   const controller = new AbortController();
   ocrControllers.set(requestId, controller);
-  const started = Date.now();
   try {
-    const { buffer, mime } = await fetchImageBytes(url, controller.signal);
-    const contentHash = await sha256Hex(buffer);
-    // Cache key: content hash for fetchable images; URL + natural size as
-    // the fallback identity (spec 3.0 §6.4 item 1). Language pair and
-    // glossaryVersion join via the shared cache key builder. Engine id is
-    // always included so tesseract / vision results never collide.
-    const identity = contentHash
-      ? `img|${contentHash}`
-      : `imgurl|${url}|${naturalWidth ?? 0}x${naturalHeight ?? 0}`;
-    const cacheText = `img:${cacheIdentity ?? identity}|${engineId}`;
-    const { source, target } = provider
-      ? effectiveLanguages(settings, provider)
-      : { source: settings.defaultSourceLanguage, target: settings.defaultTargetLanguage };
-    if (settings.cacheEnabled && provider) {
-      try {
-        const hits = await cacheGet(
-          [{ key: 'ocr', text: cacheText }],
-          provider.id,
-          source,
-          target,
-          settings.glossaryVersion,
-        );
-        const cached = hits.get('ocr');
-        if (cached !== undefined) {
-          const segments = JSON.parse(cached) as { text: string; translation: string }[];
-          return { ok: true, segments, cached: true, engine: engineId };
-        }
-      } catch {
-        /* fall through */
-      }
-    }
-
-    const dataUrl = await prepareDataUrl(buffer, mime, settings.imageTranslate.maxEdgePx);
-    const ctx = provider
-      ? buildContext(settings, provider)
-      : {
-          sourceLanguage: settings.defaultSourceLanguage,
-          targetLanguage: settings.defaultTargetLanguage,
-          glossary: renderGlossary(settings.glossary),
-        };
-    const engine =
-      engineId === 'tesseract-wasm'
-        ? new TesseractEngine(undefined, settings.imageTranslate.tessLangs)
-        : new LlmVisionEngine(instance!);
-    const result = await engine.recognize({ dataUrl }, ctx, controller.signal);
-    let segments = result.segments;
-    if (engine.id === 'tesseract-wasm' && instance) {
-      const texts = segments.map((s) => s.text);
-      const translated = texts.length > 0 ? await instance.translateTexts(texts, ctx, controller.signal) : [];
-      segments = segments.map((s, i) => ({ text: s.text, translation: translated[i] ?? '' }));
-    }
-    if (provider) {
-      recordStat(provider.id, true, Date.now() - started);
-    }
-
-    if (settings.cacheEnabled && provider) {
-      try {
-        await cachePut(
-          [{ text: cacheText, translated: JSON.stringify(segments) }],
-          provider.id,
-          source,
-          target,
-          settings.glossaryVersion,
-        );
-      } catch {
-        /* cache best-effort */
-      }
-    }
-    return { ok: true, segments, cached: false, engine: engine.id };
-  } catch (e) {
-    const err = toProviderError(e);
-    if (provider) {
-      recordStat(provider.id, false, Date.now() - started, err.message);
-    }
-    await logError('ocr', err.kind, `图片翻译失败: ${err.message}`, provider?.id);
-    return { ok: false, kind: err.kind, error: err.message };
+    return await ocrRoundTrip.recognize({
+      url,
+      naturalWidth,
+      naturalHeight,
+      cacheIdentity,
+      signal: controller.signal,
+    });
   } finally {
     ocrControllers.delete(requestId);
   }
@@ -1260,25 +668,30 @@ chrome.runtime.onMessage.addListener(
             );
             break;
           case 'cancel-translations':
-            if (sender.tab?.id !== undefined) cancelTabTranslations(sender.tab.id);
+            if (sender.tab?.id !== undefined) pipeline.cancelTab(sender.tab.id);
             sendResponse({ ok: true });
             break;
           case 'translate-selection': {
             const settings = await getSettings();
-            const outcome = await enqueue(settings.activeProviderId, message.text, {
-              domain: message.domain,
-              tabId: sender.tab?.id,
-              frameId: sender.frameId,
-              key: 'selection',
-            });
-            if (outcome.translated !== undefined) {
+            const outcome = await pipeline.translate(
+              [
+                {
+                  text: message.text,
+                  domain: message.domain,
+                  tabId: sender.tab?.id,
+                  frameId: sender.frameId,
+                  key: 'selection',
+                },
+              ],
+            );
+            if (outcome.results.selection !== undefined) {
               const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
               const target = provider
                 ? effectiveLanguages(settings, provider).target
                 : settings.defaultTargetLanguage;
-              sendResponse({ ok: true, translated: outcome.translated, language: target });
+              sendResponse({ ok: true, translated: outcome.results.selection, language: target });
             } else {
-              sendResponse({ ok: false, error: outcome.error?.message ?? '翻译失败' });
+              sendResponse({ ok: false, error: outcome.errors.selection?.message ?? '翻译失败' });
             }
             break;
           }
@@ -1319,6 +732,8 @@ chrome.runtime.onMessage.addListener(
               asrMaxSeconds: s.asr.maxSeconds,
               asrConfirmFull: s.asr.confirmFull,
               asrMaxUploadMb: s.asr.maxUploadMb,
+              imageOverlayEnabled: s.imageOverlay.enabled,
+              asrStreaming: s.asr.streaming,
             };
             sendResponse(cs);
             break;
@@ -1399,12 +814,19 @@ chrome.runtime.onMessage.addListener(
                   { timeoutMs: 8000 },
                 );
               } catch {
-                lastGatewayCaps = { protocol: 1 };
+                lastGatewayCaps = { protocol: typeof ping.protocol === 'number' ? ping.protocol : 1 };
               }
             } else {
               lastGatewayCaps = null;
             }
-            sendResponse({ installed: ping.ok, version: ping.version, error: ping.error });
+            sendResponse({
+              installed: ping.ok,
+              version: ping.version,
+              protocol: lastGatewayCaps?.protocol ?? ping.protocol,
+              error: ping.error,
+              browser: detectBrowser(),
+              reason: ping.ok ? undefined : nativeFailureReason(ping.error),
+            });
             break;
           }
           case 'get-provider-stats':
@@ -1503,9 +925,69 @@ chrome.runtime.onMessage.addListener(
                 message.windowStart,
                 message.windowDuration,
                 message.languageHint,
+                sender.tab?.id,
               ),
             );
             break;
+          case 'tm-clear':
+            await translationMemory.clear();
+            tmSessionHits = 0;
+            sendResponse({ ok: true });
+            break;
+          case 'tm-stats': {
+            const stats = await translationMemory.stats();
+            const s = await getSettings();
+            sendResponse({
+              entries: stats.entries,
+              hits: stats.hits,
+              sessionHits: tmSessionHits,
+              enabled: s.translationMemory.enabled,
+            });
+            break;
+          }
+          case 'ocr-pack-download': {
+            try {
+              if (!knownPackId(message.lang)) {
+                sendResponse({ ok: false, error: '未列出的语言包' });
+                break;
+              }
+              await ocrPacks.download(message.lang);
+              const s = await getSettings(true);
+              if (!s.ocrPacks.extraLangs.includes(message.lang)) {
+                s.ocrPacks = { extraLangs: [...s.ocrPacks.extraLangs, message.lang] };
+                s.imageTranslate = {
+                  ...s.imageTranslate,
+                  tessLangs: [...new Set([...s.imageTranslate.tessLangs, message.lang])],
+                };
+                await saveSettings(s);
+                settingsCache = s;
+              }
+              sendResponse({ ok: true });
+            } catch (e) {
+              sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+            }
+            break;
+          }
+          case 'ocr-pack-progress':
+            sendResponse({ packs: await ocrPacks.status() });
+            break;
+          case 'ocr-pack-remove': {
+            try {
+              await ocrPacks.remove(message.lang);
+              const s = await getSettings(true);
+              s.ocrPacks = { extraLangs: s.ocrPacks.extraLangs.filter((id) => id !== message.lang) };
+              s.imageTranslate = {
+                ...s.imageTranslate,
+                tessLangs: s.imageTranslate.tessLangs.filter((id) => id !== message.lang),
+              };
+              await saveSettings(s);
+              settingsCache = s;
+              sendResponse({ ok: true });
+            } catch (e) {
+              sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+            }
+            break;
+          }
           case 'asr-cancel': {
             asrControllers.get(message.requestId)?.abort();
             sendResponse({ ok: true });

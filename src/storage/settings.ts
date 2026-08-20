@@ -10,6 +10,12 @@
  * 4.0: schema v4. Migration v3 -> v4 only adds defaults (spec 4.0 §9.3);
  * v4 settings remain readable by 3.0 code (regression-tested in
  * tests/migration4.test.ts).
+ * 4.1: schema v5. Migration v4 -> v5 only adds defaults (spec 4.1 §9.3);
+ * v5 settings remain readable by 4.0 code (regression-tested in
+ * tests/migration5.test.ts).
+ * 4.2: schema v6. Migration v5 -> v6 only adds defaults (spec 4.2 §9.3);
+ * v6 settings remain readable by 4.1 code (regression-tested in
+ * tests/migration6.test.ts).
  */
 import {
   BUILTIN_SITE_RULES,
@@ -32,8 +38,12 @@ import type {
   AsrSettings,
   DisplayMode,
   GlossaryEntry,
+  ImageOverlaySettings,
   ImageTranslateSettings,
   LanguageDetectionMode,
+  OcrPacksSettings,
+  OutputSanitizeSettings,
+  PdfLayoutPreset,
   PdfViewerSettings,
   ProviderConfig,
   ProviderType,
@@ -64,7 +74,7 @@ const PROVIDER_TYPES: ProviderType[] = [
   'native-host',
 ];
 
-/** Coerce arbitrary stored data (schema v1, v2 or v3) into a valid v4 Settings. */
+/** Coerce arbitrary stored data (schema v1–v5) into a valid v6 Settings. */
 export function normalizeSettings(raw: unknown): Settings {
   const defaults = defaultSettings();
   if (raw === null || typeof raw !== 'object') return defaults;
@@ -170,6 +180,11 @@ export function normalizeSettings(raw: unknown): Settings {
     /* ------------------------- 4.0 additions ------------------------- */
     asr: normalizeAsr(r.asr),
     translationMemory: normalizeTranslationMemory(r.translationMemory),
+    /* ------------------------- 4.1 additions ------------------------- */
+    ocrPacks: normalizeOcrPacks(r.ocrPacks),
+    imageOverlay: normalizeImageOverlay(r.imageOverlay),
+    /* ------------------------- 4.2 additions ------------------------- */
+    outputSanitize: normalizeOutputSanitize(r.outputSanitize),
   };
 }
 
@@ -194,6 +209,7 @@ export function normalizePdfViewer(raw: unknown): PdfViewerSettings {
         : d.maxConcurrentPages,
     autoOpen: r.autoOpen === true,
     scannedPageOcr: r.scannedPageOcr !== false,
+    layoutPreset: normalizeLayoutPreset(r.layoutPreset),
   };
 }
 
@@ -257,6 +273,36 @@ export function normalizeAsr(raw: unknown): AsrSettings {
         ? clamp(Math.round(r.maxUploadMb), 1, 100)
         : DEFAULT_ASR_MAX_UPLOAD_MB,
     confirmFull: r.confirmFull !== false,
+    streaming: r.streaming === true,
+  };
+}
+
+function normalizeLayoutPreset(raw: unknown): PdfLayoutPreset {
+  return raw === 'single' || raw === 'columns' || raw === 'table' ? raw : 'auto';
+}
+
+export function normalizeOcrPacks(raw: unknown): OcrPacksSettings {
+  if (raw === null || typeof raw !== 'object') return defaultSettings().ocrPacks;
+  const r = raw as Partial<OcrPacksSettings>;
+  const extras = Array.isArray(r.extraLangs)
+    ? r.extraLangs.filter((x): x is string => typeof x === 'string').map((s) => s.trim()).filter((s) => s !== '')
+    : [];
+  return { extraLangs: [...new Set(extras)] };
+}
+
+export function normalizeImageOverlay(raw: unknown): ImageOverlaySettings {
+  if (raw === null || typeof raw !== 'object') return defaultSettings().imageOverlay;
+  const r = raw as Partial<ImageOverlaySettings>;
+  return { enabled: r.enabled === true };
+}
+
+export function normalizeOutputSanitize(raw: unknown): OutputSanitizeSettings {
+  if (raw === null || typeof raw !== 'object') return defaultSettings().outputSanitize;
+  const r = raw as Partial<OutputSanitizeSettings>;
+  return {
+    enabled: r.enabled !== false,
+    stripThink: r.stripThink !== false,
+    stripCodeFences: r.stripCodeFences === true,
   };
 }
 

@@ -13,8 +13,13 @@ import type { TranslationContext } from '../providers/provider';
 import type { ImageInput, OcrEngine } from './engine';
 import type { OcrResult, OcrSegment } from '../shared/types';
 
+export interface TessLineBox {
+  text: string;
+  bbox?: { x0: number; y0: number; x1: number; y1: number };
+}
+
 export interface TessRecognizeFn {
-  (input: { dataUrl: string; langs: string[] }, signal: AbortSignal): Promise<{ text: string }>;
+  (input: { dataUrl: string; langs: string[] }, signal: AbortSignal): Promise<{ text: string; lines?: TessLineBox[] }>;
 }
 
 /** Split OCR output into non-empty paragraph-like fragments. */
@@ -40,15 +45,27 @@ export class TesseractEngine implements OcrEngine {
   ): Promise<OcrResult> {
     if (signal.aborted) throw new ProviderError('aborted', '已取消');
     let rawText: string;
+    let lines: TessLineBox[] | undefined;
     try {
       const fn = this.recognizeRaw ?? loadVendoredRecognizer;
       const raw = await fn({ dataUrl: input.dataUrl, langs: this.langs }, signal);
       rawText = raw.text ?? '';
+      lines = raw.lines;
     } catch (e) {
       if (e instanceof ProviderError) throw e;
       const message = e instanceof Error ? e.message : String(e);
       const kind = /wasm|load|fetch|import|network/i.test(message) ? 'config' : 'invalid_response';
       throw new ProviderError(kind, `Tesseract 识别失败: ${message}`);
+    }
+    if (lines && lines.length > 0) {
+      const segments: OcrSegment[] = lines
+        .map((line) => ({
+          text: line.text.trim(),
+          translation: '',
+          ...(line.bbox ? { bbox: line.bbox } : {}),
+        }))
+        .filter((s) => s.text.length > 0);
+      if (segments.length > 0) return { engine: this.id, segments };
     }
     const fragments = splitOcrText(rawText);
     const segments: OcrSegment[] = fragments.map((text) => ({ text, translation: '' }));
@@ -63,7 +80,7 @@ export class TesseractEngine implements OcrEngine {
 async function loadVendoredRecognizer(
   input: { dataUrl: string; langs: string[] },
   signal: AbortSignal,
-): Promise<{ text: string }> {
+): Promise<{ text: string; lines?: TessLineBox[] }> {
   if (typeof chrome === 'undefined' || !chrome.runtime?.getURL) {
     throw new ProviderError('config', 'Tesseract WASM 只能在扩展后台加载');
   }
@@ -90,7 +107,16 @@ async function loadVendoredRecognizer(
   try {
     if (signal.aborted) throw new ProviderError('aborted', '已取消');
     const { data } = await worker.recognize(input.dataUrl);
-    return { text: data?.text ?? '' };
+    const page = data as unknown as { lines?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }> };
+    const lines = Array.isArray(page.lines)
+      ? page.lines
+          .map((line) => ({
+            text: (line.text ?? '').trim(),
+            ...(line.bbox ? { bbox: line.bbox } : {}),
+          }))
+          .filter((line) => line.text.length > 0)
+      : undefined;
+    return { text: data?.text ?? '', lines };
   } catch (e) {
     if (e instanceof ProviderError) throw e;
     const message = e instanceof Error ? e.message : String(e);

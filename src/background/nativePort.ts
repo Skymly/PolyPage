@@ -71,10 +71,12 @@ function connectHost(hostName: string): HostConnection {
   try {
     port = chrome.runtime.connectNative(hostName);
   } catch (e) {
-    throw new ProviderError(
-      'config',
-      `无法启动本地网关 "${hostName}"：${e instanceof Error ? e.message : String(e)}（请确认已安装网关）`,
-    );
+    const raw = e instanceof Error ? e.message : String(e);
+    const firefox = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent);
+    const hint = firefox
+      ? 'Firefox 需安装器写入 Mozilla NativeMessagingHosts，且 allowed_extensions 包含 polypage@skymly.com'
+      : '请确认已安装网关';
+    throw new ProviderError('config', `无法启动本地网关 "${hostName}"：${raw}（${hint}）`);
   }
 
   const conn: HostConnection = {
@@ -197,7 +199,7 @@ export function nativeNotify(hostName: string, method: string, params: unknown):
 export async function pingNativeHost(
   hostName: string,
   timeoutMs = 8000,
-): Promise<{ ok: boolean; version?: string; error?: string }> {
+): Promise<{ ok: boolean; version?: string; protocol?: number; error?: string }> {
   try {
     const result = await nativeRequest<{ version?: string; protocol?: number }>(
       hostName,
@@ -205,7 +207,11 @@ export async function pingNativeHost(
       {},
       { timeoutMs },
     );
-    return { ok: true, version: typeof result?.version === 'string' ? result.version : undefined };
+    return {
+      ok: true,
+      version: typeof result?.version === 'string' ? result.version : undefined,
+      protocol: typeof result?.protocol === 'number' ? result.protocol : undefined,
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

@@ -1,6 +1,6 @@
 # PolyPage — Web Translator Extension
 
-网页翻译浏览器插件 **4.0.0**（Chrome / Edge 发行主线，Firefox MV3 可加载 MVP；Manifest V3，TypeScript + C#/.NET 本地网关）。
+网页翻译浏览器插件 **4.2.0**（Chrome / Edge 发行主线，Firefox MV3 可加载 MVP；Manifest V3，TypeScript + C#/.NET 本地网关）。
 
 接入你自己的 **LLM / 翻译 API / 本地模型**，在网页、PDF、图片、视频字幕和无字幕音视频上获得翻译：
 
@@ -22,11 +22,36 @@
 - 术语表、双语导出、翻译缓存、批量合并、超时/重试、错误分类与日志。
 
 > 本项目按 `PolyPage.md`（1.0）、`PolyPage-2.0.md`、`PolyPage-3.0.md` 与
-> `PolyPage-4.0.md` 实现；下一版规划见 `PolyPage-4.1.md`。验证记录见 `docs/VALIDATION-2.0.md`、
-> `docs/VALIDATION-3.0.md` 与 `docs/VALIDATION-4.0.md`。Firefox 差异见
+> `PolyPage-4.0.md` 实现；本版规划见 `PolyPage-4.2.md`。验证记录见 `docs/VALIDATION-2.0.md`、
+> `docs/VALIDATION-3.0.md` 与 `docs/VALIDATION-4.0.md`、`docs/VALIDATION-4.1.md` 与 `docs/VALIDATION-4.2.md`。Firefox 差异见
 > `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
 
 ---
+
+## 4.2 新特性（对照 PolyPage-4.2.md）
+
+4.1 能力全部保留。4.2 不另开大功能，把译文洗干净、把 Firefox 网关最后一公里走完，并把 4.1 允许顺延的精修做实：
+
+| 支柱 | 能力 |
+|---|---|
+| P 译文卫生 | 统一剥离 `<think>` / qwen3 残片；剥空视为失败不写缓存/TM；Options 可关；MiniMax Token Plan 误指 `.io` 时提示换 `api.minimax.chat` |
+| Q Firefox 网关 | 隔离 profile + Marionette 临时加载 `dist-firefox/` 后探测 `host-status` 与一笔 native-host 翻译；失败则明确降级 |
+| R 流式/覆盖/版面 | 有 `transcribeStream` 才真注入 cue；覆盖随滚动重算；PDF 表格夹具 |
+
+设置 `schemaVersion: 6`。消息协议标记 `v: 6`。网关 `4.2.0`，`ProtocolVersion = 2`。
+
+## 4.1 新特性（对照 PolyPage-4.1.md）
+
+4.0 能力全部保留。4.1 兑现欠账：
+
+| 支柱 | 能力 |
+|---|---|
+| M 句子 TM | 独立 IndexedDB；默认关；归一化精确匹配跳过 Provider；环形 5000；Options 可清空；导出不含 TM |
+| N OCR 语言包 | Options 下载 jpn/kor/fra/deu（tessdata_fast + 哈希）；识别时与 eng/chi_sim 一并交给 tesseract |
+| O Firefox 网关 | 临时加载 `dist-firefox/` 后 `connectNative` ping + 一笔翻译，或失败 failover 并说明原因 |
+| P1/P2 | 流式 cue 有能力才启用；图片原位覆盖默认关；PDF 单栏/双栏/表格预设 |
+
+设置 `schemaVersion: 5`。消息协议标记 `v: 5`。网关 `4.1.0`，`ProtocolVersion = 2`。
 
 ## 4.0 新特性（对照 PolyPage-4.0.md）
 
@@ -41,7 +66,7 @@
 
 消息协议标记 `v: 4`（v1–v3 兼容）。设置 `schemaVersion: 4`。网关 `4.0.0`，`ProtocolVersion = 2`。
 
-4.1 规划见 `PolyPage-4.1.md`（消化 `docs/VALIDATION-4.0.md` §8：TM、OCR 语言包、Firefox 网关为 P0；流式 cue / 原位覆盖为 P1；双栏专项为 P2）。
+4.1 规划见 `PolyPage-4.1.md`。4.2 规划见 `PolyPage-4.2.md`（消化 `docs/VALIDATION-4.1.md` §4：译文卫生、Firefox 进程内网关为 P0；流式 cue / 覆盖精修为 P1；表格夹具为 P2）。
 
 ## 目录结构
 
@@ -81,7 +106,7 @@
 npm install
 npm run build        # 产出 dist/ 与 dist-firefox/
 npm run typecheck    # tsc --noEmit（strict）
-npm run test         # vitest 单元测试（188）
+npm run test         # vitest 单元测试（233）
 npm run smoke        # 无头 Edge 端到端冒烟（需已构建；含网关安装/卸载）
 npm run verify       # typecheck + test + build
 npm run verify:all   # verify + 网关 xunit + stdio 契约 + smoke
@@ -108,7 +133,8 @@ node scripts/gateway-contract-test.mjs                     # 真实进程 stdio 
 设置页 → 「翻译服务」。**从预设创建**后通常只需填 API Key。多个 Provider 可共存，
 单选当前生效；另可配置**故障转移链**。
 
-- **openai-compatible**：`POST {baseUrl}/chat/completions`，支持 SSE 流式、
+- **openai-compatible**：`POST {baseUrl}/chat/completions`，支持 SSE 流式、MiniMax Token Plan（`api.minimax.chat` / MiniMax-M3 视觉）、
+
   **视觉翻译（image_url）** 与 **`/audio/transcriptions` 转写**；本地端点免 API Key。
 - **deepl / azure-translator / google-translate**：各自官方端点与鉴权。
 - **custom-http**：Body 模板 + 响应路径。
@@ -148,12 +174,10 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 ## 验证
 
 - `npm run typecheck`：strict TypeScript 零错误；
-- `npm run test`：**188 个单元测试**（3.0 的 163 个全部保留 + 4.0：schema v3→v4、
+- `npm run test`：**233 个单元测试**（4.1 的 214 零回退 + schema v5→v6、卫生层、覆盖重算、ASR 流式能力、表格夹具）；
   ASR 切段、tesseract 两步法、扫描页缓存键、字幕样式、分块 sha256、
   openai-compatible `transcribe`、本地 Ollama 403 提示）；
-- `npm run smoke`：无头 Edge 加载真实扩展，**111 项端到端断言**（3.0 的 103 项
-  零回退 + 无字幕转写内存 cue / 有 track 不自动 ASR / 扫描页「识别本页」按钮 /
-  schema 落盘为 v4）；
+- `npm run smoke`：无头 Edge 加载真实扩展，**128 项端到端断言**（4.1 的 125 项零回退 + schema 落盘为 v6 + 带 think 的 mock 译文不含 `<think>`）；
 - `dotnet test` + `gateway-contract-test.mjs`：**32 + 扩展后的 stdio 契约**
   （旧 28+9 原样保留，协议升为 v2）；
 - 手动联调清单记录于 `docs/VALIDATION-4.0.md`。
@@ -161,11 +185,11 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 ## 已知限制
 
 - PDF 双栏 / 表格聚类仍为启发式，不承诺完美版面；
-- ASR 一次转写结束后再出字幕，不边转写边出；关闭即丢内存 cue，不导出 SRT/VTT；
+- ASR 仅当后端声明 `transcribeStream` 且设置开启时边转写边出 cue；否则一次转写结束后再出。关闭即丢内存 cue，不导出 SRT/VTT；
 - DRM / 无法 `captureStream` 且无法同源 fetch 的媒体入口置灰；不申请 tabCapture 或麦克风；
 - `subtitleSelectors` 为规则驱动，站点改版即失效（内置 YouTube 规则随版本更新）；
-- tesseract 默认只打包 `eng` + `chi_sim`；附加语言包下载器顺延 4.1；
+- tesseract 默认只打包 `eng` + `chi_sim`；附加语言包可在 Options 下载；
 - 「译文模式」段落整体替换为纯文本（双语/段内模式保留标记结构）；
 - closed Shadow DOM 无法进入（浏览器限制）；
-- Firefox 是可加载 MVP：网页六模式 + 划词必须可用；Native Host / PDF / ASR 允许降级。
+- Firefox 可临时加载：网页六模式 + 划词必须可用；Native Host 4.1 做真联调，失败则降级。
   Safari / 移动端 / AMO 上架不在 4.0 范围。

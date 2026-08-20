@@ -1,7 +1,7 @@
 {
   "name": "polypage-web-translator",
   "displayName": "PolyPage — Web Translator Extension",
-  "version": "4.0.0",
+  "version": "4.2.0",
   "description": "Chrome/Edge Manifest V3 translator for web pages, PDFs, images and video subtitles with pluggable LLM / custom API providers, bilingual reading and hover tooltips.",
   "private": true,
   "type": "module",
@@ -15,7 +15,8 @@
     "verify": "npm run typecheck && npm run test && npm run build",
     "test:gateway": "dotnet test native-host/PolyPage.slnx -v q",
     "test:contract": "node scripts/gateway-contract-test.mjs",
-    "verify:all": "npm run verify && npm run test:gateway && npm run test:contract && npm run smoke"
+    "verify:all": "npm run verify && npm run test:gateway && npm run test:contract && npm run smoke",
+    "firefox:gateway": "node scripts/firefox-gateway-check.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

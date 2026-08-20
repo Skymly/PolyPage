@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  clusterOptionsForPreset,
   clusterPage,
   clusterPageFromLines,
   clusterParagraphs,
@@ -155,6 +156,23 @@ describe('header/footer filtering (页眉页脚过滤)', () => {
 });
 
 describe('two-column layouts', () => {
+  it('columns preset keeps a short two-column fixture from interleaving', () => {
+    const items: TextItemLike[] = [];
+    for (let row = 0; row < 2; row++) {
+      items.push(item(`L${row} sentence of the left column`, 50, 100 + row * 14, 10, 40));
+      items.push(item(`R${row} sentence of the right column`, 400, 100 + row * 14, 10, 40));
+    }
+    const auto = extractLines(items, clusterOptionsForPreset('auto')).map((l) => l.text);
+    const cols = extractLines(items, clusterOptionsForPreset('columns')).map((l) => l.text);
+    expect(auto[0]).toContain('L0');
+    expect(cols).toEqual([
+      'L0 sentence of the left column',
+      'L1 sentence of the left column',
+      'R0 sentence of the right column',
+      'R1 sentence of the right column',
+    ]);
+  });
+
   it('reads left column fully before right column', () => {
     const items: TextItemLike[] = [];
     for (let row = 0; row < 4; row++) {
@@ -169,6 +187,29 @@ describe('two-column layouts', () => {
     expect(paras).toHaveLength(2);
     expect(paras[0].text).toContain('L0');
     expect(paras[1].text).toContain('R0');
+  });
+});
+
+describe('table fixture (4.2 P2)', () => {
+  it('table preset keeps header cells from merging with left/right columns', () => {
+    const items: TextItemLike[] = [
+      item('Name', 50, 80, 10, 40),
+      item('Qty', 240, 80, 10, 30),
+      item('Price', 430, 80, 10, 40),
+      item('Widget A', 50, 110, 10, 70),
+      item('12', 240, 110, 10, 20),
+      item('3.50', 430, 110, 10, 30),
+      item('Gadget B', 50, 140, 10, 70),
+      item('4', 240, 140, 10, 16),
+      item('9.00', 430, 140, 10, 30),
+    ];
+    const table = clusterPage(items, { cluster: clusterOptionsForPreset('table') });
+    const texts = table.paragraphs.map((p) => p.text);
+    // A cell must not be concatenated with its left/right neighbour.
+    expect(texts.some((t) => t.includes('Name') && t.includes('Qty'))).toBe(false);
+    expect(texts.some((t) => t.includes('Widget A') && t.includes('3.50'))).toBe(false);
+    expect(texts.some((t) => /Widget A/.test(t))).toBe(true);
+    expect(texts.some((t) => /Gadget B/.test(t))).toBe(true);
   });
 });
 

@@ -49,6 +49,26 @@ export interface ClusterOptions {
   fontSizeChangeRatio?: number;
   /** Split a line when the item gap exceeds this many font sizes. */
   columnGapFactor?: number;
+  /** Minimum two-segment run length before column-major reorder (default 3). */
+  minColumnRun?: number;
+  /** 4.2: break a paragraph when two same-row cells sit at different x. */
+  cellBreak?: boolean;
+}
+
+export type PdfLayoutPreset = 'auto' | 'single' | 'columns' | 'table';
+
+/** 4.1 P2: tunable clustering presets. */
+export function clusterOptionsForPreset(preset: PdfLayoutPreset | undefined): ClusterOptions {
+  switch (preset) {
+    case 'single':
+      return { columnGapFactor: 80, minColumnRun: 99, paragraphGapFactor: 1.6 };
+    case 'columns':
+      return { columnGapFactor: 2.4, minColumnRun: 2, paragraphGapFactor: 1.6 };
+    case 'table':
+      return { columnGapFactor: 1.8, minColumnRun: 99, paragraphGapFactor: 1.15, fontSizeChangeRatio: 0.1, cellBreak: true };
+    default:
+      return { columnGapFactor: 4, minColumnRun: 3, paragraphGapFactor: 1.6 };
+  }
 }
 
 const CJK = /[\u3000-\u303f\u3040-\u9fff\uf900-\ufaff\uff00-\uffef]/;
@@ -160,7 +180,7 @@ export function extractSegments(items: TextItemLike[], opts: ClusterOptions = {}
  * that each split into exactly two segments at a consistent X are treated as
  * two columns and emitted column-major (left column fully, then right).
  */
-export function reorderColumns(segments: Segment[]): Segment[] {
+export function reorderColumns(segments: Segment[], opts: ClusterOptions = {}): Segment[] {
   const byLine = new Map<number, Segment[]>();
   for (const seg of segments) {
     const list = byLine.get(seg.y) ?? [];
@@ -176,7 +196,8 @@ export function reorderColumns(segments: Segment[]): Segment[] {
     while (j < lineYs.length && (byLine.get(lineYs[j]) ?? []).length === 2) j++;
     const runLen = j - i;
     let emitted = false;
-    if (runLen >= 3) {
+    const minRun = opts.minColumnRun ?? 3;
+    if (runLen >= minRun) {
       const run = lineYs.slice(i, j);
       const rights = run.map((y) => (byLine.get(y) ?? [])[1]);
       const rightX = rights[0]?.x0 ?? 0;
@@ -206,7 +227,7 @@ export function reorderColumns(segments: Segment[]): Segment[] {
  * Infinity so clustering always starts a new paragraph there.
  */
 export function extractLines(items: TextItemLike[], opts: ClusterOptions = {}): PdfLine[] {
-  const ordered = reorderColumns(extractSegments(items, opts));
+  const ordered = reorderColumns(extractSegments(items, opts), opts);
   const lines: PdfLine[] = [];
   let prevY = Number.NaN;
   for (const seg of ordered) {
@@ -260,7 +281,11 @@ export function clusterParagraphs(lines: PdfLine[], opts: ClusterOptions = {}): 
         buffer.length >= 2 &&
         line.indent - buffer[0].indent > 1.5 * lineHeight &&
         Math.abs(line.fontSize - prev.fontSize) < 1e-6;
-      if (gapBreak || columnJump || sizeChanged || indentStarted) {
+      const cellBreak =
+        opts.cellBreak === true &&
+        Math.abs(line.y - prev.y) <= 0.5 &&
+        Math.abs(line.indent - prev.indent) > 2 * lineHeight;
+      if (gapBreak || columnJump || sizeChanged || indentStarted || cellBreak) {
         flush();
       }
     }
@@ -299,7 +324,7 @@ function normalizeForRepeat(text: string): string {
  *  which extracts once to feed collectRepeatingLines). */
 export function clusterPageFromLines(
   lines: PdfLine[],
-  options: { skipHeadersFooters?: boolean; headerFooterSet?: Set<string> } = {},
+  options: { skipHeadersFooters?: boolean; headerFooterSet?: Set<string>; cluster?: ClusterOptions } = {},
 ): PageClusterResult {
   const skip = options.skipHeadersFooters ?? true;
   const hf = options.headerFooterSet;
@@ -308,7 +333,7 @@ export function clusterPageFromLines(
     if (skip && hf && hf.has(normalizeForRepeat(line.text))) return false;
     return true;
   });
-  const paragraphs = clusterParagraphs(filtered);
+  const paragraphs = clusterParagraphs(filtered, options.cluster);
   const scanned = lines.length === 0;
   return { paragraphs, scanned };
 }
@@ -319,9 +344,9 @@ export function clusterPageFromLines(
  */
 export function clusterPage(
   items: TextItemLike[],
-  options: { skipHeadersFooters?: boolean; headerFooterSet?: Set<string> } = {},
+  options: { skipHeadersFooters?: boolean; headerFooterSet?: Set<string>; cluster?: ClusterOptions } = {},
 ): PageClusterResult {
-  return clusterPageFromLines(extractLines(items), options);
+  return clusterPageFromLines(extractLines(items, options.cluster), options);
 }
 
 /**

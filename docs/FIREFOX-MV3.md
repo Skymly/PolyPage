@@ -1,10 +1,9 @@
-# Firefox MV3 差异表（PolyPage 4.0）
+# Firefox MV3 差异表（PolyPage 4.2）
 
 对照 `PolyPage-4.0.md` §8.2。Chrome / Edge 继续加载 `dist/`；Firefox 临时加载
 `dist-firefox/`（`browser_specific_settings.gecko.id = polypage@skymly.com`）。
 
-4.0 退出标准是：**临时加载不报 manifest 错误** + 网页六模式与划词可用。
-Native Host / PDF / ASR 允许降级。完整无头冒烟仍以 Edge 为准。
+4.2 在 4.1 安装器键之上要求：隔离 profile + Marionette 临时加载 `dist-firefox/` 后，Options / `host-status` 显示已连接（`protocol === 2`）且至少一笔 native-host 翻译；失败则明确降级。完整无头冒烟仍以 Edge 为准。脚本：`node scripts/firefox-gateway-check.mjs`。
 
 ## 1. API 差异
 
@@ -15,7 +14,7 @@ Native Host / PDF / ASR 允许降级。完整无头冒烟仍以 Edge 为准。
 | Action | `action`（MV3） | 同 MV3 `action`；无 `browserAction` | 只用 `action` |
 | Content scripts | `all_frames: true` | 同左 | 保持；顶层 host 黑名单对 iframe 生效 |
 | Commands | `commands.suggested_key` | 支持，部分组合需用户在 about:addons 确认 | 保持 `Ctrl+Shift+L` / `Alt+Q` |
-| Native Messaging | `allowed_origins` + HKCU Chrome/Edge 键 | `allowed_extensions: ["<gecko.id>"]` + `Software\Mozilla\NativeMessagingHosts` | 安装器已写 Firefox manifest 与 Mozilla 键；**真联调顺延 4.1** |
+| Native Messaging | `allowed_origins` + HKCU Chrome/Edge 键 | `allowed_extensions: ["<gecko.id>"]` + `Software\Mozilla\NativeMessagingHosts` | 安装器已写 Firefox manifest 与 Mozilla 键；**4.2：隔离 profile 进程内 ping + 一笔 translate，失败则 failover** |
 | `chrome.runtime.getURL` | 阅读器 / vendor WASM | 同左；worker 路径偶发差异 | PDF 入口在失败时隐藏；见 Options「浏览器兼容」 |
 | `webNavigation` | optional_permissions | 权限模型不同，默认关 | 保持可选；未授权则不自动打开 PDF |
 | `captureStream` / `MediaRecorder` | Chromium mime（webm/opus） | `mozCaptureStream` + mime 分裂 | 已做 mime 回退；失败则同源 `fetch(src)`；再失败入口置灰 |

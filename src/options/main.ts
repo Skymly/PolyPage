@@ -9,6 +9,8 @@
  */
 import { sendRuntime } from '../messaging/messages';
 import { DEFAULT_CUSTOM_HTTP_BODY, DEFAULT_NATIVE_HOST_NAME, defaultProvider } from '../shared/constants';
+import { formatPackMegabytes } from '../ocr/packs';
+import type { PdfLayoutPreset } from '../shared/types';
 import { normalizeSiteRule } from '../shared/siteRules';
 import type {
   DisplayMode,
@@ -22,6 +24,7 @@ import type {
 } from '../shared/types';
 import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
 import { normalizeSettings, validateImportedSettings } from '../storage/settings';
+import { minimaxHostHint } from '../shared/sanitize';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -82,6 +85,10 @@ function renderGeneral(): void {
   $<HTMLInputElement>('inline-budget').value = String(draft.inlineBudget);
   $<HTMLInputElement>('viewport-budget').value = String(draft.viewportBudget);
   $<HTMLTextAreaElement>('blacklist-input').value = draft.blacklist.join('\n');
+  const sanitize = draft.outputSanitize;
+  $<HTMLInputElement>('sanitize-enabled').checked = sanitize.enabled;
+  $<HTMLInputElement>('sanitize-think').checked = sanitize.stripThink;
+  $<HTMLInputElement>('sanitize-fences').checked = sanitize.stripCodeFences;
 }
 
 function collectGeneral(): void {
@@ -102,6 +109,11 @@ function collectGeneral(): void {
     .value.split('\n')
     .map((s) => s.trim())
     .filter((s) => s !== '');
+  draft.outputSanitize = {
+    enabled: $<HTMLInputElement>('sanitize-enabled').checked,
+    stripThink: $<HTMLInputElement>('sanitize-think').checked,
+    stripCodeFences: $<HTMLInputElement>('sanitize-fences').checked,
+  };
 }
 
 /* --------------------------- 3.0 media sections ------------------------------ */
@@ -114,10 +126,12 @@ function renderMediaSections(): void {
   $<HTMLInputElement>('pdf-concurrency').value = String(draft.pdfViewer.maxConcurrentPages);
   $<HTMLInputElement>('pdf-autoopen').checked = draft.pdfViewer.autoOpen;
   $<HTMLInputElement>('pdf-scanned-ocr').checked = draft.pdfViewer.scannedPageOcr;
+  $<HTMLSelectElement>('pdf-layout').value = draft.pdfViewer.layoutPreset ?? 'auto';
   $<HTMLInputElement>('img-enabled').checked = draft.imageTranslate.enabled;
   $<HTMLSelectElement>('img-trigger').value = draft.imageTranslate.trigger;
   $<HTMLSelectElement>('img-engine').value = draft.imageTranslate.engine;
   $<HTMLInputElement>('img-maxedge').value = String(draft.imageTranslate.maxEdgePx);
+  $<HTMLInputElement>('img-overlay').checked = draft.imageOverlay.enabled;
   $<HTMLInputElement>('sub-enabled').checked = draft.subtitles.enabled;
   $<HTMLSelectElement>('sub-bilingual').value = draft.subtitles.bilingual;
   $<HTMLInputElement>('sub-font').value = String(draft.subtitles.fontSizePct);
@@ -134,6 +148,9 @@ function renderMediaSections(): void {
   $<HTMLInputElement>('asr-enabled').checked = draft.asr.enabled;
   $<HTMLInputElement>('asr-maxsec').value = String(draft.asr.maxSeconds);
   $<HTMLInputElement>('asr-confirm-full').checked = draft.asr.confirmFull;
+  $<HTMLInputElement>('asr-streaming').checked = draft.asr.streaming;
+  $<HTMLInputElement>('tm-enabled').checked = draft.translationMemory.enabled;
+  $<HTMLInputElement>('tm-max').value = String(draft.translationMemory.maxEntries);
   void refreshPdfPermStatus();
 }
 
@@ -150,6 +167,10 @@ function collectMediaSections(): void {
     maxConcurrentPages: Math.round(num($<HTMLInputElement>('pdf-concurrency').value, draft.pdfViewer.maxConcurrentPages)),
     autoOpen: $<HTMLInputElement>('pdf-autoopen').checked,
     scannedPageOcr: $<HTMLInputElement>('pdf-scanned-ocr').checked,
+    layoutPreset: ((): PdfLayoutPreset => {
+      const v = $<HTMLSelectElement>('pdf-layout').value;
+      return v === 'single' || v === 'columns' || v === 'table' ? v : 'auto';
+    })(),
   };
   draft.imageTranslate = {
     ...draft.imageTranslate,
@@ -161,6 +182,7 @@ function collectMediaSections(): void {
     engine: $<HTMLSelectElement>('img-engine').value === 'tesseract-wasm' ? 'tesseract-wasm' : 'llm-vision',
     maxEdgePx: Math.round(num($<HTMLInputElement>('img-maxedge').value, draft.imageTranslate.maxEdgePx)),
   };
+  draft.imageOverlay = { enabled: $<HTMLInputElement>('img-overlay').checked };
   draft.subtitles = {
     ...draft.subtitles,
     enabled: $<HTMLInputElement>('sub-enabled').checked,
@@ -185,6 +207,11 @@ function collectMediaSections(): void {
     enabled: $<HTMLInputElement>('asr-enabled').checked,
     maxSeconds: Math.round(num($<HTMLInputElement>('asr-maxsec').value, draft.asr.maxSeconds)),
     confirmFull: $<HTMLInputElement>('asr-confirm-full').checked,
+    streaming: $<HTMLInputElement>('asr-streaming').checked,
+  };
+  draft.translationMemory = {
+    enabled: $<HTMLInputElement>('tm-enabled').checked,
+    maxEntries: Math.round(num($<HTMLInputElement>('tm-max').value, draft.translationMemory.maxEntries)),
   };
 }
 
@@ -521,6 +548,22 @@ function renderEditor(): void {
   applyTypeVisibility(provider.type);
   $<HTMLDivElement>('headers-error').classList.add('hidden');
   $<HTMLElement>('test-result').textContent = '';
+  refreshMinimaxHint();
+}
+
+function refreshMinimaxHint(): void {
+  const el = document.getElementById('minimax-host-hint');
+  if (!el) return;
+  const baseUrl = $<HTMLInputElement>('f-baseurl').value;
+  const apiKey = $<HTMLInputElement>('f-apikey').value;
+  const hint = minimaxHostHint(baseUrl, apiKey);
+  if (hint) {
+    el.hidden = false;
+    el.textContent = hint;
+  } else {
+    el.hidden = true;
+    el.textContent = '';
+  }
 }
 
 function applyTypeVisibility(type: ProviderType): void {
@@ -942,21 +985,87 @@ async function checkHostStatus(): Promise<void> {
   backendsEl.textContent = '';
   try {
     const res = await sendRuntime({ type: 'host-status' });
+    const compat = document.getElementById('compat-status');
     if (res.installed) {
-      statusEl.textContent = `✓ 网关在线${res.version ? `（版本 ${res.version}）` : ''}`;
+      const proto = typeof res.protocol === 'number' ? ` protocol ${res.protocol}` : '';
+      statusEl.textContent = `✓ 网关已连接${res.version ? `（版本 ${res.version}${proto}）` : proto}`;
       statusEl.classList.add('ok');
+      if (compat) compat.textContent = res.browser === 'firefox' ? 'Firefox：connectNative ping 成功。' : 'Chromium：connectNative ping 成功。';
     } else {
-      statusEl.textContent = `✗ 未检测到网关：${res.error ?? '未知错误'}`;
+      statusEl.textContent = `✗ 未检测到网关：${res.reason ?? res.error ?? '未知错误'}`;
       statusEl.classList.add('bad');
       backendsEl.textContent =
         '安装方法：运行 native-host 发布的 PolyPage.Gateway.exe --install（无需管理员），' +
-        '开发态可用 --allow chrome-extension://<扩展ID>/ 追加允许来源。';
+        '开发态可用 --allow chrome-extension://<扩展ID>/ 追加允许来源。Firefox 需 allowed_extensions 含 polypage@skymly.com。';
+      if (compat) compat.textContent = res.reason ?? '本地网关未连接，将走 failover。';
     }
   } catch (e) {
     statusEl.textContent = `✗ ${e instanceof Error ? e.message : String(e)}`;
     statusEl.classList.add('bad');
   }
 }
+
+async function refreshTmStats(): Promise<void> {
+  const el = document.getElementById('tm-stats');
+  if (!el) return;
+  try {
+    const stats = await sendRuntime({ type: 'tm-stats' });
+    el.textContent = `当前 ${stats.entries} 条，累计命中 ${stats.hits}，本会话 ${stats.sessionHits}`;
+  } catch {
+    el.textContent = '无法读取句子记忆统计';
+  }
+}
+
+async function renderOcrPacks(): Promise<void> {
+  const box = document.getElementById('ocr-pack-list');
+  if (!box) return;
+  let packs: Array<{ id: string; name: string; bytes: number; status: string; received?: number; error?: string; bundled?: boolean }> = [];
+  try {
+    const res = await sendRuntime({ type: 'ocr-pack-progress' });
+    packs = res.packs ?? [];
+  } catch {
+    box.textContent = '无法读取语言包状态';
+    return;
+  }
+  box.textContent = '';
+  for (const pack of packs) {
+    const row = document.createElement('div');
+    row.className = 'ocr-pack-row';
+    const label = document.createElement('div');
+    const size = pack.bundled ? '内置' : formatPackMegabytes(pack.bytes);
+    label.textContent = `${pack.name} (${pack.id}) · ${size} · ${pack.status}`;
+    if (pack.error) label.textContent += ` — ${pack.error}`;
+    if (pack.status === 'downloading' && pack.received != null) {
+      label.textContent += ` ${pack.received}/${pack.bytes}`;
+    }
+    row.append(label);
+    if (!pack.bundled) {
+      const btn = document.createElement('button');
+      btn.className = 'btn';
+      btn.type = 'button';
+      if (pack.status === 'ready') {
+        btn.textContent = '删除';
+        btn.addEventListener('click', () => {
+          void sendRuntime({ type: 'ocr-pack-remove', lang: pack.id }).then(() => void renderOcrPacks());
+        });
+      } else {
+        btn.textContent = pack.status === 'error' ? '重试下载' : '下载';
+        btn.addEventListener('click', () => {
+          const ok = window.confirm(`将下载第三方 OCR 数据（${pack.name}），约 ${formatPackMegabytes(pack.bytes)}。继续？`);
+          if (!ok) return;
+          btn.disabled = true;
+          void sendRuntime({ type: 'ocr-pack-download', lang: pack.id }).then((res) => {
+            if (!res.ok) toast(res.error ?? '下载失败', true);
+            void renderOcrPacks();
+          });
+        });
+      }
+      row.append(btn);
+    }
+    box.append(row);
+  }
+}
+
 /* --------------------------------- actions ----------------------------------- */
 
 async function persist(): Promise<boolean> {
@@ -1089,7 +1198,7 @@ function exportSettings(): void {
   if (!draft) return;
   collectGeneral();
   collectEditor();
-  const payload = { app: 'polypage-web-translator', version: 4, exportedAt: new Date().toISOString(), settings: draft };
+  const payload = { app: 'polypage-web-translator', version: 5, exportedAt: new Date().toISOString(), settings: draft };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1112,7 +1221,7 @@ async function importSettings(file: File): Promise<void> {
     draft = normalized;
     selectedId = normalized.activeProviderId;
     renderAll();
-    toast('配置已导入（v1/v2 配置会自动迁移到 v3）');
+    toast('配置已导入（旧版本配置会自动迁移；不含 TM 表）');
   } catch {
     toast('导入失败：无法解析 JSON 文件', true);
   }
@@ -1156,6 +1265,8 @@ function renderAll(): void {
   renderFailover();
   renderGlossary();
   renderRules();
+  void refreshTmStats();
+  void renderOcrPacks();
 }
 
 async function init(): Promise<void> {
@@ -1209,6 +1320,12 @@ async function init(): Promise<void> {
     document.getElementById(id)?.addEventListener('input', updateRulePreview);
   }
   $<HTMLButtonElement>('host-check').addEventListener('click', () => void checkHostStatus());
+  $<HTMLButtonElement>('tm-clear').addEventListener('click', async () => {
+    if (!window.confirm('确定清空句子记忆？此操作不可恢复，且不影响翻译缓存。')) return;
+    await sendRuntime({ type: 'tm-clear' });
+    void refreshTmStats();
+    toast('句子记忆已清空');
+  });
   $<HTMLButtonElement>('clear-cache').addEventListener('click', async () => {
     await sendRuntime({ type: 'clear-cache' });
     toast('缓存已清空');
@@ -1247,6 +1364,8 @@ async function init(): Promise<void> {
 
   // Any field edit marks the draft dirty.
   document.querySelector('.content')?.addEventListener('input', markDirty);
+  $('f-baseurl').addEventListener('input', refreshMinimaxHint);
+  $('f-apikey').addEventListener('input', refreshMinimaxHint);
 }
 
 void init();

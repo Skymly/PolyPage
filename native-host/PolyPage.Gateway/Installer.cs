@@ -221,6 +221,12 @@ public static class Installer
                 var value = key?.GetValue(null) as string;
                 Console.WriteLine($"registry  : HKCU\\{root}\\{HostName} = {value ?? "（未注册）"}");
             }
+            using (var fxKey = Registry.CurrentUser.OpenSubKey($@"{MozillaRegistryRoot}\{HostName}"))
+            {
+                var fxValue = fxKey?.GetValue(null) as string;
+                Console.WriteLine($"registry  : HKCU\\{MozillaRegistryRoot}\\{HostName} = {fxValue ?? "（未注册）"}");
+            }
+            Console.WriteLine($"firefox   : {(File.Exists(FirefoxManifestPath) ? FirefoxManifestPath : "未安装")}");
         }
         return File.Exists(ManifestPath) && File.Exists(InstalledExe) ? 0 : 1;
     }

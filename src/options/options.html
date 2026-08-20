@@ -16,7 +16,9 @@
           <a href="#glossary" class="nav-link">术语表</a>
           <a href="#rules" class="nav-link">站点规则</a>
           <a href="#pdfviewer" class="nav-link">PDF 阅读器</a>
+          <a href="#tm" class="nav-link">句子记忆</a>
           <a href="#imagetranslate" class="nav-link">图片翻译</a>
+          <a href="#ocrpacks" class="nav-link">OCR 语言包</a>
           <a href="#subtitles" class="nav-link">视频字幕</a>
           <a href="#feedback" class="nav-link">反馈日志</a>
           <a href="#gateway" class="nav-link">本地网关</a>
@@ -97,6 +99,24 @@
             <label for="viewport-budget">待翻译条目超过该值时自动切换「仅视口翻译」</label>
             <input id="viewport-budget" type="number" min="50" max="10000" step="50" />
           </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="sanitize-enabled" />
+              译文卫生（剥离思考链 / 残片，默认开启；关闭可查看模型原始输出）
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="sanitize-think" />
+              剥离 &lt;think&gt; 标签与 qwen3 残片
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="sanitize-fences" />
+              剥离代码围栏（默认关，避免误伤合法围栏译文）
+            </label>
+          </div>
         </section>
 
         <section id="providers" class="card">
@@ -142,6 +162,7 @@
                   直连本地 Ollama 时浏览器会带上 chrome-extension Origin。若测试返回 HTTP 403，请设置环境变量
                   OLLAMA_ORIGINS=* 后从托盘退出并重启 Ollama。本地端点无需 API Key，自定义请求头请留空。
                 </p>
+                <p id="minimax-host-hint" class="hint" hidden></p>
               </div>
               <div class="field" id="field-apikey">
                 <label>API Key</label>
@@ -434,6 +455,15 @@
               <input type="checkbox" id="pdf-scanned-ocr" /> 扫描页显示「识别本页」（用户点击后走当前 OCR 引擎）
             </label>
           </div>
+          <div class="field-row">
+            <label for="pdf-layout">版面预设（双栏 / 表格启发式）</label>
+            <select id="pdf-layout">
+              <option value="auto">自动</option>
+              <option value="single">偏单栏</option>
+              <option value="columns">偏双栏</option>
+              <option value="table">偏表格</option>
+            </select>
+          </div>
         </section>
 
         <section id="imagetranslate" class="card">
@@ -465,6 +495,37 @@
             <label for="img-maxedge">最大边长（像素，超出先降采样）</label>
             <input id="img-maxedge" type="number" min="512" max="8192" step="128" />
           </div>
+          <div class="field-row">
+            <label class="checkbox">
+              <input type="checkbox" id="img-overlay" /> 在原图上叠译文层（默认关，复杂版面不承诺）
+            </label>
+          </div>
+        </section>
+
+        <section id="ocrpacks" class="card">
+          <h2>OCR 语言包</h2>
+          <p class="hint">
+            默认只打包 English + 简体中文。附加包是 tesseract 数据文件，不是可执行代码。
+            下载前会显示体积；失败可重试；卸载扩展即删除 IndexedDB 中的包。
+          </p>
+          <div id="ocr-pack-list" class="ocr-pack-list"></div>
+        </section>
+
+        <section id="tm" class="card">
+          <h2>句子级翻译记忆（TM）</h2>
+          <p class="hint">
+            默认关闭。开启后，归一化完全相同的句子（8–240 字）跨页复用，跳过 Provider。
+            记忆不含 URL；配置导出不含 TM 表。
+          </p>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="tm-enabled" /> 启用句子记忆</label>
+          </div>
+          <div class="field-row">
+            <label for="tm-max">环形上限</label>
+            <input id="tm-max" type="number" min="100" max="20000" step="100" />
+          </div>
+          <p class="hint" id="tm-stats">—</p>
+          <button id="tm-clear" class="btn btn-danger" type="button">清空句子记忆</button>
         </section>
 
         <section id="subtitles" class="card">
@@ -527,15 +588,20 @@
           <div class="field-row">
             <label class="checkbox"><input type="checkbox" id="asr-confirm-full" /> 超过窗口 / 整段转写需二次确认</label>
           </div>
+          <div class="field-row">
+            <label class="checkbox"><input type="checkbox" id="asr-streaming" /> 允许流式 cue（后端不支持时自动忽略）</label>
+          </div>
         </section>
 
         <section id="compat" class="card">
           <h2>浏览器兼容</h2>
           <p class="hint">
-            Chrome / Edge 为发行主线。Firefox MV3 临时加载可用网页六模式与划词；
-            Native Host / PDF / ASR 若 API 缺失会置灰并在此说明，不会抛未捕获异常。
+            Chrome / Edge 为发行主线。Firefox MV3 临时加载可用网页六模式与划词。
+            Native Host 真联调：隔离 profile 临时加载后 Options 检测网关；安装器写入 Mozilla 键且 allowed_extensions 含
+            <code>polypage@skymly.com</code>。失败则走 failover，不抛未捕获异常。
             详见仓库 <code>docs/FIREFOX-MV3.md</code>。
           </p>
+          <div id="compat-status" class="hint"></div>
         </section>
 
         <div class="save-bar">

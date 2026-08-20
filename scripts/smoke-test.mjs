@@ -267,6 +267,8 @@ function startPageServer() {
         '/selection.html': selectionPage,
         '/inline.html': inlinePage,
         '/nav.html': navPage,
+  '/tm-a.html': `<!doctype html><html><body><p id="tm-sent">The translation memory should reuse this exact sentence.</p></body></html>`,
+  '/tm-b.html': `<!doctype html><html><body><p id="tm-sent">The translation memory should reuse this exact sentence.</p></body></html>`,
         '/image.html': imagePage,
         '/video.html': videoPage,
         '/captionless.html': captionlessPage,
@@ -390,7 +392,11 @@ function startMockApi() {
       const singleMatch = user.match(/Translate the following text from [^:]+:\s*\n\n([\s\S]+)$/);
       const texts =
         numbered.length > 0 ? numbered : [singleMatch ? singleMatch[1].trim() : user.trim()];
-      const translations = texts.map((t) => `[译] ${t}`);
+      const translations = texts.map((t) =>
+        String(t).includes('Open source software')
+          ? `<think>internal reasoning should not leak</think>[译] ${t}`
+          : `[译] ${t}`,
+      );
 
       // 2.0: SSE streaming response (spec 2.0 §7.3).
       if (parsed.stream === true) {
@@ -775,7 +781,7 @@ try {
   const savedV3 = await ext.eval(
     `chrome.runtime.sendMessage({ type: 'get-full-settings' }).then((r) => r.settings)`,
   );
-  check('v2 payload migrated to schemaVersion 4', savedV3?.schemaVersion === 4, `v=${savedV3?.schemaVersion}`);
+  check('v2 payload migrated to schemaVersion 6', savedV3?.schemaVersion === 6, `v=${savedV3?.schemaVersion}`);
   check(
     '3.0 pillar sections defaulted on migration',
     !!savedV3?.pdfViewer &&
@@ -786,13 +792,29 @@ try {
     JSON.stringify({ pdf: !!savedV3?.pdfViewer, img: !!savedV3?.imageTranslate, sub: !!savedV3?.subtitles }),
   );
   check(
-    '4.0 sections defaulted on v2→v4 migration',
+    '4.0 sections defaulted on v2→v5 migration',
     savedV3?.asr?.enabled === true &&
       savedV3?.asr?.maxSeconds === 90 &&
       savedV3?.translationMemory?.enabled === false &&
       savedV3?.pdfViewer?.scannedPageOcr === true &&
       savedV3?.subtitles?.swapSrcDst === false,
     JSON.stringify({ asr: savedV3?.asr, tm: savedV3?.translationMemory, scanned: savedV3?.pdfViewer?.scannedPageOcr }),
+  );
+  check(
+    '4.1 sections defaulted on v2→v6 migration',
+    Array.isArray(savedV3?.ocrPacks?.extraLangs) &&
+      savedV3?.ocrPacks?.extraLangs.length === 0 &&
+      savedV3?.imageOverlay?.enabled === false &&
+      savedV3?.asr?.streaming === false &&
+      savedV3?.pdfViewer?.layoutPreset === 'auto',
+    JSON.stringify({ packs: savedV3?.ocrPacks, overlay: savedV3?.imageOverlay, asr: savedV3?.asr, layout: savedV3?.pdfViewer?.layoutPreset }),
+  );
+  check(
+    '4.2 outputSanitize defaulted on v2→v6 migration',
+    savedV3?.outputSanitize?.enabled === true &&
+      savedV3?.outputSanitize?.stripThink === true &&
+      savedV3?.outputSanitize?.stripCodeFences === false,
+    JSON.stringify(savedV3?.outputSanitize),
   );
 
   // Boot the popup page inside the extension and verify its UI initializes.
@@ -854,6 +876,18 @@ try {
   check('state reports translated count', (midState?.translated ?? 0) >= 4, JSON.stringify(midState));
   check('no failed items', (midState?.failed ?? -1) === 0, JSON.stringify(midState));
   check('mock API was actually called', mock.count() >= 1, `calls=${mock.count()}`);
+  const pageHtml = await page.eval(`document.body.innerHTML`);
+  check(
+    'think tags stripped from page translations',
+    typeof pageHtml === 'string' && !pageHtml.includes('<think') && !pageHtml.includes('</think>') && !pageHtml.includes('internal reasoning should not leak'),
+    'think leaked into page HTML',
+  );
+  const p3Next = await page.eval(`document.getElementById('p3')?.nextElementSibling?.textContent ?? ''`);
+  check(
+    'qwen3-style think residue absent from p3 translation',
+    typeof p3Next === 'string' && p3Next.includes('[译]') && !p3Next.includes('<think') && !p3Next.includes('internal reasoning'),
+    JSON.stringify(p3Next).slice(0, 160),
+  );
 
   // Switch to translated mode, then hover mode, then restore.
   await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:set-mode', mode: 'translated' }`), 5000);
@@ -943,6 +977,59 @@ try {
   check('restore removes nav suffix', restoredNav === 'Contents', JSON.stringify(restoredNav));
   await closePage(browserCdp, navUrl);
   navPageCdp.close();
+
+  /* ============================== 4.1 TM (pillar M) ============================== */
+  check(
+    'TM smoke settings saved',
+    await saveSettingsThroughExtension(
+      settingsPayload({
+        cacheEnabled: false,
+        translationMemory: { enabled: true, maxEntries: 5000 },
+      }),
+    ),
+  );
+  const tmA = `http://127.0.0.1:${PORT_PAGE}/tm-a.html`;
+  const tmB = `http://127.0.0.1:${PORT_PAGE}/tm-b.html`;
+  const tmCallsBefore = mock.count();
+  await openPage(browserCdp, tmA);
+  const tmACdp = await pageFor(tmA);
+  await ext.eval(sendToTabWithUrl(tmA, `{ type: 'wt:translate' }`), 5000);
+  let tmAText = '';
+  for (let i = 0; i < 30; i++) {
+    tmAText = await tmACdp.eval(`document.querySelector('#tm-sent + .wt-bilingual-block, .wt-bilingual-block')?.textContent ?? document.body.innerText`);
+    if (tmAText.includes('[译]') || tmAText.includes('译')) break;
+    await sleep(200);
+  }
+  let tmEntries = 0;
+  for (let i = 0; i < 20; i++) {
+    const stats = await ext.eval(`chrome.runtime.sendMessage({ type: 'tm-stats' })`);
+    tmEntries = stats?.entries ?? 0;
+    if (tmEntries > 0) break;
+    await sleep(150);
+  }
+  const tmCallsAfterFirst = mock.count();
+  check('TM first page translated via mock', tmCallsAfterFirst > tmCallsBefore, `before=${tmCallsBefore} after=${tmCallsAfterFirst} text=${JSON.stringify(tmAText).slice(0,80)}`);
+  check('TM wrote at least one entry', tmEntries > 0, `entries=${tmEntries}`);
+  await closePage(browserCdp, tmA);
+  tmACdp.close();
+  await openPage(browserCdp, tmB);
+  const tmBCdp = await pageFor(tmB);
+  await ext.eval(sendToTabWithUrl(tmB, `{ type: 'wt:translate' }`), 5000);
+  let tmBHit = false;
+  for (let i = 0; i < 30; i++) {
+    const txt = await tmBCdp.eval(`document.body.innerText`);
+    if (txt.includes('[译]') || txt.includes('译')) { tmBHit = true; break; }
+    await sleep(200);
+  }
+  check('TM second page shows a translation', tmBHit, 'no translated text');
+  check('TM second page adds zero mock provider calls', mock.count() === tmCallsAfterFirst, `before=${tmCallsAfterFirst} after=${mock.count()}`);
+  await closePage(browserCdp, tmB);
+  tmBCdp.close();
+  check(
+    'restore smoke settings after TM',
+    await saveSettingsThroughExtension(settingsPayload({})),
+  );
+
 
   /* ============================== 2.0 site rules ============================== */
 

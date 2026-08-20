@@ -18,6 +18,7 @@ import { openPdfDocument } from './pdf/loader';
 import type { PdfDocumentLike, PdfPageLike } from './pdf/loader';
 import {
   clusterPageFromLines,
+  clusterOptionsForPreset,
   collectRepeatingLines,
   extractLines,
 } from './pdf/segment';
@@ -83,6 +84,7 @@ let degradedViewport = false;
 let maxConcurrentPages = 3;
 let skipHeadersFooters = true;
 let scannedPageOcr = true;
+let layoutPreset: 'auto' | 'single' | 'columns' | 'table' = 'auto';
 let maxEdgePx = 4096;
 let ocrEngineId = 'llm-vision';
 let scannedOcrCount = 0;
@@ -166,6 +168,7 @@ async function main(): Promise<void> {
   maxConcurrentPages = settings.pdfViewer.maxConcurrentPages;
   skipHeadersFooters = settings.pdfViewer.skipHeadersFooters;
   scannedPageOcr = settings.pdfViewer.scannedPageOcr;
+  layoutPreset = settings.pdfViewer.layoutPreset ?? 'auto';
   maxEdgePx = settings.imageTranslate.maxEdgePx;
   ocrEngineId = settings.imageTranslate.engine;
   mode = settings.pdfViewer.defaultMode;
@@ -221,19 +224,21 @@ async function buildPages(doc: PdfDocumentLike): Promise<void> {
     pageObjects.push(page);
     try {
       const content = await page.getTextContent();
-      allLines.push(extractLines(content.items as TextItemLike[]));
+      allLines.push(extractLines(content.items as TextItemLike[], clusterOptionsForPreset(layoutPreset)));
     } catch {
       allLines.push([]);
     }
   }
 
   const repeating = skipHeadersFooters ? collectRepeatingLines(allLines) : new Set<string>();
+  const cluster = clusterOptionsForPreset(layoutPreset);
 
   const totalBudgetCheck = { paragraphs: 0 };
   pages = pageObjects.map((pdfPage, i) => {
     const result = clusterPageFromLines(allLines[i], {
       skipHeadersFooters,
       headerFooterSet: repeating,
+      cluster,
     });
     const paragraphs: ParaState[] = result.paragraphs.map((p) => ({
       text: p.text,

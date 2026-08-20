@@ -48,8 +48,8 @@ const v1Settings = {
 describe('v1 -> v3 migration', () => {
   const migrated = normalizeSettings(v1Settings);
 
-  it('bumps schemaVersion to 4', () => {
-    expect(migrated.schemaVersion).toBe(4);
+  it('bumps schemaVersion to current', () => {
+    expect(migrated.schemaVersion).toBe(6);
   });
 
   it('keeps every existing v1 field intact', () => {
@@ -92,6 +92,7 @@ describe('v1 -> v3 migration', () => {
       maxConcurrentPages: 3,
       autoOpen: false,
       scannedPageOcr: true,
+      layoutPreset: 'auto',
     });
     expect(migrated.imageTranslate).toEqual({
       enabled: true,

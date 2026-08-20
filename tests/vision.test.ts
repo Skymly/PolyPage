@@ -77,6 +77,13 @@ describe('parseVisionResponse', () => {
     ]);
   });
 
+  it('strips MiniMax think tags around a JSON array', () => {
+    const segments = parseVisionResponse(
+      '<think>planning</think>[{"text":"HELLO","translation":"你好"}]',
+    );
+    expect(segments).toEqual([{ text: 'HELLO', translation: '你好' }]);
+  });
+
   it('strips code fences and surrounding prose', () => {
     const segments = parseVisionResponse(
       'Sure! Here you go:\n```json\n[{"text":"A","translation":"甲"}]\n```\nDone.',

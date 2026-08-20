@@ -67,6 +67,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     needsApiKey: true,
   },
   {
+    id: 'preset-minimax',
+    name: 'MiniMax',
+    description: 'MiniMax Token Plan / OpenAI 兼容（MiniMax-M3，支持视觉；国际站亦可用 api.minimax.io）',
+    type: 'openai-compatible',
+    baseUrl: 'https://api.minimax.chat/v1',
+    model: 'MiniMax-M3',
+    needsApiKey: true,
+  },
+  {
     id: 'preset-ollama',
     name: 'Ollama (本地)',
     description: '本地 Ollama 的 OpenAI 兼容接口，无需 API Key',

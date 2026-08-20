@@ -1,6 +1,6 @@
 /**
  * Launch headed Edge with dist/ loaded and write a local Ollama provider
- * (qwen3.8:27b) into the extension settings for manual testing.
+ * (qwen3-14b-64k) into the extension settings for manual testing.
  *
  * Usage: node scripts/load-edge-ollama.mjs
  */
@@ -18,7 +18,7 @@ const EDGE =
 const profile =
   process.env.POLYPAGE_EDGE_PROFILE ||
   path.join(process.env.LOCALAPPDATA || '', 'PolyPage', 'edge-dev-profile');
-const MODEL = process.env.OLLAMA_MODEL || 'qwen3.8:27b';
+const MODEL = process.env.OLLAMA_MODEL || 'qwen3-14b-64k';
 const BASE = process.env.OLLAMA_BASE || 'http://127.0.0.1:11434/v1';
 
 if (!existsSync(path.join(dist, 'manifest.json'))) {
@@ -31,7 +31,7 @@ if (!existsSync(EDGE)) {
 mkdirSync(profile, { recursive: true });
 
 const settings = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   activeProviderId: 'ollama-local',
   providers: [
     {

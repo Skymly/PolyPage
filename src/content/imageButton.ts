@@ -12,6 +12,7 @@ import { sendRuntime } from '../messaging/messages';
 import { IMAGE_HOVER_MIN_PX } from '../shared/constants';
 import type { ImageTranslateTrigger } from '../shared/types';
 import { OcrResultPanel } from '../ocr/resultPanel';
+import { applyImageOverlay, removeImageOverlay } from '../ocr/overlay';
 
 export interface ImageButtonConfig {
   enabled: boolean;
@@ -21,6 +22,8 @@ export interface ImageButtonConfig {
   ocrAvailable: boolean;
   /** Reason shown when entries are greyed out. */
   disabledReason: string | null;
+  /** 4.1: overlay translations on the source image. */
+  overlayEnabled?: boolean;
 }
 
 export class ImageTranslateController {
@@ -34,11 +37,13 @@ export class ImageTranslateController {
     visionSupported: true,
     ocrAvailable: true,
     disabledReason: null,
+    overlayEnabled: false,
   };
 
   configure(config: ImageButtonConfig): void {
     this.config = config;
     if (!this.hoverAllowed()) this.hideButton();
+    if (!config.overlayEnabled) removeImageOverlay();
   }
 
   private hoverAllowed(): boolean {
@@ -155,6 +160,11 @@ export class ImageTranslateController {
         if (this.currentRequestId !== requestId) return;
         if (res?.ok) {
           this.panel.showSegments(res.segments);
+          if (this.config.overlayEnabled && near instanceof HTMLImageElement) {
+            applyImageOverlay(near, res.segments);
+          } else {
+            removeImageOverlay(near instanceof HTMLImageElement ? near : undefined);
+          }
         } else {
           this.panel.showError(res?.error ?? '未知错误');
         }

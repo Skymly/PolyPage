@@ -15,7 +15,7 @@ namespace PolyPage.Gateway;
 public sealed class GatewayServer
 {
     public const string Name = "PolyPage Gateway";
-    public const string Version = "4.0.0";
+    public const string Version = "4.2.0";
     public const int ProtocolVersion = 2;
     public const int DefaultMaxBinaryBytes = 32 * 1024 * 1024;
 

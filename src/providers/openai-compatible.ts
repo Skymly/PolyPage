@@ -8,6 +8,7 @@
  *    {{targetLanguage}}, {{domain}}, {{glossary}} before sending.
  */
 import type { ProviderConfig } from '../shared/types';
+import { minimaxHostHint } from '../shared/sanitize';
 import { parseBatchTranslation, renderTemplate } from '../shared/utils';
 import { buildVisionRequest, buildVisionUserPrompt } from '../ocr/llm-vision';
 import {
@@ -33,7 +34,7 @@ function throwHttpFailure(
   label: string,
 ): never {
   const kind = local && status === 403 ? 'config' : classifyHttpStatus(status);
-  const suffix =
+  let suffix =
     local && status === 403 ? `：${LOCAL_ORIGIN_403_HINT}` : detail ? `: ${detail}` : '';
   throw new ProviderError(kind, `${label} (HTTP ${status})${suffix}`);
 }
@@ -90,7 +91,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       temperature: config.temperature,
       max_tokens: config.maxTokens,
       // Ollama Qwen3-class models otherwise spend the token budget on reasoning.
-      ...(this.isLocalEndpoint() ? { think: false } : {}),
+      ...this.extraModelOptions(),
       messages: [
         ...(config.systemPrompt.trim() !== ''
           ? [{ role: 'system', content: this.renderSystemPrompt(ctx) }]
@@ -112,7 +113,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         if (!res.ok) {
           throwHttpFailure(
             res.status,
-            await readApiErrorMessage(res),
+            this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             'API 请求失败',
           );
@@ -203,9 +204,10 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
       ...config.headers,
     };
-    const body = JSON.stringify(
-      buildVisionRequest(config.model, config.temperature, config.maxTokens, prompt, dataUrl),
-    );
+    const body = JSON.stringify({
+      ...buildVisionRequest(config.model, config.temperature, config.maxTokens, prompt, dataUrl),
+      ...this.extraModelOptions(),
+    });
     return withTimeoutAndRetry(
       async (innerSignal) => {
         let res: Response;
@@ -217,7 +219,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         if (!res.ok) {
           throwHttpFailure(
             res.status,
-            await readApiErrorMessage(res),
+            this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             '视觉翻译请求失败',
           );
@@ -228,12 +230,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         } catch {
           throw new ProviderError('invalid_response', 'API 返回了非 JSON 内容');
         }
-        const content = (json as { choices?: { message?: { content?: unknown } }[] })
-          ?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string') {
-          throw new ProviderError('invalid_response', '视觉 API 响应缺少 choices[0].message.content');
-        }
-        return content;
+        return this.extractAssistantContent(json, '视觉 API 响应');
       },
       { timeoutMs: config.timeoutMs, signal, retries: 1 },
     );
@@ -279,7 +276,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         if (!res.ok) {
           throwHttpFailure(
             res.status,
-            await readApiErrorMessage(res),
+            this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             '转写请求失败',
           );
@@ -294,6 +291,31 @@ export class OpenAICompatibleProvider implements TranslationProvider {
   private isLocalEndpoint(): boolean {
     const url = this.config.baseUrl.toLowerCase();
     return url.includes('localhost') || url.includes('127.0.0.1') || url.includes('0.0.0.0');
+  }
+
+  /** MiniMax-M3 thinking and Ollama Qwen3 reasoning otherwise eat the token budget. */
+  private extraModelOptions(): Record<string, unknown> {
+    if (this.isLocalEndpoint()) return { think: false };
+    if (/minimax/i.test(this.config.model) || /minimax/i.test(this.config.baseUrl)) {
+      return { thinking: { type: 'disabled' } };
+    }
+    return {};
+  }
+
+  /** Prefer message.content; never treat reasoning_content as the translation. */
+  private extractAssistantContent(json: unknown, label: string): string {
+    const message = (json as { choices?: { message?: { content?: unknown; reasoning_content?: unknown } }[] })
+      ?.choices?.[0]?.message;
+    const content = message?.content;
+    if (typeof content === 'string' && content.trim() !== '') return content;
+    throw new ProviderError('invalid_response', `${label}缺少 choices[0].message.content`);
+  }
+
+  private maybeMinimaxHint(status: number, detail: string): string {
+    if (status !== 401 && status !== 403) return detail;
+    const hint = minimaxHostHint(this.config.baseUrl, this.config.apiKey);
+    if (!hint) return detail;
+    return detail ? `${detail}。${hint}` : hint;
   }
 
   private async translateSequentially(
@@ -383,7 +405,7 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
       temperature: config.temperature,
       max_tokens: config.maxTokens,
       // Ollama Qwen3-class models otherwise spend the token budget on reasoning.
-      ...(this.isLocalEndpoint() ? { think: false } : {}),
+      ...this.extraModelOptions(),
       messages: [
         ...(config.systemPrompt.trim() !== ''
           ? [{ role: 'system', content: this.renderSystemPrompt(ctx) }]
@@ -403,7 +425,7 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
         if (!res.ok) {
           throwHttpFailure(
             res.status,
-            await readApiErrorMessage(res),
+            this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             'API 请求失败',
           );
@@ -414,12 +436,7 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
         } catch {
           throw new ProviderError('invalid_response', 'API 返回了非 JSON 内容');
         }
-        const content = (json as { choices?: { message?: { content?: unknown } }[] })
-          ?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string') {
-          throw new ProviderError('invalid_response', 'API 响应缺少 choices[0].message.content');
-        }
-        return content;
+        return this.extractAssistantContent(json, 'API 响应');
       },
       { timeoutMs: config.timeoutMs, signal },
     );

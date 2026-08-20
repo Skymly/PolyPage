@@ -420,3 +420,6 @@ textarea:focus {
 #log-filter {
   min-width: 160px;
 }
+
+.ocr-pack-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ocr-pack-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }

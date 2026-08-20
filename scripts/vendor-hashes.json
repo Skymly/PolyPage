@@ -3,11 +3,11 @@
   "pdfjsVersion": "4.10.38",
   "tesseractJsVersion": "7.0.0",
   "files": {
-    "pdf.min.mjs": "27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c",
-    "pdf.worker.min.mjs": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
-    "tesseract.esm.min.js": "64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29",
-    "tesseract-worker.min.js": "576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d",
-    "tesseract-core-simd-lstm.wasm.js": "c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38",
+    "pdf.min.mjs": "c46382a2b7161f3a4a6fe3d16b2350a0a81eb2b2b4fb0d1462371061f1515540",
+    "pdf.worker.min.mjs": "5adc1a8eef45946e8996f740d9aca8c099502367beac47fbf2e1811d429f2002",
+    "tesseract.esm.min.js": "3067bc42260804d9bce0f9fc3344cf391f944ecbf14f693feed2331245c0ea22",
+    "tesseract-worker.min.js": "19ee5cda4a70f74f419bc9d40f02118c415fe76b9b07494797b710d3211a5630",
+    "tesseract-core-simd-lstm.wasm.js": "364a1d3ced9378b3610dd218b695c7bb5e63c6d9ee8cd7d76394043b22c2fff7",
     "tesseract-core-simd-lstm.wasm": "34e8d50cac216427d86bf397d610fdd9f49492539bbcdfbfccc4eda20c810bea",
     "tessdata/eng.traineddata": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
     "tessdata/chi_sim.traineddata": "a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730"

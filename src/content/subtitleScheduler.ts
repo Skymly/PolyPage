@@ -7,6 +7,8 @@ export interface CueLike {
   startTime: number;
   endTime: number;
   text: string;
+  /** Seeded for 转写并翻译 memory cues so the layer does not translate-cue. */
+  translation?: string;
 }
 
 /** Strip WebVTT cue payload tags (<c>, <b>, timestamps...) and collapse

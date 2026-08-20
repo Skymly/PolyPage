@@ -69,6 +69,11 @@ class VideoSubtitleController {
 
   setMemoryCues(cues: CueLike[]): void {
     this.memoryCues = cues;
+    for (const cue of cues) {
+      if (cue.translation !== undefined && cue.translation !== '') {
+        this.scheduler.resolve(stripVttTags(cue.text) || cue.text, cue.translation);
+      }
+    }
     this.lastRendered = null;
     this.ensureLayer();
     if (this.timer === null) this.timer = window.setInterval(this.tick, 250);
@@ -180,6 +185,10 @@ class VideoSubtitleController {
       return;
     }
     if (decision.kind === 'fetch') {
+      if (this.memoryCues.length > 0) {
+        this.render(decision.text, this.scheduler.cachedTranslation(decision.text));
+        return;
+      }
       this.render(decision.text, null);
       void this.fetchTranslation(decision.text);
       return;

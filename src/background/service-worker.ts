@@ -27,11 +27,9 @@ import { sendTabCommand } from '../messaging/messages';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
 import { createProvider, providerSupportsAsr, providerSupportsVision, toProviderError } from '../providers/provider';
-import { normalizeTranscript } from '../asr/engine';
 import { base64ToBytes } from '../shared/binaryChunk';
 import { nativeRequest } from './nativePort';
 import type { GatewayCapabilities } from '../shared/nativeRpc';
-import type { TranslationProvider } from '../providers/provider';
 // Side-effect imports: register provider factories.
 import '../providers/openai-compatible';
 import '../providers/custom-http';
@@ -65,9 +63,10 @@ import {
   defaultSettings,
 } from '../shared/constants';
 import { OcrRoundTrip } from '../ocr/roundtrip';
+import { AsrRoundTrip } from '../asr/roundtrip';
 import { ChromeOcrCache } from '../ocr/resultCache';
 import { TranslationPipeline } from '../translation/pipeline';
-import { buildContext, effectiveLanguages, isProviderConfigured } from '../translation/context';
+import { effectiveLanguages, isProviderConfigured } from '../translation/context';
 import { renderGlossary } from '../shared/siteRules';
 import type {
   ContentSettings,
@@ -253,6 +252,19 @@ const ocrRoundTrip = new OcrRoundTrip({
   logError,
 });
 
+const asrRoundTrip = new AsrRoundTrip({
+  getSettings,
+  createProvider,
+  translateTexts: async (texts) => {
+    const res = await pipeline.translate(
+      texts.map((text, i) => ({ text, key: `asr-${i}` })),
+      { immediate: true },
+    );
+    return texts.map((_, i) => res.results[`asr-${i}`] ?? '');
+  },
+  recordStat,
+});
+
 async function handleTranslate(
   items: TranslationItem[],
   domain?: string,
@@ -329,68 +341,25 @@ async function handleAsrStart(
   tabId?: number,
 ): Promise<AsrResponse> {
   const settings = await getSettings(true);
-  if (!settings.asr.enabled) {
-    return { ok: false, kind: 'config', error: '语音转写已在设置中关闭' };
-  }
-  const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
-  if (!provider || !isProviderConfigured(provider)) {
-    return { ok: false, kind: 'config', error: '翻译服务未配置或已禁用' };
-  }
-  if (!activeProviderSupportsAsr(settings)) {
-    return { ok: false, kind: 'config', error: '当前翻译服务不支持转写' };
-  }
-  let instance: TranslationProvider;
-  try {
-    instance = createProvider(provider);
-  } catch (e) {
-    return { ok: false, kind: 'config', error: toProviderError(e).message };
-  }
-  if (typeof instance.transcribe !== 'function') {
-    return { ok: false, kind: 'config', error: '当前翻译服务不支持转写' };
-  }
-  const bytes = base64ToBytes(base64);
-  const maxBytes = settings.asr.maxUploadMb * 1024 * 1024;
-  if (bytes.byteLength > maxBytes) {
-    return { ok: false, kind: 'config', error: `音频超过上传上限（${settings.asr.maxUploadMb} MB）` };
-  }
   const controller = new AbortController();
   asrControllers.set(requestId, controller);
-  const started = Date.now();
   try {
-    const ctx = {
-      ...buildContext(settings, provider),
-      languageHint: languageHint && languageHint !== 'auto' ? languageHint : undefined,
-    };
-    const emitPartials = settings.asr.streaming === true && tabId !== undefined;
-    const streamingFn = instance.transcribeStream;
-    let raw: { text: string; segments?: Array<{ start: number; end: number; text: string }> };
-    if (emitPartials && typeof streamingFn === 'function') {
-      raw = await streamingFn.call(
-        instance,
-        { mime, bytes },
-        ctx,
-        (partial) => {
-          const cues = normalizeTranscript(partial, windowStart, windowDuration);
-          void sendTabCommand(tabId, {
-            type: 'wt:asr-partial',
-            cues: cues.map((c) => ({ start: c.start, end: c.end, text: c.text })),
-          }).catch(() => undefined);
-        },
-        controller.signal,
-      );
-    } else {
-      raw = await instance.transcribe({ mime, bytes }, ctx, controller.signal);
-    }
-    const cues = normalizeTranscript(raw, windowStart, windowDuration);
-    recordStat(provider.id, true, Date.now() - started);
-    return {
-      ok: true,
-      cues: cues.map((c) => ({ start: c.start, end: c.end, text: c.text, translation: '' })),
-    };
-  } catch (e) {
-    const err = toProviderError(e);
-    recordStat(provider.id, false, Date.now() - started, err.message);
-    return { ok: false, kind: err.kind, error: err.message };
+    const bytes = base64ToBytes(base64);
+    return await asrRoundTrip.transcribeAndTranslate({
+      mime,
+      bytes,
+      windowStart,
+      windowDuration,
+      languageHint,
+      signal: controller.signal,
+      emitPartials: settings.asr.streaming === true && tabId !== undefined,
+      onPartial:
+        tabId !== undefined
+          ? (cues) => {
+              void sendTabCommand(tabId, { type: 'wt:asr-partial', cues }).catch(() => undefined);
+            }
+          : undefined,
+    });
   } finally {
     asrControllers.delete(requestId);
   }

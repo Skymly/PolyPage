@@ -24,6 +24,7 @@ import { PageTranslator } from './translator';
 import { SubtitleManager, captureMediaWindow } from './media';
 import { bytesToBase64 } from '../shared/binaryChunk';
 import { ImageTranslateController } from './imageButton';
+import { removeImageOverlay } from '../ocr/overlay';
 import { FeedbackMarker } from './feedback';
 
 const translator = new PageTranslator();
@@ -192,7 +193,12 @@ async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; ski
   if (!res?.ok) return { ok: false, error: res && 'error' in res ? res.error : '转写失败' };
   subtitleManager.applyMemoryCues(
     media,
-    res.cues.map((c) => ({ startTime: c.start, endTime: c.end, text: c.text })),
+    res.cues.map((c) => ({
+      startTime: c.start,
+      endTime: c.end,
+      text: c.text,
+      translation: c.translation,
+    })),
   );
   scheduleReport();
   return { ok: true };
@@ -216,6 +222,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:restore':
       translator.restore();
       subtitleManager.restoreAll();
+      removeImageOverlay();
       return { ok: true };
     case 'wt:toggle': {
       if (translator.active) {
@@ -263,6 +270,16 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       return { ok: true };
     case 'wt:transcribe-media':
       return handleTranscribeMedia(cmd.force === true);
+    case 'wt:asr-partial': {
+      const media = subtitleManager.pickCaptionlessMedia();
+      if (media) {
+        subtitleManager.applyMemoryCues(
+          media,
+          cmd.cues.map((c) => ({ startTime: c.start, endTime: c.end, text: c.text })),
+        );
+      }
+      return { ok: true };
+    }
     default:
       return { ok: false };
   }
@@ -316,6 +333,7 @@ async function init(): Promise<void> {
       enabled: contentSettings.imageTranslateEnabled,
       trigger: contentSettings.imageTranslateTrigger,
       visionSupported: contentSettings.visionSupported,
+      overlayEnabled: contentSettings.imageOverlayEnabled === true,
       ocrAvailable,
       disabledReason: ocrAvailable
         ? null

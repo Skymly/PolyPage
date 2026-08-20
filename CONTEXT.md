@@ -28,6 +28,10 @@ _Avoid_: 用续译指字幕 cue 或流式条目
 The module that scans page nodes, applies a display mode, and restores the original DOM. It talks to 翻译管线 through chrome.runtime adapters; it does not call a Provider.
 _Avoid_: PageTranslator, 页面翻译, renderer（渲染是内部 seam）
 
+**转写并翻译**:
+The module that turns a captured audio window into timed cues with source text and optional translation. Capture stays in the page; transcription is not 翻译管线; cue text is.
+_Avoid_: ASR engine, 语音转写（那只是半截）
+
 **探活**:
 Checking that a Provider answers. Not a translation.
 _Avoid_: 测试翻译, test translation

@@ -467,6 +467,8 @@ export interface TaskRecord {
   frameId: number;
   taskKey: string;
   textHash: string;
+  /** Page URL when the task was recorded; used to drop stale resume after navigation. */
+  pageUrl?: string;
   state: 'inflight' | 'done';
   ts: number;
 }

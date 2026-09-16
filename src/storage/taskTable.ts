@@ -120,6 +120,7 @@ export class TaskTable {
     tabId: number,
     frameId: number,
     items: { key: string; text: string }[],
+    pageUrl?: string,
   ): Promise<void> {
     const ts = Date.now();
     for (const item of items) {
@@ -128,6 +129,7 @@ export class TaskTable {
         frameId,
         taskKey: item.key,
         textHash: hashText(item.text),
+        ...(pageUrl ? { pageUrl } : {}),
         state: 'inflight',
         ts,
       });
@@ -175,4 +177,15 @@ export class TaskTable {
       evictKeys.has(`${r.tabId}|${r.frameId}|${r.taskKey}|${r.ts}`),
     );
   }
+}
+
+/** Drop inflight records that belong to a previous page of the same tab. */
+export function resumePayloadForTab(
+  records: TaskRecord[],
+  pageUrl: string | undefined,
+): Array<{ key: string; textHash: string }> {
+  return records
+    .filter((r) => r.state === 'inflight')
+    .filter((r) => !r.pageUrl || !pageUrl || r.pageUrl === pageUrl)
+    .map((r) => ({ key: r.taskKey, textHash: r.textHash }));
 }

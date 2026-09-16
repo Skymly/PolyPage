@@ -266,7 +266,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:repeat-selection':
       return { ok: selectionTranslator.repeatLast() };
     case 'wt:resume-inflight':
-      void translator.resumeInflight(cmd.keys).then(scheduleReport);
+      void translator.resumeInflight(cmd.tasks).then(scheduleReport);
       return { ok: true };
     case 'wt:transcribe-media':
       return handleTranscribeMedia(cmd.force === true);

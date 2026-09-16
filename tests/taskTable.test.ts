@@ -4,7 +4,7 @@
  * cache-idempotent completion.
  */
 import { describe, expect, it } from 'vitest';
-import { MemoryTaskStore, TaskTable } from '../src/storage/taskTable';
+import { MemoryTaskStore, resumePayloadForTab, TaskTable } from '../src/storage/taskTable';
 import { hashText } from '../src/shared/utils';
 
 function makeTable(max = 5000): { table: TaskTable; store: MemoryTaskStore } {
@@ -84,5 +84,30 @@ describe('ring eviction (总量上限 5000 条环形淘汰)', () => {
     const all = await store.getAll();
     expect(all.length).toBe(5);
     expect(all.map((r) => r.taskKey).sort()).toEqual(['k3', 'k4', 'k5', 'k6', 'k7']);
+  });
+});
+
+describe('resume payload URL filter (M-16)', () => {
+  it('stores pageUrl on inflight records', async () => {
+    const { table, store } = makeTable();
+    await table.markInflight(1, 0, [{ key: 'wt-1', text: 'hello' }], 'https://example.com/a');
+    expect((await store.getAll())[0].pageUrl).toBe('https://example.com/a');
+  });
+
+  it('drops records whose pageUrl does not match the current tab', async () => {
+    const { table } = makeTable();
+    await table.markInflight(1, 0, [{ key: 'old', text: 'hello' }], 'https://example.com/old');
+    await table.markInflight(1, 0, [{ key: 'now', text: 'world' }], 'https://example.com/now');
+    const inflight = await table.listInflight();
+    const tasks = resumePayloadForTab(inflight, 'https://example.com/now');
+    expect(tasks.map((t) => t.key)).toEqual(['now']);
+    expect(tasks[0].textHash).toBe(hashText('world'));
+  });
+
+  it('keeps legacy records that have no pageUrl', async () => {
+    const { table } = makeTable();
+    await table.markInflight(1, 0, [{ key: 'legacy', text: 'hello' }]);
+    const tasks = resumePayloadForTab(await table.listInflight(), 'https://example.com/now');
+    expect(tasks.map((t) => t.key)).toEqual(['legacy']);
   });
 });

@@ -150,3 +150,36 @@ describe('restore fidelity (M-18)', () => {
     expect(sourceTextOf(p)).toBe(recycled);
   });
 });
+
+describe('bilingual block teardown (M-12)', () => {
+  it('recycle replaces the node text without leaving the old bilingual sibling', async () => {
+    const root = mountArticle();
+    const recycled = 'Completely new recycled paragraph text here for the virtual list.';
+    const translator = translatorWithMap({
+      [ORIGINAL]: TRANSLATED,
+      [recycled]: '虚拟列表换了新段落。',
+    });
+    await translator.translate('bilingual');
+    expect(root.querySelectorAll(`.${BILINGUAL_CLASS}`).length).toBe(1);
+    const stale = root.querySelector(`.${BILINGUAL_CLASS}`) as HTMLElement;
+
+    const p = document.getElementById('p1') as HTMLElement;
+    p.textContent = recycled;
+    expect(stale.isConnected).toBe(true);
+    translator.detectRecycledNodes();
+    expect(stale.isConnected).toBe(false);
+    expect(root.querySelectorAll(`.${BILINGUAL_CLASS}`).length).toBeLessThanOrEqual(1);
+  });
+
+  it('restore() after the host is disconnected removes the orphan bilingual block', async () => {
+    const root = mountArticle();
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('bilingual');
+    const stale = root.querySelector(`.${BILINGUAL_CLASS}`) as HTMLElement;
+    expect(stale).not.toBeNull();
+    document.getElementById('p1')!.remove();
+    translator.restore();
+    expect(stale.isConnected).toBe(false);
+    expect(root.querySelector(`.${BILINGUAL_CLASS}`)).toBeNull();
+  });
+});

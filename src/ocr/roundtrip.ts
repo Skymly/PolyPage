@@ -52,8 +52,25 @@ function sanitizeSegmentTranslation(text: string, settings: Settings): string {
   return result.ok ? result.text : '';
 }
 
-function ocrSegmentsCacheable(segments: OcrSegment[]): boolean {
-  return segments.length > 0 && segments.every((s) => s.text.trim() === '' || s.translation.trim() !== '');
+function ocrSegmentsCacheable(segments: OcrSegment[], allowOcrOnly: boolean): boolean {
+  if (segments.length === 0) return false;
+  if (allowOcrOnly) return segments.every((s) => s.text.trim() !== '');
+  return segments.every((s) => s.text.trim() === '' || s.translation.trim() !== '');
+}
+
+/** Sentinel cache provider when tesseract runs without a configured Provider (M-89). */
+export const OCR_LOCAL_CACHE_PROVIDER = 'ocr-local';
+
+export async function resolveOcrCacheIdentity(
+  input: { cacheIdentity?: string; url: string; naturalWidth?: number; naturalHeight?: number },
+  buffer: ArrayBuffer,
+  hash: (data: ArrayBuffer) => Promise<string | null> = sha256Hex,
+): Promise<string> {
+  if (input.cacheIdentity) return input.cacheIdentity;
+  const contentHash = await hash(buffer);
+  return contentHash
+    ? `img|${contentHash}`
+    : `imgurl|${input.url}|${input.naturalWidth ?? 0}x${input.naturalHeight ?? 0}`;
 }
 
 export class OcrRoundTrip {
@@ -95,19 +112,16 @@ export class OcrRoundTrip {
     try {
       const fetchImage = this.deps.fetchImage ?? defaultFetchImage;
       const { buffer, mime } = await fetchImage(input.url, input.signal);
-      const contentHash = await sha256Hex(buffer);
-      const identity = contentHash
-        ? `img|${contentHash}`
-        : `imgurl|${input.url}|${input.naturalWidth ?? 0}x${input.naturalHeight ?? 0}`;
-      const cacheIdentity = input.cacheIdentity ?? identity;
+      const cacheIdentity = await resolveOcrCacheIdentity(input, buffer);
       const { source, target } = provider
         ? effectiveLanguages(settings, provider)
         : { source: settings.defaultSourceLanguage, target: settings.defaultTargetLanguage };
+      const cacheProviderId = provider?.id ?? (engineId === 'tesseract-wasm' ? OCR_LOCAL_CACHE_PROVIDER : '');
 
-      if (settings.cacheEnabled && provider) {
+      if (settings.cacheEnabled && cacheProviderId) {
         try {
           const key = buildOcrCacheKey({
-            providerId: provider.id,
+            providerId: cacheProviderId,
             engineId,
             sourceLanguage: source,
             targetLanguage: target,
@@ -176,11 +190,11 @@ export class OcrRoundTrip {
         this.deps.recordStat?.(provider.id, true, Date.now() - started);
       }
 
-      if (settings.cacheEnabled && provider && ocrSegmentsCacheable(segments)) {
+      if (settings.cacheEnabled && cacheProviderId && ocrSegmentsCacheable(segments, engineId === 'tesseract-wasm' && !instance)) {
         if (input.signal.aborted) throw new ProviderError('aborted', '已取消');
         try {
           const key = buildOcrCacheKey({
-            providerId: provider.id,
+            providerId: cacheProviderId,
             engineId: result.engine,
             sourceLanguage: source,
             targetLanguage: target,

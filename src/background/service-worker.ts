@@ -51,6 +51,7 @@ import {
   knownPackId,
   resolveTessLangs,
   seedTesseractLangCache,
+  ocrMissingPackMessage,
 } from '../ocr/packs';
 import {
   appendFeedback,
@@ -276,6 +277,8 @@ const ocrRoundTrip = new OcrRoundTrip({
   prepareTesseractLangs: async (tessLangs, extraLangs) => {
     const ready = await ocrPacks.readyIds();
     const resolved = await resolveTessLangs(tessLangs, extraLangs, ready);
+    const skipped = ocrMissingPackMessage(resolved.missing);
+    if (skipped) await logError('ocr', 'config', skipped);
     for (const id of resolved.langs) {
       const pack = await ocrPacks.getReady(id);
       if (pack) await seedTesseractLangCache(id, pack.data);

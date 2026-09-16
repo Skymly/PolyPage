@@ -39,9 +39,17 @@ export function chooseFingerprint(
 }
 
 /**
- * Scope a paragraph's cache text with document identity (spec 3.0 §5.5.2):
- * fingerprint + page + paragraph index + text. Language pair and
- * glossaryVersion are added by the shared cache key builder.
+ * Cache-key prefix for a PDF paragraph (spec 3.0 §5.5.2). Goes on
+ * `PipelineItem.cacheScope`; the body stays in `text` so Providers and TM
+ * never see the document file ID.
+ */
+export function pdfCacheScope(fingerprint: string, page: number, paraIndex: number): string {
+  return `pdf|${fingerprint}|p${page}|i${paraIndex}|`;
+}
+
+/**
+ * Scope + body, used for resume `textHash` so in-flight records stay stable.
+ * Language pair and glossaryVersion are added by the shared cache key builder.
  */
 export function pdfScopedCacheText(
   fingerprint: string,
@@ -49,5 +57,5 @@ export function pdfScopedCacheText(
   paraIndex: number,
   text: string,
 ): string {
-  return `pdf|${fingerprint}|p${page}|i${paraIndex}|${text}`;
+  return `${pdfCacheScope(fingerprint, page, paraIndex)}${text}`;
 }

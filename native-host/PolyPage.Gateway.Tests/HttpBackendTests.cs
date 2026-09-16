@@ -86,6 +86,25 @@ public class HttpBackendTests : IDisposable
     }
 
     [Fact]
+    public async Task EscapesQuotesInLanguageAndApiKeyInsideJsonString()
+    {
+        _responseJson = "{\"data\":{\"translations\":[\"一\"]}}";
+        var backend = new HttpBackend(new HttpBackendConfig
+        {
+            Id = "stub",
+            Url = _baseUrl + "translate",
+            ApiKey = "k\"ey",
+            BodyTemplate = "{ \"q\": {{texts}}, \"from\": \"{{sourceLanguage}}\", \"to\": \"{{targetLanguage}}\", \"key\": \"{{apiKey}}\" }",
+            ResponsePath = "data.translations",
+            TimeoutMs = 5000,
+        });
+        await backend.TranslateAsync(new[] { "one" }, new TranslateContext("en\"x", "zh"), CancellationToken.None);
+        using var doc = JsonDocument.Parse(_lastBody);
+        Assert.Equal("en\"x", doc.RootElement.GetProperty("from").GetString());
+        Assert.Equal("k\"ey", doc.RootElement.GetProperty("key").GetString());
+    }
+
+    [Fact]
     public async Task MapsHttp500ToServerRpcCode()
     {
         _responseStatus = 500;

@@ -131,23 +131,17 @@ public sealed class HttpBackend : IGatewayBackend
 
     private string RenderBody(IReadOnlyList<string> texts, TranslateContext ctx)
     {
-        var vars = new Dictionary<string, string>
-        {
-            ["texts"] = JsonSerializer.Serialize(texts),
-            ["text"] = JsonSerializer.Serialize(texts.Count > 0 ? texts[0] : ""),
-            ["sourceLanguage"] = JsonSerializer.Serialize(ctx.Source),
-            ["targetLanguage"] = JsonSerializer.Serialize(ctx.Target),
-            ["apiKey"] = JsonSerializer.Serialize(_config.ApiKey),
-        };
-        // {{texts}}/{{text}} already carry their own quotes as JSON values.
+        // {{texts}}/{{text}} are JSON values (quoted arrays/strings). Language and
+        // apiKey sit inside JSON string literals in the documented templates, so
+        // they must be escaped, not spliced (M-71).
         var rendered = _config.BodyTemplate
-            .Replace("{{texts}}", vars["texts"])
-            .Replace("{{text}}", vars["text"]);
+            .Replace("{{texts}}", JsonSerializer.Serialize(texts))
+            .Replace("{{text}}", JsonSerializer.Serialize(texts.Count > 0 ? texts[0] : ""));
         var stringVars = new Dictionary<string, string>
         {
-            ["sourceLanguage"] = ctx.Source,
-            ["targetLanguage"] = ctx.Target,
-            ["apiKey"] = _config.ApiKey,
+            ["sourceLanguage"] = TemplateHelper.EscapeForJson(ctx.Source),
+            ["targetLanguage"] = TemplateHelper.EscapeForJson(ctx.Target),
+            ["apiKey"] = TemplateHelper.EscapeForJson(_config.ApiKey),
         };
         rendered = TemplateHelper.Render(rendered, stringVars);
         try

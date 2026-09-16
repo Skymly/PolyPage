@@ -116,6 +116,11 @@ export const DEFAULT_VIEWPORT_BUDGET = 500;
 export const DEFAULT_IMAGE_MAX_EDGE_PX = 4096;
 /** Max uploaded image size before downsampling (spec 3.0 §6.2 item 4). */
 export const IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** Fetch timeout for OCR image download (M-06). */
+export const IMAGE_FETCH_TIMEOUT_MS = 20_000;
+/** Viewer PDF download cap / timeout (M-06). */
+export const PDF_MAX_BYTES = 50 * 1024 * 1024;
+export const PDF_FETCH_TIMEOUT_MS = 30_000;
 /** Images smaller than this (rendered size) get no hover button. */
 export const IMAGE_HOVER_MIN_PX = 200;
 /** Pending paragraph budget before the PDF reader degrades to viewport±1. */

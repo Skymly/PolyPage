@@ -2,8 +2,32 @@
  * Image fetch / data-URL decode / downsample for OCR 往返.
  * Production uses OffscreenCanvas; tests inject stubs and never enter here.
  */
-import { IMAGE_MAX_BYTES } from '../shared/constants';
+import { IMAGE_FETCH_TIMEOUT_MS, IMAGE_MAX_BYTES } from '../shared/constants';
 import { computeDownsample, needsDownsample } from '../shared/imageUtils';
+
+function mergeAbortTimeout(signal: AbortSignal, ms: number): AbortSignal {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  const onAbort = (): void => {
+    clearTimeout(timer);
+    ac.abort();
+  };
+  if (signal.aborted) {
+    clearTimeout(timer);
+    ac.abort();
+    return ac.signal;
+  }
+  signal.addEventListener('abort', onAbort, { once: true });
+  ac.signal.addEventListener(
+    'abort',
+    () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    },
+    { once: true },
+  );
+  return ac.signal;
+}
 
 export function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = '';
@@ -38,10 +62,17 @@ export async function defaultFetchImage(
   signal: AbortSignal,
 ): Promise<{ buffer: ArrayBuffer; mime: string }> {
   if (url.startsWith('data:')) return decodeDataUrl(url);
-  const res = await fetch(url, { signal, credentials: 'include' });
+  const res = await fetch(url, { signal: mergeAbortTimeout(signal, IMAGE_FETCH_TIMEOUT_MS), credentials: 'omit' });
   if (!res.ok) throw new Error(`图片下载失败（HTTP ${res.status}）`);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > IMAGE_MAX_BYTES) {
+    throw new Error(`图片超过大小上限（${IMAGE_MAX_BYTES} 字节）`);
+  }
   const buffer = await res.arrayBuffer();
   if (buffer.byteLength === 0) throw new Error('图片内容为空');
+  if (buffer.byteLength > IMAGE_MAX_BYTES) {
+    throw new Error(`图片超过大小上限（${IMAGE_MAX_BYTES} 字节）`);
+  }
   return { buffer, mime: res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/png' };
 }
 

@@ -100,6 +100,7 @@ function extendedState(): PageState {
   state.subtitleVideos = subtitleManager.subtitleVideoCount();
   state.captionlessMedia = subtitleManager.captionlessMediaCount();
   state.asrActive = subtitleManager.asrActive() || asrSession.active;
+  state.ocrPanelText = imageController.panelText();
   return state;
 }
 
@@ -272,7 +273,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:open-pdf-viewer':
       return { ok: true, url: location.href };
     case 'wt:translate-image':
-      imageController.translateImage(cmd.url);
+      imageController.translateImage(cmd.url, undefined, true);
       return { ok: true };
     case 'wt:toggle-subtitles': {
       subtitleManager.configure({

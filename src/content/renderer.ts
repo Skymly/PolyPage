@@ -52,8 +52,14 @@ export function saveOriginal(entry: NodeEntry): void {
   }
 }
 
+function stopOriginalWatcher(entry: NodeEntry): void {
+  entry.originalWatcher?.disconnect();
+  entry.originalWatcher = null;
+}
+
 /** Restore the element's original content. */
 export function restoreOriginal(entry: NodeEntry): void {
+  stopOriginalWatcher(entry);
   if (entry.originalNodes !== null) {
     entry.el.replaceChildren(...entry.originalNodes);
     entry.originalNodes = null;

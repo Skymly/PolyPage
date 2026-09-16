@@ -148,7 +148,6 @@ function renderMediaSections(): void {
   $<HTMLInputElement>('asr-enabled').checked = draft.asr.enabled;
   $<HTMLInputElement>('asr-maxsec').value = String(draft.asr.maxSeconds);
   $<HTMLInputElement>('asr-confirm-full').checked = draft.asr.confirmFull;
-  $<HTMLInputElement>('asr-streaming').checked = draft.asr.streaming;
   $<HTMLInputElement>('tm-enabled').checked = draft.translationMemory.enabled;
   $<HTMLInputElement>('tm-max').value = String(draft.translationMemory.maxEntries);
   void refreshPdfPermStatus();
@@ -207,7 +206,7 @@ function collectMediaSections(): void {
     enabled: $<HTMLInputElement>('asr-enabled').checked,
     maxSeconds: Math.round(num($<HTMLInputElement>('asr-maxsec').value, draft.asr.maxSeconds)),
     confirmFull: $<HTMLInputElement>('asr-confirm-full').checked,
-    streaming: $<HTMLInputElement>('asr-streaming').checked,
+    streaming: false,
   };
   draft.translationMemory = {
     enabled: $<HTMLInputElement>('tm-enabled').checked,

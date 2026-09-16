@@ -227,6 +227,7 @@ AMO 上架、Linux/macOS 安装路径、Firefox Android。
 - 仅当能力声明支持时启用；增量 cue 复用 `CueScheduler`；
 - `asr.streaming === false` 或后端无能力：与 4.1 一次注入完全一致；
 - 仍不申请麦克风；仍不写 SRT。
+- 现状（M-35）：无 Provider 实现 `transcribeStream`。Options 已隐藏该开关，保存恒为 `false`，不交付流式转写。
 
 ### 7.2 原位覆盖精修（P1）
 

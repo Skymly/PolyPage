@@ -16,6 +16,7 @@ import {
   SHADOW_STYLE_ATTR,
 } from '../shared/constants';
 import { detectLanguage, pageLanguageBlocksAutoTranslate } from '../shared/languageDetect';
+import { shouldStartAutoTranslate } from '../shared/settingsSync';
 import { resolveLanguageCode } from '../providers/langCodes';
 import type { ContentSettings, EffectiveRule, PageState } from '../shared/types';
 import { DomObserver } from './observer';
@@ -302,6 +303,9 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
         cmd.cues.map((c) => ({ startTime: c.start, endTime: c.end, text: c.text })),
       );
       return { ok: true };
+    case 'wt:settings-changed':
+      applyLiveSettings(cmd.settings);
+      return { ok: true };
     default:
       return { ok: false };
   }
@@ -322,56 +326,14 @@ async function init(): Promise<void> {
     return; // background unavailable; popup actions will still work when it wakes up
   }
 
-  // Site rules for this frame's host (spec 2.0 §6.4).
-  effectiveRule = effectiveRuleForHost(location.hostname, contentSettings.siteRules);
-
-  translator.configure({
-    minTextLength: effectiveRule.minTextLength ?? contentSettings.minTextLength,
-    rule: effectiveRule,
-    inlineBudget: contentSettings.inlineBudget,
-    viewportBudget: contentSettings.viewportBudget,
-    streamingAvailable: contentSettings.streamingSupported === true,
-  });
-
-  // Blacklist applies by top-level domain; frames follow the top page
-  // (spec 2.0 §6.2 item 7).
-  const topHost = resolveBlacklistHost(topLevelHostname(), contentSettings.tabHostname ?? '');
-  const blacklisted = hostBlacklisted(topHost, contentSettings.blacklist);
-  translator.blacklisted = blacklisted;
-  selectionTranslator.setMode(contentSettings.selectionTranslate);
-  selectionTranslator.setSpeak(contentSettings.selectionSpeak);
+  const blacklisted = applyLoadedSettings(contentSettings);
   selectionTranslator.start();
 
-  // 3.0 pillars F/G/H wiring (never on blacklisted hosts).
   if (!blacklisted) {
-    const ocrAvailable = contentSettings.ocrAvailable ?? contentSettings.visionSupported;
-    imageController.configure({
-      enabled: contentSettings.imageTranslateEnabled,
-      trigger: contentSettings.imageTranslateTrigger,
-      visionSupported: contentSettings.visionSupported,
-      overlayEnabled: contentSettings.imageOverlayEnabled === true,
-      ocrAvailable,
-      disabledReason: ocrAvailable
-        ? null
-        : (contentSettings.ocrEngine === 'tesseract-wasm'
-            ? '本地 OCR 不可用'
-            : '当前翻译服务不支持视觉翻译，请切换到 OpenAI-compatible 多模态服务或改用 tesseract-wasm'),
-    });
     imageController.init();
     feedbackMarker.init();
-    subtitleManager.configure({
-      bilingual: contentSettings.subtitleBilingual ?? 'both',
-      fontSizePct: contentSettings.subtitleFontSizePct ?? 100,
-      swapSrcDst: contentSettings.subtitleSwapSrcDst ?? false,
-      background: contentSettings.subtitleBackground ?? 'rgba(0,0,0,.62)',
-      position: contentSettings.subtitlePosition ?? 'bottom',
-    });
-    if ((effectiveRule?.subtitleSelectors.length ?? 0) > 0 && contentSettings.subtitlesEnabled) {
-      subtitleManager.applySelectors(effectiveRule!.subtitleSelectors);
-    }
   }
 
-  // Language detection feeds the auto-translate guard and the popup hint.
   if (document.body) {
     detectPageLanguage();
     translator.configure({ pageLanguage });
@@ -389,15 +351,75 @@ async function init(): Promise<void> {
   observer.start();
   if (!blacklisted) translator.rescan();
 
-  if (contentSettings.autoTranslate && !blacklisted) {
-    // Guard (spec 3.0 §8.1 item 3): never auto-translate pages already in
-    // the target language.
-    if (pageMatchesTargetLanguage()) {
-      autoSkipped = true;
-      scheduleReport();
-    } else {
-      void translator.translate(defaultMode());
+  if (
+    shouldStartAutoTranslate(
+      'init',
+      contentSettings.autoTranslate,
+      blacklisted,
+      pageMatchesTargetLanguage(),
+    )
+  ) {
+    void translator.translate(defaultMode());
+  } else if (contentSettings.autoTranslate && !blacklisted && pageMatchesTargetLanguage()) {
+    autoSkipped = true;
+  }
+  scheduleReport();
+}
+
+/** Reconfigure from a projected snapshot. Does not start listeners (M-43 live). */
+function applyLoadedSettings(cs: ContentSettings): boolean {
+  contentSettings = cs;
+  effectiveRule = effectiveRuleForHost(location.hostname, cs.siteRules);
+  translator.configure({
+    minTextLength: effectiveRule.minTextLength ?? cs.minTextLength,
+    rule: effectiveRule,
+    inlineBudget: cs.inlineBudget,
+    viewportBudget: cs.viewportBudget,
+    streamingAvailable: cs.streamingSupported === true,
+  });
+  const topHost = resolveBlacklistHost(topLevelHostname(), cs.tabHostname ?? '');
+  const blacklisted = hostBlacklisted(topHost, cs.blacklist);
+  translator.blacklisted = blacklisted;
+  selectionTranslator.setMode(cs.selectionTranslate);
+  selectionTranslator.setSpeak(cs.selectionSpeak);
+  if (!blacklisted) {
+    const ocrAvailable = cs.ocrAvailable ?? cs.visionSupported;
+    imageController.configure({
+      enabled: cs.imageTranslateEnabled,
+      trigger: cs.imageTranslateTrigger,
+      visionSupported: cs.visionSupported,
+      overlayEnabled: cs.imageOverlayEnabled === true,
+      ocrAvailable,
+      disabledReason: ocrAvailable
+        ? null
+        : (cs.ocrEngine === 'tesseract-wasm'
+            ? '本地 OCR 不可用'
+            : '当前翻译服务不支持视觉翻译，请切换到 OpenAI-compatible 多模态服务或改用 tesseract-wasm'),
+    });
+    subtitleManager.configure({
+      bilingual: cs.subtitleBilingual ?? 'both',
+      fontSizePct: cs.subtitleFontSizePct ?? 100,
+      swapSrcDst: cs.subtitleSwapSrcDst ?? false,
+      background: cs.subtitleBackground ?? 'rgba(0,0,0,.62)',
+      position: cs.subtitlePosition ?? 'bottom',
+    });
+    if ((effectiveRule?.subtitleSelectors.length ?? 0) > 0 && cs.subtitlesEnabled) {
+      subtitleManager.applySelectors(effectiveRule.subtitleSelectors);
     }
+  }
+  return blacklisted;
+}
+
+function applyLiveSettings(cs: ContentSettings): void {
+  const blacklisted = applyLoadedSettings(cs);
+  if (blacklisted && translator.active) {
+    translator.restore();
+    subtitleManager.restoreAll();
+    removeImageOverlay();
+  }
+  if (document.body) {
+    detectPageLanguage();
+    translator.configure({ pageLanguage });
   }
   scheduleReport();
 }

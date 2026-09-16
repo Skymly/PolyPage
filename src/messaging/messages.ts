@@ -233,7 +233,9 @@ export type TabCommand =
   /** 3.0 (pillar H): re-submit persisted in-flight tasks after SW restart. */
   | { type: 'wt:resume-inflight'; v?: number; tasks: Array<{ key: string; textHash: string }> }
   | { type: 'wt:transcribe-media'; v?: number; force?: boolean }
-  | { type: 'wt:asr-partial'; v?: number; cues: Array<{ start: number; end: number; text: string }> };
+  | { type: 'wt:asr-partial'; v?: number; cues: Array<{ start: number; end: number; text: string }> }
+  /** M-43: SW broadcasts projected content settings after a settings write. */
+  | { type: 'wt:settings-changed'; v?: number; settings: ContentSettings };
 
 export type TabCommandResponse<C extends TabCommand> =
   C extends { type: 'wt:get-state' } ? PageState :

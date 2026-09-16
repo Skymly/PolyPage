@@ -23,7 +23,7 @@
  *  - language detection helper + auto source-language fill-in (pillar H);
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
-import { MEDIA_COMMAND_FRAME_ID, sendTabCommand, sendViewerResume } from '../messaging/messages';
+import { MEDIA_COMMAND_FRAME_ID, PROTOCOL_VERSION, sendTabCommand, sendViewerResume } from '../messaging/messages';
 import { hostnameFromUrl } from '../shared/siteRules';
 import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
@@ -166,6 +166,74 @@ function activeProviderCapabilities(settings: Settings) {
     instance = null;
   }
   return providerCapabilities(provider, instance, lastGatewayCaps, gatewayProbed);
+}
+
+function buildContentSettings(s: Settings, tabUrl?: string): ContentSettings {
+  const caps = activeProviderCapabilities(s);
+  const vision = caps.vision;
+  return {
+    defaultDisplayMode: s.defaultDisplayMode,
+    autoTranslate: s.autoTranslate,
+    blacklist: s.blacklist,
+    minTextLength: s.minTextLength,
+    selectionTranslate: s.selectionTranslate,
+    siteRules: s.siteRules,
+    inlineBudget: s.inlineBudget,
+    viewportBudget: s.viewportBudget,
+    defaultTargetLanguage: s.defaultTargetLanguage,
+    languageDetection: s.languageDetection,
+    selectionSpeak: s.selectionSpeak,
+    imageTranslateEnabled: s.imageTranslate.enabled,
+    imageTranslateTrigger: s.imageTranslate.trigger,
+    visionSupported: vision,
+    subtitlesEnabled: s.subtitles.enabled,
+    subtitleBilingual: s.subtitles.bilingual,
+    subtitleFontSizePct: s.subtitles.fontSizePct,
+    subtitleSwapSrcDst: s.subtitles.swapSrcDst,
+    subtitleBackground: s.subtitles.background,
+    subtitlePosition: s.subtitles.position,
+    ocrEngine: s.imageTranslate.engine,
+    ocrAvailable: computeOcrAvailable(
+      s.imageTranslate.enabled,
+      s.imageTranslate.engine,
+      vision,
+      tesseractRuntimeAvailable(),
+    ),
+    asrEnabled: s.asr.enabled,
+    asrSupported: caps.asr,
+    asrMaxSeconds: s.asr.maxSeconds,
+    asrConfirmFull: s.asr.confirmFull,
+    asrMaxUploadMb: s.asr.maxUploadMb,
+    imageOverlayEnabled: s.imageOverlay.enabled,
+    asrStreaming: s.asr.streaming,
+    streamingSupported: caps.streaming,
+    tabHostname: hostnameFromUrl(tabUrl),
+  };
+}
+
+async function broadcastSettingsChanged(): Promise<void> {
+  const s = await getSettings();
+  let tabs: chrome.tabs.Tab[] = [];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    return;
+  }
+  for (const tab of tabs) {
+    if (tab.id == null) continue;
+    const cs = buildContentSettings(s, tab.url);
+    try {
+      chrome.tabs.sendMessage(tab.id, {
+        v: PROTOCOL_VERSION,
+        type: 'wt:settings-changed',
+        settings: cs,
+      }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch {
+      /* tab cannot receive messages */
+    }
+  }
 }
 
 /* ------------------------------- provider stats ------------------------------ */
@@ -772,46 +840,7 @@ chrome.runtime.onMessage.addListener(
           case 'get-content-settings': {
             await ensureGatewayProbed();
             const s = await getSettings();
-            const vision = activeProviderCapabilities(s).vision;
-            const cs: ContentSettings = {
-              defaultDisplayMode: s.defaultDisplayMode,
-              autoTranslate: s.autoTranslate,
-              blacklist: s.blacklist,
-              minTextLength: s.minTextLength,
-              selectionTranslate: s.selectionTranslate,
-              siteRules: s.siteRules,
-              inlineBudget: s.inlineBudget,
-              viewportBudget: s.viewportBudget,
-              defaultTargetLanguage: s.defaultTargetLanguage,
-              languageDetection: s.languageDetection,
-              selectionSpeak: s.selectionSpeak,
-              imageTranslateEnabled: s.imageTranslate.enabled,
-              imageTranslateTrigger: s.imageTranslate.trigger,
-              visionSupported: vision,
-              subtitlesEnabled: s.subtitles.enabled,
-              subtitleBilingual: s.subtitles.bilingual,
-              subtitleFontSizePct: s.subtitles.fontSizePct,
-              subtitleSwapSrcDst: s.subtitles.swapSrcDst,
-              subtitleBackground: s.subtitles.background,
-              subtitlePosition: s.subtitles.position,
-              ocrEngine: s.imageTranslate.engine,
-              ocrAvailable: computeOcrAvailable(
-                s.imageTranslate.enabled,
-                s.imageTranslate.engine,
-                vision,
-                tesseractRuntimeAvailable(),
-              ),
-              asrEnabled: s.asr.enabled,
-              asrSupported: activeProviderCapabilities(s).asr,
-              asrMaxSeconds: s.asr.maxSeconds,
-              asrConfirmFull: s.asr.confirmFull,
-              asrMaxUploadMb: s.asr.maxUploadMb,
-              imageOverlayEnabled: s.imageOverlay.enabled,
-              asrStreaming: s.asr.streaming,
-              streamingSupported: activeProviderCapabilities(s).streaming,
-              tabHostname: hostnameFromUrl(sender.tab?.url),
-            };
-            sendResponse(cs);
+            sendResponse(buildContentSettings(s, sender.tab?.url));
             break;
           }
           case 'get-settings-summary': {
@@ -865,6 +894,7 @@ chrome.runtime.onMessage.addListener(
             settingsCache = next;
             setupContextMenus(next);
             sendResponse({ ok: true, settings: next });
+            void broadcastSettingsChanged();
             break;
           }
           case 'set-selection-translate': {
@@ -879,6 +909,7 @@ chrome.runtime.onMessage.addListener(
             settingsCache = next;
             setupContextMenus(next);
             sendResponse({ ok: true });
+            void broadcastSettingsChanged();
             break;
           }
           case 'get-viewer-settings': {
@@ -1102,6 +1133,7 @@ chrome.runtime.onMessage.addListener(
                 };
                 await saveSettings(s);
                 settingsCache = s;
+                void broadcastSettingsChanged();
               }
               sendResponse({ ok: true });
             } catch (e) {
@@ -1124,6 +1156,7 @@ chrome.runtime.onMessage.addListener(
               await saveSettings(s);
               settingsCache = s;
               sendResponse({ ok: true });
+              void broadcastSettingsChanged();
             } catch (e) {
               sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
             }

@@ -414,6 +414,37 @@ public class GatewayServerTests
         Assert.DoesNotContain("未知", second.GetProperty("message").GetString());
         Assert.Contains("不支持转写", second.GetProperty("message").GetString());
     }
+
+    [Fact]
+    public async Task StdinEofCancelsInFlightTranslate()
+    {
+        var blocking = new BlockingBackend();
+        using var log = new GatewayLog();
+        var server = new GatewayServer(new IGatewayBackend[] { blocking }, blocking.Id, log);
+        var input = new MemoryStream();
+        input.Write(Pipe.Frame(new { jsonrpc = "2.0", id = 41, method = "translate", @params = new { texts = new[] { "x" } } }));
+        input.Position = 0;
+        var output = new MemoryStream();
+        await server.RunAsync(input, output, CancellationToken.None);
+        Assert.True(blocking.WasCancelled, "stdin EOF must cancel in-flight backend work");
+    }
+
+    [Fact]
+    public async Task MalformedFrameWritesParseErrorThenExits()
+    {
+        using var log = new GatewayLog();
+        var server = new GatewayServer(new IGatewayBackend[] { new FakeBackend() }, "fake", log);
+        var input = new MemoryStream();
+        input.Write(BitConverter.GetBytes(NativeMessaging.MaxMessageBytes + 1));
+        input.Position = 0;
+        var output = new MemoryStream();
+        await server.RunAsync(input, output, CancellationToken.None);
+        output.Position = 0;
+        var frame = await NativeMessaging.ReadFrameAsync(output, CancellationToken.None);
+        Assert.NotNull(frame);
+        var msg = JsonSerializer.Deserialize<JsonElement>(frame);
+        Assert.Equal(JsonRpc.ParseError, msg.GetProperty("error").GetProperty("code").GetInt32());
+    }
 }
 
 /// <summary>Fake backend that implements vision + ASR for protocol v2 tests.</summary>

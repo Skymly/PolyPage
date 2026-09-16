@@ -73,7 +73,7 @@ public sealed class WhisperBackend : IGatewayBackend
         try
         {
             using var res = await Http.SendAsync(req, timeoutCts.Token);
-            var raw = await res.Content.ReadAsStringAsync(timeoutCts.Token);
+            var raw = await HttpContentLimits.ReadBoundedStringAsync(res.Content, timeoutCts.Token);
             if (!res.IsSuccessStatusCode)
             {
                 throw new GatewayBackendException(ClassifyStatus((int)res.StatusCode),

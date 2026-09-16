@@ -51,24 +51,48 @@ public sealed class GatewayServer
     public async Task RunAsync(Stream input, Stream output, CancellationToken ct)
     {
         _log.Info($"gateway started (version {Version}, backends: {string.Join(",", _backends.Keys)})");
+        using var runCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var runToken = runCts.Token;
         var handlers = new List<Task>();
-        while (!ct.IsCancellationRequested)
+        while (!runToken.IsCancellationRequested)
         {
             byte[]? frame;
             try
             {
-                frame = await NativeMessaging.ReadFrameAsync(input, ct);
+                frame = await NativeMessaging.ReadFrameAsync(input, runToken);
             }
             catch (OperationCanceledException)
             {
                 break;
             }
+            catch (InvalidDataException e)
+            {
+                // Malformed length / truncated payload: stream is desynced, so
+                // emit ParseError then stop. Do not keep reading (M-74).
+                _log.Error($"frame read failed: {e.Message}");
+                try
+                {
+                    await WriteAsync(output, JsonRpc.Fail(null, JsonRpc.ParseError, $"解析失败: {e.Message}"), CancellationToken.None);
+                }
+                catch
+                {
+                    /* stdout already gone */
+                }
+                runCts.Cancel();
+                break;
+            }
             catch (Exception e)
             {
                 _log.Error($"frame read failed: {e.Message}");
+                runCts.Cancel();
                 break;
             }
-            if (frame is null) break; // stdin closed — browser terminated the host
+            if (frame is null)
+            {
+                // Browser closed stdin — cancel in-flight RPC / whisper (M-74).
+                runCts.Cancel();
+                break;
+            }
 
             JsonRpcRequest request;
             try
@@ -78,7 +102,7 @@ public sealed class GatewayServer
             }
             catch (Exception e)
             {
-                await WriteAsync(output, JsonRpc.Fail(null, JsonRpc.ParseError, $"解析失败: {e.Message}"), ct);
+                await WriteAsync(output, JsonRpc.Fail(null, JsonRpc.ParseError, $"解析失败: {e.Message}"), runToken);
                 continue;
             }
             // Register the cancellation scope BEFORE dispatch so a `cancel`
@@ -89,7 +113,7 @@ public sealed class GatewayServer
             CancellationTokenSource? requestCts = null;
             if (!request.IsNotification && requestId != 0)
             {
-                requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                requestCts = CancellationTokenSource.CreateLinkedTokenSource(runToken);
                 lock (_pending) _pending[requestId] = requestCts;
             }
 
@@ -99,11 +123,11 @@ public sealed class GatewayServer
             handlers.RemoveAll(t => t.IsCompleted);
             if (request.Method == "binary.chunk")
             {
-                await HandleAsync(output, request, requestId, requestCts, ct);
+                await HandleAsync(output, request, requestId, requestCts, runToken);
             }
             else
             {
-                handlers.Add(Task.Run(() => HandleAsync(output, request, requestId, requestCts, ct), CancellationToken.None));
+                handlers.Add(Task.Run(() => HandleAsync(output, request, requestId, requestCts, runToken), CancellationToken.None));
             }
         }
         try

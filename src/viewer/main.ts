@@ -17,6 +17,12 @@ import type { PdfViewerMode } from '../shared/types';
 import { openPdfDocument } from './pdf/loader';
 import type { PdfDocumentLike, PdfPageLike } from './pdf/loader';
 import {
+  blankCanvas,
+  cleanupPdfPage,
+  extractPageTextThenCleanup,
+  releaseOffscreenPage,
+} from './pdf/pageLifecycle';
+import {
   clusterPageFromLines,
   clusterOptionsForPreset,
   collectRepeatingLines,
@@ -70,6 +76,7 @@ interface ParaState {
 interface PageState {
   index: number; // 1-based pdf.js page number
   pdfPage: PdfPageLike | null;
+  pageHeight: number;
   lines: PdfLine[];
   paragraphs: ParaState[];
   scanned: boolean;
@@ -77,10 +84,13 @@ interface PageState {
   canvas: HTMLCanvasElement;
   rendered: boolean;
   workStarted: boolean;
+  renderGen: number;
 }
 
 let mode: ViewerMode = 'bilingual';
 let pages: PageState[] = [];
+/** Kept so off-screen pages can re-getPage after cleanup (M-65). */
+let pdfDoc: PdfDocumentLike | null = null;
 let fingerprint = '';
 let degradedViewport = false;
 let maxConcurrentPages = 3;
@@ -222,6 +232,7 @@ async function main(): Promise<void> {
     size: byteLength,
     headerHash: hh,
   });
+  pdfDoc = doc;
 
   try {
     await buildPages(doc);
@@ -240,6 +251,8 @@ async function main(): Promise<void> {
   }
 
   window.addEventListener('pagehide', () => {
+    for (const p of pages) releaseOffscreenPage(p);
+    pdfDoc = null;
     void doc.destroy().catch(() => undefined);
   });
 }
@@ -248,28 +261,27 @@ async function main(): Promise<void> {
 
 async function buildPages(doc: PdfDocumentLike): Promise<void> {
   const allLines: PdfLine[][] = [];
-  const pageObjects: PdfPageLike[] = [];
+  const pageHeights: number[] = [];
+  const clusterOpts = clusterOptionsForPreset(layoutPreset);
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
-    pageObjects.push(page);
-    try {
-      const content = await page.getTextContent();
-      allLines.push(extractLines(content.items as TextItemLike[], clusterOptionsForPreset(layoutPreset)));
-    } catch {
-      allLines.push([]);
-    }
+    const { lines, pageHeight } = await extractPageTextThenCleanup(page, (items) =>
+      extractLines(items as TextItemLike[], clusterOpts),
+    );
+    allLines.push(lines);
+    pageHeights.push(pageHeight);
   }
 
   const repeating = skipHeadersFooters ? collectRepeatingLines(allLines) : new Set<string>();
   const cluster = clusterOptionsForPreset(layoutPreset);
 
   const totalBudgetCheck = { paragraphs: 0 };
-  pages = pageObjects.map((pdfPage, i) => {
-    const result = clusterPageFromLines(allLines[i], {
+  pages = allLines.map((lines, i) => {
+    const result = clusterPageFromLines(lines, {
       skipHeadersFooters,
       headerFooterSet: repeating,
       cluster,
-      pageHeight: pdfPage.getViewport({ scale: 1 }).height,
+      pageHeight: pageHeights[i],
     });
     const paragraphs: ParaState[] = result.paragraphs.map((p) => ({
       text: p.text,
@@ -281,14 +293,16 @@ async function buildPages(doc: PdfDocumentLike): Promise<void> {
     totalBudgetCheck.paragraphs += paragraphs.length;
     return {
       index: i + 1,
-      pdfPage,
-      lines: allLines[i],
+      pdfPage: null,
+      pageHeight: pageHeights[i],
+      lines,
       paragraphs,
       scanned: result.scanned,
       container: buildPageDom(i + 1),
       canvas: null as unknown as HTMLCanvasElement,
       rendered: false,
       workStarted: false,
+      renderGen: 0,
     };
   });
   // Wire canvases after DOM insertion.
@@ -324,12 +338,15 @@ function observePages(): void {
   io = new IntersectionObserver(
     (records) => {
       for (const rec of records) {
-        if (!rec.isIntersecting) continue;
         const target = rec.target as HTMLElement;
         const pageNumber = Number(target.dataset.page ?? '0');
         const page = pages[pageNumber - 1];
-        if (!page || page.workStarted) continue;
-        page.workStarted = true;
+        if (!page) continue;
+        if (!rec.isIntersecting) {
+          releaseOffscreenPage(page);
+          continue;
+        }
+        if (page.workStarted && page.rendered) continue;
         void workPage(page);
       }
     },
@@ -351,32 +368,47 @@ async function workPage(page: PageState): Promise<void> {
         /* render failure does not block text translation */
       }
     }
-    if (mode !== 'original') {
-      await translatePage(page);
+    if (!page.workStarted) {
+      page.workStarted = true;
+      if (mode !== 'original') {
+        await translatePage(page);
+      }
+      ensureParasDom(page);
+      renderPageParas(page);
     }
-    ensureParasDom(page);
-    renderPageParas(page);
   } finally {
     releasePageSlot();
   }
 }
 
 async function renderPage(page: PageState): Promise<void> {
-  if (!page.pdfPage) return;
-  const base = page.pdfPage.getViewport({ scale: 1 });
-  const available = Math.max(docEl.clientWidth - 60, 320);
-  const scale = Math.min(2.2, Math.max(0.6, available / base.width));
-  const viewport = page.pdfPage.getViewport({ scale });
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  page.canvas.width = Math.floor(viewport.width * dpr);
-  page.canvas.height = Math.floor(viewport.height * dpr);
-  page.canvas.style.width = `${Math.floor(viewport.width)}px`;
-  page.canvas.style.height = `${Math.floor(viewport.height)}px`;
-  const ctx = page.canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.scale(dpr, dpr);
-  await page.pdfPage.render({ canvasContext: ctx, viewport }).promise;
-  page.rendered = true;
+  if (!pdfDoc) return;
+  const gen = page.renderGen;
+  const pdfPage = await pdfDoc.getPage(page.index);
+  page.pdfPage = pdfPage;
+  try {
+    const base = pdfPage.getViewport({ scale: 1 });
+    const available = Math.max(docEl.clientWidth - 60, 320);
+    const scale = Math.min(2.2, Math.max(0.6, available / base.width));
+    const viewport = pdfPage.getViewport({ scale });
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    page.canvas.width = Math.floor(viewport.width * dpr);
+    page.canvas.height = Math.floor(viewport.height * dpr);
+    page.canvas.style.width = `${Math.floor(viewport.width)}px`;
+    page.canvas.style.height = `${Math.floor(viewport.height)}px`;
+    const ctx = page.canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+    if (page.renderGen !== gen) {
+      blankCanvas(page.canvas);
+      return;
+    }
+    page.rendered = true;
+  } finally {
+    cleanupPdfPage(pdfPage);
+    page.pdfPage = null;
+  }
 }
 
 /* ------------------------------- translation ---------------------------------- */
@@ -575,7 +607,7 @@ async function recognizeScannedPage(
   btn.disabled = true;
   btn.textContent = '识别中…';
   try {
-    if (!page.rendered) await renderPage(page);
+    if (!page.rendered || page.canvas.width === 0) await renderPage(page);
     const dataUrl = canvasToOcrDataUrl(page.canvas, maxEdgePx);
     const imageHash = imageHashFromDataUrl(dataUrl);
     const cacheIdentity = scannedPageCacheText(fingerprint, page.index, imageHash, ocrEngineId);

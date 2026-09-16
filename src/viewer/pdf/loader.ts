@@ -17,6 +17,8 @@ export interface PdfPageLike {
     viewport: { width: number; height: number };
   }): { promise: Promise<void> };
   getTextContent(): Promise<{ items: unknown[] }>;
+  /** pdf.js PageProxy.cleanup — drop retained text/image streams (M-65). */
+  cleanup?: () => void;
 }
 
 export interface PdfDocumentLike {

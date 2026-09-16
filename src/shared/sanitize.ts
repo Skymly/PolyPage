@@ -37,6 +37,22 @@ export function stripThinkTags(content: string): string {
   return text.replace(THINK_TAG, '');
 }
 
+/**
+ * Incremental filter for streaming deltas (M-60). Unclosed `<think>` is
+ * swallowed until a close tag arrives, so tooltips never show think residue.
+ */
+export function createThinkDeltaFilter(): (delta: string) => string {
+  let acc = '';
+  let shown = '';
+  return (delta: string): string => {
+    acc += delta;
+    const cleaned = stripThinkTags(acc);
+    const piece = cleaned.startsWith(shown) ? cleaned.slice(shown.length) : cleaned;
+    shown = cleaned;
+    return piece;
+  };
+}
+
 export function sanitizeOptionsFromSettings(
   settings: { outputSanitize?: OutputSanitizeSettings } | OutputSanitizeSettings | undefined,
 ): SanitizeOptions {

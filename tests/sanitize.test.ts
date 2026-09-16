@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  createThinkDeltaFilter,
   minimaxHostHint,
   sanitizeTranslation,
   stripThinkTags,
@@ -79,5 +80,20 @@ describe('minimaxHostHint', () => {
   it('is silent for the correct Token Plan host', () => {
     expect(minimaxHostHint('https://api.minimax.chat/v1', 'sk-cp-not-a-real-key')).toBeNull();
     expect(minimaxHostHint('https://api.minimax.io/v1', 'sk-other')).toBeNull();
+  });
+});
+
+describe('createThinkDeltaFilter (M-60)', () => {
+  it('holds back unclosed think and emits the visible suffix after close', () => {
+    const filter = createThinkDeltaFilter();
+    expect(filter('<think>secret')).toBe('');
+    expect(filter(' more')).toBe('');
+    expect(filter('</think>开源')).toBe('开源');
+  });
+
+  it('forwards plain text immediately', () => {
+    const filter = createThinkDeltaFilter();
+    expect(filter('hello ')).toBe('hello ');
+    expect(filter('world')).toBe('world');
   });
 });

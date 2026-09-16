@@ -300,6 +300,28 @@ describe('TranslationPipeline', () => {
     expect(res.actualProviderName).toBe('Beta');
   });
 
+  it('does not forward think-tag residue in streaming deltas (M-60)', async () => {
+    const deltas: string[] = [];
+    const pipeline = makePipeline(settings(), {
+      a: (c) =>
+        fake(c, {
+          translateStream: async (_text, onDelta) => {
+            onDelta('<think>secret');
+            onDelta(' plan</think>');
+            onDelta('开源软件');
+            return '<think>secret plan</think>开源软件';
+          },
+        }),
+    });
+    const res = await pipeline.translate([{ text: 'Hello', key: 'k1' }], {
+      immediate: true,
+      onDelta: (_key, d) => deltas.push(d),
+    });
+    expect(res.results.k1).toBe('开源软件');
+    expect(deltas.join('')).toBe('开源软件');
+    expect(deltas.join('')).not.toContain('secret');
+  });
+
   it('stream sanitize-empty does not failover', async () => {
     const a = provider('a', 'Alpha');
     const b = provider('b', 'Beta');

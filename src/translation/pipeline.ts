@@ -7,7 +7,7 @@
  * progress, not 译文.
  */
 import { BATCH_WINDOW_MS, MAX_CONCURRENT_REQUESTS } from '../shared/constants';
-import { sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
+import { createThinkDeltaFilter, sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
 import type { ErrorKind, ProviderConfig, Settings, TranslateResults } from '../shared/types';
 import {
   ProviderError,
@@ -682,19 +682,25 @@ export class TranslationPipeline {
       const fingerprint = cacheFingerprint(providerConfig);
       let full: string;
       const streaming = providerSupportsStreaming(instance);
+      const deltaFilter = emitDeltas ? createThinkDeltaFilter() : null;
+      const pushDelta = (delta: string): void => {
+        if (!deltaFilter) return;
+        const piece = deltaFilter(delta);
+        if (piece) item.onDelta?.(piece);
+      };
       if (streaming && typeof instance.translateStream === 'function') {
         full = await instance.translateStream(
           item.text,
           ctx,
           (delta) => {
-            if (emitDeltas) item.onDelta?.(delta);
+            pushDelta(delta);
           },
           controller.signal,
         );
       } else {
         const translated = await instance.translateTexts([item.text], ctx, controller.signal);
         full = translated[0] ?? '';
-        if (emitDeltas && full !== '') item.onDelta?.(full);
+        if (full !== '') pushDelta(full);
       }
       if (typeof full !== 'string' || full.trim() === '') {
         this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, 'invalid_response');

@@ -635,7 +635,7 @@ export class PageTranslator {
       onDelta: (_key, delta) => {
         accumulated += delta;
         if (this.tooltip.currentTarget === entry.el) {
-          this.tooltip.show(entry.el, accumulated, 'ready');
+          this.tooltip.show(entry.el, accumulated, 'loading');
         }
       },
     })

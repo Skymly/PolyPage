@@ -25,7 +25,10 @@
     "type": "module"
   },
   "options_page": "options/options.html",
-  "permissions": ["storage", "nativeMessaging", "contextMenus"],
+  "permissions": ["storage", "nativeMessaging", "contextMenus", "offscreen"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self';"
+  },
   "optional_permissions": ["webNavigation"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [

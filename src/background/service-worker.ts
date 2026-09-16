@@ -24,6 +24,7 @@
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
 import { sendTabCommand } from '../messaging/messages';
+import { computeOcrAvailable, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
 import { createProvider, toProviderError } from '../providers/provider';
@@ -680,7 +681,12 @@ chrome.runtime.onMessage.addListener(
               subtitleBackground: s.subtitles.background,
               subtitlePosition: s.subtitles.position,
               ocrEngine: s.imageTranslate.engine,
-              ocrAvailable: s.imageTranslate.enabled && (s.imageTranslate.engine === 'tesseract-wasm' || vision),
+              ocrAvailable: computeOcrAvailable(
+                s.imageTranslate.enabled,
+                s.imageTranslate.engine,
+                vision,
+                tesseractRuntimeAvailable(),
+              ),
               asrEnabled: s.asr.enabled,
               asrSupported: activeProviderCapabilities(s).asr,
               asrMaxSeconds: s.asr.maxSeconds,

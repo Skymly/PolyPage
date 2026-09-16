@@ -54,6 +54,7 @@ async function buildPage(name) {
 async function buildPages() {
   await buildPage('popup');
   await buildPage('options');
+  await buildPage('offscreen');
 }
 
 /**
@@ -175,6 +176,7 @@ async function verifyDist() {
     'content.js',
     'popup/popup.html',
     'options/options.html',
+    'offscreen/offscreen.html',
     'viewer/pdf-viewer.html',
     'vendor/pdf.min.mjs',
     'vendor/pdf.worker.min.mjs',

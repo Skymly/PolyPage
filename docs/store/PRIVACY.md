@@ -19,7 +19,8 @@ PolyPage **不运营账号、不同步云端配置、不把页面内容发到开
 
 ## 我们不收集
 
-- 不申请麦克风、`tabCapture`、`offscreen`
+- 不申请麦克风、`tabCapture`
+- `offscreen` 仅用于 Chrome/Edge 本地 Tesseract OCR（在后台页里跑 Worker）；图片不离开本机，除非用户选用云端视觉引擎
 - 不自动转写整页视频或整段播客
 - 不上传浏览历史到开发者
 - 不出售或与广告网络共享数据

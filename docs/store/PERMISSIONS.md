@@ -2,7 +2,7 @@
 
 版本：4.0.0　日期：2026-08-15
 
-对照 `public/manifest.json`。**无新增必选权限；不申请麦克风。**
+对照 `public/manifest.json`。**不申请麦克风。** Chrome/Edge 另需 `offscreen` 跑本地 Tesseract。
 
 ## 必选权限
 
@@ -11,6 +11,7 @@
 | `storage` | 保存用户设置、翻译缓存、错误/反馈日志。不含开发者遥测。 |
 | `nativeMessaging` | 可选连接本机 PolyPage 网关（JSON-RPC）。未安装网关时功能走云端 Provider 或置灰。 |
 | `contextMenus` | 右键：翻译选区、翻译图片、转写并翻译无字幕视频/音频。 |
+| `offscreen` | Chrome/Edge：在 Service Worker 无法 `new Worker` 时，用 offscreen 文档跑本地 tesseract.js。Firefox 事件页不使用该 API。 |
 
 ## 主机权限
 
@@ -30,7 +31,6 @@
 |---|---|
 | 麦克风 | ASR 只从已有媒体元素 `captureStream`（或同源 `src` fetch），不录制环境声 |
 | `tabCapture` | 不捕获标签页混音 |
-| `offscreen` | 4.0 不使用 Chrome-only offscreen 文档 |
 | `identity` / `sidePanel` | 无账号、无侧栏 |
 
-Firefox 包（`dist-firefox/`）只增加 `browser_specific_settings.gecko.id`，**不增加权限面**。
+Firefox 包（`dist-firefox/`）去掉 `offscreen`，只增加 `browser_specific_settings.gecko.id`。

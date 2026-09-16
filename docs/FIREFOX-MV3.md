@@ -18,7 +18,7 @@
 | `chrome.runtime.getURL` | 阅读器 / vendor WASM | 同左；worker 路径偶发差异 | PDF 入口在失败时隐藏；见 Options「浏览器兼容」 |
 | `webNavigation` | optional_permissions | 权限模型不同，默认关 | 保持可选；未授权则不自动打开 PDF |
 | `captureStream` / `MediaRecorder` | Chromium mime（webm/opus） | `mozCaptureStream` + mime 分裂 | 已做 mime 回退；失败则同源 `fetch(src)`；再失败入口置灰 |
-| `chrome.offscreen` / `sidePanel` / `identity` | Chrome-only | 不存在 | **4.0 不使用** |
+| `chrome.offscreen` / `sidePanel` / `identity` | Chrome-only | 不存在 | **tesseract：Chrome SW 走 `chrome.offscreen`（`Worker` 不可用时）；Firefox 事件页有 `Worker`，直接 `createWorker`。`sidePanel` / `identity` 仍不使用** |
 | `tabCapture` / 麦克风 | 可申请 | 可申请 | **不申请**；ASR 只用元素 `captureStream` |
 
 ## 2. 能力降级
@@ -28,6 +28,7 @@
 | Native Host | 未注册 Mozilla 键或 `connectNative` 失败 → 视为未安装，走 failover |
 | PDF 阅读器 | worker / `getURL` 失败时入口隐藏，不抛未捕获异常 |
 | ASR | 无 `captureStream` / 无可用 mime / 无音轨且无法 fetch → 返回错误，Popup 置灰 |
+| 本地 Tesseract | 事件页有 `Worker` 时直接 `createWorker`；两者都没有则入口置灰（Chrome SW 另走 offscreen） |
 | 网关视觉 / ASR | `protocol < 2` 或 capabilities 缺字段 → 入口置灰 |
 
 ## 3. 加载步骤（手动）

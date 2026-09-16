@@ -23,7 +23,10 @@ export function hostMatchesPattern(hostname: string, pattern: string): boolean {
   }
   if (p.startsWith('*')) {
     // "*example.com" — rare, treat as suffix match without the dot requirement.
-    return host.endsWith(p.slice(1));
+    // A bare "*" must not match every host: String.endsWith('') is always true (M-86).
+    const rest = p.slice(1);
+    if (rest === '') return false;
+    return host.endsWith(rest);
   }
   return host === p;
 }

@@ -220,6 +220,15 @@
             <div class="field-row">
               <label class="checkbox"><input type="checkbox" id="f-enabled" /> 启用</label>
             </div>
+            <div id="openai-capability-fields" class="hidden">
+              <h4>能力（openai-compatible）</h4>
+              <p class="hint">类上始终有方法。入口是否亮起以这里为准。纯文本端点请保持视觉/转写关闭。</p>
+              <div class="field-row">
+                <label class="checkbox"><input type="checkbox" id="f-supports-streaming" /> 流式翻译（SSE）</label>
+                <label class="checkbox"><input type="checkbox" id="f-supports-vision" /> 视觉翻译</label>
+                <label class="checkbox"><input type="checkbox" id="f-supports-asr" /> 转写</label>
+              </div>
+            </div>
 
             <div id="custom-http-fields" class="hidden">
               <h4>custom-http 专属配置</h4>

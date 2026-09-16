@@ -249,7 +249,11 @@ describe('OpenAI-compatible transcribe', () => {
       }),
     );
     const provider = createProvider(
-      baseConfig('openai-compatible', { baseUrl: 'http://127.0.0.1:9/v1', model: 'whisper-1' }),
+      baseConfig('openai-compatible', {
+        baseUrl: 'http://127.0.0.1:9/v1',
+        model: 'whisper-1',
+        supportsAsr: true,
+      }),
     );
     const result = await provider.transcribe!(
       { mime: 'audio/webm', bytes: new Uint8Array([1, 2, 3]) },
@@ -270,7 +274,7 @@ describe('OpenAI-compatible transcribe', () => {
       vi.fn(async () => new Response('just the words', { status: 200 })),
     );
     const provider = createProvider(
-      baseConfig('openai-compatible', { baseUrl: 'http://127.0.0.1:9/v1' }),
+      baseConfig('openai-compatible', { baseUrl: 'http://127.0.0.1:9/v1', supportsAsr: true }),
     );
     const result = await provider.transcribe!(
       { mime: 'audio/webm', bytes: new Uint8Array([1]) },

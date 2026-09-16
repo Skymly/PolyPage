@@ -36,6 +36,24 @@ describe('normalizeProvider', () => {
     expect(normalizeProvider({ id: '', type: 'openai-compatible' })).toBeNull();
     expect(normalizeProvider({ id: 'x', type: 'nope' })).toBeNull();
   });
+
+  it('defaults openai-compatible extras: streaming on, vision/asr off (M-34)', () => {
+    const p = normalizeProvider({ id: 'a', type: 'openai-compatible', baseUrl: 'http://x' });
+    expect(p?.supportsStreaming).toBe(true);
+    expect(p?.supportsVision).toBe(false);
+    expect(p?.supportsAsr).toBe(false);
+    const on = normalizeProvider({
+      id: 'b',
+      type: 'openai-compatible',
+      baseUrl: 'http://x',
+      supportsVision: true,
+      supportsAsr: true,
+      supportsStreaming: false,
+    });
+    expect(on?.supportsVision).toBe(true);
+    expect(on?.supportsAsr).toBe(true);
+    expect(on?.supportsStreaming).toBe(false);
+  });
 });
 
 describe('validateImportedSettings', () => {

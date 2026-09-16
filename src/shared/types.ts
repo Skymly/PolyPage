@@ -229,6 +229,13 @@ export interface ProviderConfig {
   backend?: string;
   /** native-host only: fallback provider id when the gateway is unavailable. */
   fallbackProviderId?: string;
+  /**
+   * openai-compatible only (M-34). Declared extras; method presence is not
+   * a capability. Streaming defaults on; vision/ASR default off.
+   */
+  supportsVision?: boolean;
+  supportsAsr?: boolean;
+  supportsStreaming?: boolean;
 }
 
 /** Global settings stored in chrome.storage.local (schema v6). */

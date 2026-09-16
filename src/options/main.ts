@@ -515,6 +515,9 @@ function renderEditor(): void {
       ? ''
       : JSON.stringify(provider.headers, null, 2);
   $<HTMLInputElement>('f-enabled').checked = provider.enabled;
+  $<HTMLInputElement>('f-supports-streaming').checked = provider.supportsStreaming !== false;
+  $<HTMLInputElement>('f-supports-vision').checked = provider.supportsVision === true;
+  $<HTMLInputElement>('f-supports-asr').checked = provider.supportsAsr === true;
 
   $<HTMLSelectElement>('f-method').value = provider.method ?? 'POST';
   $<HTMLSelectElement>('f-key-placement').value = provider.apiKeyPlacement ?? 'header';
@@ -579,6 +582,7 @@ function applyTypeVisibility(type: ProviderType): void {
   $<HTMLElement>('deepl-fields').classList.toggle('hidden', type !== 'deepl');
   $<HTMLElement>('azure-fields').classList.toggle('hidden', type !== 'azure-translator');
   $<HTMLElement>('native-host-fields').classList.toggle('hidden', !isNative);
+  $<HTMLElement>('openai-capability-fields').classList.toggle('hidden', !isLLM);
 }
 
 function collectEditor(): boolean {
@@ -600,6 +604,11 @@ function collectEditor(): boolean {
   provider.systemPrompt = $<HTMLTextAreaElement>('f-system-prompt').value;
   provider.userPromptTemplate = $<HTMLTextAreaElement>('f-user-prompt').value;
   provider.enabled = $<HTMLInputElement>('f-enabled').checked;
+  if (provider.type === 'openai-compatible') {
+    provider.supportsStreaming = $<HTMLInputElement>('f-supports-streaming').checked;
+    provider.supportsVision = $<HTMLInputElement>('f-supports-vision').checked;
+    provider.supportsAsr = $<HTMLInputElement>('f-supports-asr').checked;
+  }
 
   const headersError = $<HTMLDivElement>('headers-error');
   const headersRaw = $<HTMLTextAreaElement>('f-headers').value.trim();

@@ -8,7 +8,7 @@ import type { TranslationProvider } from '../src/providers/provider';
 import type { ProviderConfig } from '../src/shared/types';
 
 function fake(partial: Partial<TranslationProvider> = {}): TranslationProvider {
-  const config = { id: 'x', type: 'openai-compatible' } as ProviderConfig;
+  const config = { id: 'x', type: 'openai-compatible', supportsAsr: true } as ProviderConfig;
   return {
     config,
     translateTexts: async () => [],

@@ -188,6 +188,9 @@ export function defaultProvider(): ProviderConfig {
     maxTokens: 4096,
     headers: {},
     enabled: true,
+    supportsVision: false,
+    supportsAsr: false,
+    supportsStreaming: true,
   };
 }
 

@@ -12,9 +12,12 @@ function native(): ProviderConfig {
   return { ...defaultProvider(), id: 'n', type: 'native-host', baseUrl: '', hostName: 'com.skymly.polypage' };
 }
 
-function instance(flags: { stream?: boolean; vision?: boolean; asr?: boolean }): TranslationProvider {
+function instance(
+  flags: { stream?: boolean; vision?: boolean; asr?: boolean },
+  cfg: ProviderConfig = openai(),
+): TranslationProvider {
   const p: TranslationProvider = {
-    config: openai(),
+    config: cfg,
     translateTexts: async (texts) => texts,
   };
   if (flags.stream) p.translateStream = async (text) => text;
@@ -24,11 +27,21 @@ function instance(flags: { stream?: boolean; vision?: boolean; asr?: boolean }):
 }
 
 describe('providerCapabilities', () => {
-  it('reads instance methods for openai-compatible', () => {
-    expect(providerCapabilities(openai(), instance({ stream: true, vision: true }), null)).toEqual({
-      vision: true,
+  it('does not treat openai-compatible method presence as vision/asr (M-34)', () => {
+    expect(providerCapabilities(openai(), instance({ stream: true, vision: true, asr: true }), null)).toEqual({
+      vision: false,
       asr: false,
       streaming: true,
+    });
+  });
+
+  it('honors explicit openai-compatible capability flags (M-34)', () => {
+    const cfg = { ...openai(), supportsVision: true, supportsAsr: true, supportsStreaming: false };
+    const inst = instance({ stream: true, vision: true, asr: true }, cfg);
+    expect(providerCapabilities(cfg, inst, null)).toEqual({
+      vision: true,
+      asr: true,
+      streaming: false,
     });
   });
 

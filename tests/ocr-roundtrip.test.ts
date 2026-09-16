@@ -20,6 +20,7 @@ function provider(id = 'a'): ProviderConfig {
     apiKey: 'k',
     sourceLanguage: 'English',
     targetLanguage: '简体中文',
+    supportsVision: true,
   };
 }
 

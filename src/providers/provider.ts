@@ -92,22 +92,35 @@ export interface TranslationProvider {
 
 /** True when the provider instance supports streaming. */
 export function providerSupportsStreaming(provider: TranslationProvider): boolean {
-  return typeof provider.translateStream === 'function';
+  if (typeof provider.translateStream !== 'function') return false;
+  if (provider.config.type === 'openai-compatible') {
+    return provider.config.supportsStreaming !== false;
+  }
+  return true;
 }
 
 /** True when the provider instance implements the vision capability (3.0). */
 export function providerSupportsVision(provider: TranslationProvider): boolean {
-  return typeof provider.translateImage === 'function';
+  if (typeof provider.translateImage !== 'function') return false;
+  if (provider.config.type === 'openai-compatible') {
+    return provider.config.supportsVision === true;
+  }
+  return true;
 }
 
 /** True when the provider instance implements ASR (4.0). */
 export function providerSupportsAsr(provider: TranslationProvider): boolean {
-  return typeof provider.transcribe === 'function';
+  if (typeof provider.transcribe !== 'function') return false;
+  if (provider.config.type === 'openai-compatible') {
+    return provider.config.supportsAsr === true;
+  }
+  return true;
 }
 
 /** True when the provider can emit incremental ASR partials (4.2). */
 export function providerSupportsAsrStreaming(provider: TranslationProvider): boolean {
-  return typeof provider.transcribeStream === 'function';
+  if (typeof provider.transcribeStream !== 'function') return false;
+  return providerSupportsAsr(provider);
 }
 
 /* ------------------------------ factory registry ----------------------------- */

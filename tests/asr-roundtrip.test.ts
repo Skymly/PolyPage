@@ -17,6 +17,7 @@ function provider(): ProviderConfig {
     apiKey: 'k',
     sourceLanguage: 'English',
     targetLanguage: '简体中文',
+    supportsAsr: true,
   };
 }
 

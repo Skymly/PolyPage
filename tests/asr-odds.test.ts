@@ -66,6 +66,7 @@ describe('translateCueTexts failure (M-88)', () => {
       apiKey: 'k',
       sourceLanguage: 'English',
       targetLanguage: '简体中文',
+      supportsAsr: true,
     };
     return {
       ...defaultSettings(),

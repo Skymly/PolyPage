@@ -36,6 +36,25 @@ import { Tooltip } from './tooltip';
 /** Items per runtime message: small enough for progressive updates. */
 const CHUNK_SIZE = 8;
 
+function textOfChildNodes(nodes: ChildNode[]): string {
+  const parts: string[] = [];
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? '');
+      return;
+    }
+    node.childNodes.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return parts.join('').trim();
+}
+
+function detachedOriginalText(entry: NodeEntry): string | null {
+  if (!entry.originalNodes || entry.originalNodes.length === 0) return null;
+  if (entry.originalNodes.some((node) => node.isConnected)) return null;
+  return textOfChildNodes(entry.originalNodes);
+}
+
 export interface TranslatorConfig {
   minTextLength: number;
   rule: EffectiveRule | null;
@@ -63,6 +82,7 @@ export class PageTranslator {
   private _inlineDowngraded = false;
   /** Bumped on translate / setMode / restore so in-flight chunk loops stop. */
   private _modeEpoch = 0;
+  private _detectingRecycle = false;
   private config: TranslatorConfig = {
     minTextLength: 6,
     rule: null,
@@ -126,6 +146,7 @@ export class PageTranslator {
         originalText: text,
         textHash: hashText(text),
         originalNodes: null,
+        originalWatcher: null,
         translated: null,
         status: 'idle',
         error: null,
@@ -654,34 +675,53 @@ export class PageTranslator {
    * We do not `restoreOriginal` before comparing: the page already replaced
    * recycled virtual-list nodes, and restoring the stale clone would clobber
    * the new content.
+   *
+   * Translated mode detaches the original Text nodes (`el.textContent =`).
+   * Frameworks that mutate those detached nodes (React `nodeValue`) never
+   * show up in `sourceTextOf`. We also read detached `originalNodes` and
+   * watch them with MutationObserver (M-28).
    */
   detectRecycledNodes(): boolean {
+    if (this._detectingRecycle) return false;
+    this._detectingRecycle = true;
     let changed = false;
-    for (const entry of this.entries.values()) {
-      if (!entry.el.isConnected) continue;
-      const current = sourceTextOf(entry.el);
-      if (current === '' || current === this.expectedText(entry)) continue;
-      // The page replaced this node's content: drop stale mappings.
-      entry.originalNodes = null;
-      entry.inlineSegments = null;
-      entry.inlineDegraded = false;
-      removeBilingualBlock(entry);
-      entry.translated = null;
-      entry.error = null;
-      entry.status = 'idle';
-      entry.originalText = current;
-      entry.textHash = hashText(current);
-      changed = true;
-    }
-    if (changed && this._active) {
-      if (this._mode === 'inline') {
-        void this.translateInline();
-      } else {
-        const idle = this.gateViewport(this.entriesWithStatus(['idle']));
-        if (idle.length > 0) void this.fetchTranslations(idle);
-        this.renderAll();
+    try {
+      for (const entry of this.entries.values()) {
+        if (!entry.el.isConnected) continue;
+        const detached = detachedOriginalText(entry);
+        const originalMutated = detached !== null && detached !== '' && detached !== entry.originalText;
+        const live = sourceTextOf(entry.el);
+        const liveChanged = live !== '' && live !== this.expectedText(entry);
+        if (!originalMutated && !liveChanged) continue;
+        entry.originalWatcher?.disconnect();
+        entry.originalWatcher = null;
+        if (originalMutated && entry.originalNodes) {
+          entry.el.replaceChildren(...entry.originalNodes);
+        }
+        const current = originalMutated ? detached! : live;
+        entry.originalNodes = null;
+        entry.inlineSegments = null;
+        entry.inlineDegraded = false;
+        removeBilingualBlock(entry);
+        entry.translated = null;
+        entry.error = null;
+        entry.status = 'idle';
+        entry.originalText = current;
+        entry.textHash = hashText(current);
+        changed = true;
       }
-      this.report();
+      if (changed && this._active) {
+        if (this._mode === 'inline') {
+          void this.translateInline();
+        } else {
+          const idle = this.gateViewport(this.entriesWithStatus(['idle']));
+          if (idle.length > 0) void this.fetchTranslations(idle);
+          this.renderAll();
+        }
+        this.report();
+      }
+    } finally {
+      this._detectingRecycle = false;
     }
     return changed;
   }
@@ -705,6 +745,8 @@ export class PageTranslator {
   private renderAll(): void {
     for (const [id, entry] of this.entries) {
       if (!entry.el.isConnected) {
+        entry.originalWatcher?.disconnect();
+        entry.originalWatcher = null;
         removeBilingualBlock(entry);
         this.entries.delete(id);
         continue;
@@ -714,7 +756,21 @@ export class PageTranslator {
       } else {
         renderEntry(entry, this._mode);
       }
+      this.watchDetachedOriginal(entry);
     }
+  }
+
+  private watchDetachedOriginal(entry: NodeEntry): void {
+    if (entry.originalWatcher) return;
+    if (detachedOriginalText(entry) === null) return;
+    if (typeof MutationObserver === 'undefined') return;
+    const mo = new MutationObserver(() => {
+      this.detectRecycledNodes();
+    });
+    for (const node of entry.originalNodes!) {
+      mo.observe(node, { characterData: true, subtree: true, childList: true });
+    }
+    entry.originalWatcher = mo;
   }
 
   private renderInlineEntry(entry: NodeEntry): void {

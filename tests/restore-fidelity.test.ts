@@ -250,3 +250,37 @@ describe('saveOriginal skips inserted chrome (M-14)', () => {
     expect(td.textContent).toBe(ORIGINAL);
   });
 });
+
+describe('translated-mode recycle of detached original (M-28)', () => {
+  it('nodeValue mutation on the detached original Text is treated as recycle', async () => {
+    mountArticle();
+    const recycled = 'Completely new recycled paragraph text here for the virtual list.';
+    const translator = translatorWithMap({
+      [ORIGINAL]: TRANSLATED,
+      [recycled]: '虚拟列表换了新段落。',
+    });
+    const p = document.getElementById('p1') as HTMLElement;
+    const originalNode = p.firstChild as Text;
+    await translator.translate('translated');
+    expect(p.textContent).toBe(TRANSLATED);
+    expect(originalNode.isConnected).toBe(false);
+
+    originalNode.nodeValue = recycled;
+    expect(translator.detectRecycledNodes()).toBe(true);
+    expect(translator.detectRecycledNodes()).toBe(false);
+  });
+
+  it('replaceChildren of the live element is still treated as recycle', async () => {
+    mountArticle();
+    const recycled = 'Completely new recycled paragraph text here for the virtual list.';
+    const translator = translatorWithMap({
+      [ORIGINAL]: TRANSLATED,
+      [recycled]: '虚拟列表换了新段落。',
+    });
+    await translator.translate('translated');
+    const p = document.getElementById('p1') as HTMLElement;
+    p.textContent = recycled;
+    expect(translator.detectRecycledNodes()).toBe(true);
+    expect(sourceTextOf(p)).toBe(recycled);
+  });
+});

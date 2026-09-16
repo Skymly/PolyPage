@@ -18,6 +18,8 @@ export interface NodeEntry {
   originalText: string;
   textHash: string;
   originalNodes: ChildNode[] | null;
+  /** Watcher on detached original nodes (translated mode, M-28). */
+  originalWatcher: MutationObserver | null;
   translated: string | null;
   status: NodeStatus;
   error: string | null;

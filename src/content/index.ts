@@ -157,6 +157,7 @@ async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; ski
   }
   const media = subtitleManager.pickCaptionlessMedia();
   if (!media) return { ok: false, error: '没有可转写的无字幕媒体' };
+  subtitleManager.pinAsrTarget(media);
   const maxSeconds = contentSettings.asrMaxSeconds ?? 90;
   const remaining =
     Number.isFinite(media.duration) && media.duration > 0
@@ -289,16 +290,11 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       return { ok: true };
     case 'wt:transcribe-media':
       return handleTranscribeMedia(cmd.force === true);
-    case 'wt:asr-partial': {
-      const media = subtitleManager.pickCaptionlessMedia();
-      if (media) {
-        subtitleManager.applyMemoryCues(
-          media,
-          cmd.cues.map((c) => ({ startTime: c.start, endTime: c.end, text: c.text })),
-        );
-      }
+    case 'wt:asr-partial':
+      subtitleManager.applyAsrPartial(
+        cmd.cues.map((c) => ({ startTime: c.start, endTime: c.end, text: c.text })),
+      );
       return { ok: true };
-    }
     default:
       return { ok: false };
   }

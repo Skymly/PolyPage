@@ -387,8 +387,12 @@ async function handleAsrStart(
       emitPartials: settings.asr.streaming === true && tabId !== undefined,
       onPartial:
         tabId !== undefined
-          ? (cues) => {
-              void sendTabCommand(tabId, { type: 'wt:asr-partial', cues }).catch(() => undefined);
+          ? async (cues) => {
+              try {
+                await sendTabCommand(tabId, { type: 'wt:asr-partial', cues });
+              } catch {
+                /* tab gone or no receiver */
+              }
             }
           : undefined,
     });

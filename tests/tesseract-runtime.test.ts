@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeOcrAvailable,
+  imageContextMenuState,
   resolveCreateWorker,
   resolveTesseractRuntime,
 } from '../src/shared/tesseractRuntime';
@@ -35,6 +36,36 @@ describe('computeOcrAvailable', () => {
   it('still requires vision for the llm-vision engine', () => {
     expect(computeOcrAvailable(true, 'llm-vision', false, true)).toBe(false);
     expect(computeOcrAvailable(true, 'llm-vision', true, false)).toBe(true);
+  });
+});
+
+describe('imageContextMenuState (M-36)', () => {
+  it('enables the image menu for tesseract without a vision provider', () => {
+    expect(imageContextMenuState(true, 'tesseract-wasm', false, true)).toEqual({
+      create: true,
+      enabled: true,
+      title: '翻译图片文字 (PolyPage)',
+    });
+  });
+
+  it('disables llm-vision when the provider has no vision', () => {
+    expect(imageContextMenuState(true, 'llm-vision', false, true)).toEqual({
+      create: true,
+      enabled: false,
+      title: '翻译图片文字（当前服务不支持视觉）',
+    });
+  });
+
+  it('does not create the menu when image translate is off', () => {
+    expect(imageContextMenuState(false, 'tesseract-wasm', false, true)).toEqual({ create: false });
+  });
+
+  it('disables tesseract when the runtime cannot host createWorker', () => {
+    expect(imageContextMenuState(true, 'tesseract-wasm', true, false)).toEqual({
+      create: true,
+      enabled: false,
+      title: '翻译图片文字（当前环境无法运行本地识别）',
+    });
   });
 });
 

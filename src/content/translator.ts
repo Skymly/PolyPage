@@ -61,6 +61,8 @@ export class PageTranslator {
   private io: IntersectionObserver | null = null;
   private _viewportActive = false;
   private _inlineDowngraded = false;
+  /** Bumped on translate / setMode / restore so in-flight chunk loops stop. */
+  private _modeEpoch = 0;
   private config: TranslatorConfig = {
     minTextLength: 6,
     rule: null,
@@ -192,6 +194,7 @@ export class PageTranslator {
     if (this.blacklisted) return;
     this._active = true;
     this._mode = mode;
+    this._modeEpoch += 1;
     // Site rule can force viewport-only translation (virtual lists).
     if (this.config.rule?.viewportOnly && !this._viewportActive) {
       this._viewportActive = true;
@@ -217,6 +220,7 @@ export class PageTranslator {
       this.restore();
       return;
     }
+    this._modeEpoch += 1;
     const previous = this._mode;
     // Mode switches abort unfinished batches (spec 2.0 §5.3 item 5); pending
     // entries become idle again and are re-fetched below.
@@ -256,6 +260,7 @@ export class PageTranslator {
   restore(): void {
     this._active = false;
     this._mode = null;
+    this._modeEpoch += 1;
     this._inlineDowngraded = false;
     this.tooltip.hideNow();
     this.cancelInflight();
@@ -465,6 +470,7 @@ export class PageTranslator {
   private async fetchSegmentTranslations(
     tasks: { entry: NodeEntry; segment: InlineSegmentState }[],
   ): Promise<void> {
+    const epoch = this._modeEpoch;
     for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
       const chunk = tasks.slice(i, i + CHUNK_SIZE);
       const items: TranslationItem[] = chunk.map((t) => ({ key: t.segment.key, text: t.segment.text }));
@@ -473,7 +479,7 @@ export class PageTranslator {
           domain: typeof location !== 'undefined' ? location.hostname : undefined,
           pageLanguage: this.config.pageLanguage,
         });
-        if (!this._active) return;
+        if (!this._active || epoch !== this._modeEpoch) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;
         for (const task of chunk) {
           const text = response.results[task.segment.key];
@@ -488,6 +494,7 @@ export class PageTranslator {
           }
         }
       } catch (e) {
+        if (!this._active || epoch !== this._modeEpoch) return;
         const message = e instanceof Error ? e.message : String(e);
         for (const task of chunk) {
           task.segment.status = 'error';
@@ -495,7 +502,7 @@ export class PageTranslator {
         }
         this.lastError = message;
       }
-      if (!this._active) return;
+      if (!this._active || epoch !== this._modeEpoch) return;
       this.renderAll();
     }
   }
@@ -529,6 +536,7 @@ export class PageTranslator {
   }
 
   private async fetchTranslations(targets: NodeEntry[]): Promise<void> {
+    const epoch = this._modeEpoch;
     for (const entry of targets) {
       entry.status = 'pending';
       entry.error = null;
@@ -543,7 +551,7 @@ export class PageTranslator {
           domain: typeof location !== 'undefined' ? location.hostname : undefined,
           pageLanguage: this.config.pageLanguage,
         });
-        if (!this._active) return;
+        if (!this._active || epoch !== this._modeEpoch) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;
         for (const entry of chunk) {
           const text = response.results[entry.id];
@@ -558,6 +566,7 @@ export class PageTranslator {
           }
         }
       } catch (e) {
+        if (!this._active || epoch !== this._modeEpoch) return;
         const message = e instanceof Error ? e.message : String(e);
         for (const entry of chunk) {
           entry.status = 'error';
@@ -565,9 +574,9 @@ export class PageTranslator {
         }
         this.lastError = message;
       }
-      // The page may have been restored (batches cancelled) while awaiting;
-      // never apply stale results to an inactive page.
-      if (!this._active) return;
+      // The page may have been restored or the display mode switched while
+      // awaiting; never apply stale results to a newer epoch.
+      if (!this._active || epoch !== this._modeEpoch) return;
       this.renderAll();
       this.refreshTooltipForChunk(chunk);
       this.report();
@@ -576,6 +585,7 @@ export class PageTranslator {
 
   /** Streaming single-entry translation (spec 2.0 §7.3, on-demand hover). */
   private translateEntryStreaming(entry: NodeEntry): void {
+    const epoch = this._modeEpoch;
     entry.status = 'pending';
     entry.error = null;
     this.renderAll();
@@ -592,7 +602,7 @@ export class PageTranslator {
       },
     })
       .then((response) => {
-        if (!this._active) return;
+        if (!this._active || epoch !== this._modeEpoch) return;
         if (response.actualProviderName) this.actualProvider = response.actualProviderName;
         const text = response.results[entry.id];
         if (text !== undefined) {
@@ -609,7 +619,7 @@ export class PageTranslator {
         this.report();
       })
       .catch((e: unknown) => {
-        if (!this._active) return;
+        if (!this._active || epoch !== this._modeEpoch) return;
         entry.status = 'error';
         entry.error = e instanceof Error ? e.message : String(e);
         this.lastError = entry.error;

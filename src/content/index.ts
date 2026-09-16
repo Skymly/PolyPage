@@ -23,7 +23,14 @@ import { effectiveRuleForHost, hostBlacklisted, topLevelHostname } from './rules
 import { isInsertedOwnElement } from './scanner';
 import { SelectionTranslator } from './selection';
 import { PageTranslator } from './translator';
-import { AsrSession, SubtitleManager, captureMediaWindow, isAbortError } from './media';
+import {
+  AsrSession,
+  SubtitleManager,
+  captureMediaWindow,
+  isAbortError,
+  rejectWholeFileFallback,
+  settleTabResponse,
+} from './media';
 import { bytesToBase64 } from '../shared/binaryChunk';
 import { ImageTranslateController } from './imageButton';
 import { removeImageOverlay } from '../ocr/overlay';
@@ -174,20 +181,7 @@ async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; ski
       captured = await captureMediaWindow(media, duration, signal);
     } catch (e) {
       if (isAbortError(e) || signal.aborted) return { ok: true };
-      const src = media.currentSrc || media.src;
-      if (src && /^https?:/i.test(src)) {
-        const res = await fetch(src);
-        if (!res.ok) return { ok: false, error: e instanceof Error ? e.message : String(e) };
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        captured = {
-          mime: res.headers.get('content-type')?.split(';')[0]?.trim() || 'audio/webm',
-          bytes,
-          start: media.currentTime || 0,
-          duration,
-        };
-      } else {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
-      }
+      return rejectWholeFileFallback(e);
     }
     if (signal.aborted) {
       void sendRuntime({ type: 'asr-cancel', requestId });
@@ -312,7 +306,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
 
 chrome.runtime.onMessage.addListener((message: TabCommand, _sender, sendResponse) => {
   if (typeof message?.type !== 'string' || !message.type.startsWith('wt:')) return false;
-  void handleCommand(message).then(sendResponse);
+  settleTabResponse(handleCommand(message), sendResponse);
   return true; // async response
 });
 

@@ -60,6 +60,7 @@ import {
   clearFeedbackLog,
   deleteFeedbackEntry,
   loadFeedbackLog,
+  sanitizeFeedbackPageUrl,
 } from '../storage/feedback';
 import { IdbTaskStore, resumePayloadForTab, TaskTable } from '../storage/taskTable';
 import { detectLanguage } from '../shared/languageDetect';
@@ -1048,7 +1049,7 @@ chrome.runtime.onMessage.addListener(
               ts: Date.now(),
               source: message.source,
               translation: message.translation,
-              pageUrl: message.pageUrl,
+              pageUrl: sanitizeFeedbackPageUrl(message.pageUrl),
               where: message.where,
               ...(message.providerName ? { providerName: message.providerName } : {}),
               ...(provider ? { providerId: provider.id } : {}),

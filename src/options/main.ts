@@ -301,6 +301,10 @@ async function exportFeedback(format: 'csv' | 'json'): Promise<void> {
       toast('反馈日志为空', true);
       return;
     }
+    const ok = window.confirm(
+      '导出含标记的原文、译文和页面路径（查询串已去掉）。确定导出到文件？',
+    );
+    if (!ok) return;
     if (format === 'json') {
       downloadText('polypage-feedback.json', feedbackToJson(entries), 'application/json');
       return;

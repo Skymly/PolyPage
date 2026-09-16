@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { FEEDBACK_LOG_MAX } from '../src/shared/constants';
 import type { FeedbackEntry } from '../src/shared/types';
-import { csvEscape, feedbackToCsv } from '../src/storage/feedback';
+import { csvEscape, feedbackToCsv, sanitizeFeedbackPageUrl } from '../src/storage/feedback';
 
 function entry(i: number): FeedbackEntry {
   return {
@@ -68,5 +68,18 @@ describe('feedbackToCsv', () => {
     expect(csv).toContain(`"'=1+1"`);
     expect(csv).toContain(`"'+cmd"`);
     expect(csv).toContain(`"'-http://x"`);
+  });
+});
+
+describe('sanitizeFeedbackPageUrl (M-59)', () => {
+  it('drops query and hash from http(s) URLs', () => {
+    expect(sanitizeFeedbackPageUrl('https://example.com/a?token=secret#frag')).toBe(
+      'https://example.com/a',
+    );
+    expect(sanitizeFeedbackPageUrl('http://example.com/path/?q=1')).toBe('http://example.com/path/');
+  });
+
+  it('keeps pdf-viewer labels without query', () => {
+    expect(sanitizeFeedbackPageUrl('pdf-viewer:My Doc.pdf?x=1')).toBe('pdf-viewer:My Doc.pdf');
   });
 });

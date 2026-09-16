@@ -38,6 +38,7 @@ export const RPC_ERROR_CODES = {
   server: -32005,
   invalid_response: -32006,
   config: -32007,
+  aborted: -32008,
 } as const;
 
 export type RpcErrorKindName = keyof typeof RPC_ERROR_CODES;

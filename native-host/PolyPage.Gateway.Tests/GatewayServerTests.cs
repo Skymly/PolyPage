@@ -241,7 +241,7 @@ public class GatewayServerTests
         var cancelled = responses.FirstOrDefault(
             r => r.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.Number && id.GetInt32() == 21);
         Assert.True(cancelled.TryGetProperty("error", out var error), "translate #21 should have been cancelled");
-        Assert.Equal(RpcCodes.Timeout, error.GetProperty("code").GetInt32());
+        Assert.Equal(RpcCodes.Aborted, error.GetProperty("code").GetInt32());
         Assert.True(blocking.WasCancelled, "backend cancellation token must fire");
     }
 

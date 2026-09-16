@@ -31,7 +31,7 @@ Host 运行，把扩展的翻译请求路由到本地或远程后端（Ollama、
 
 错误码沿用扩展 ErrorKind 语义：`-32001` network / `-32002` timeout /
 `-32003` auth / `-32004` rate_limit / `-32005` server / `-32006`
-invalid_response / `-32007` config。
+invalid_response / `-32007` config / `-32008` aborted。
 
 ## 构建与发布
 

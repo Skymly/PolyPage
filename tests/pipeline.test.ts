@@ -192,6 +192,35 @@ describe('TranslationPipeline', () => {
     expect(res.actualProviderName).toBe('Beta');
   });
 
+  it('cancelTab does not failover even if the provider reports timeout (M-05)', async () => {
+    const a = provider('a', 'Alpha');
+    const b = provider('b', 'Beta');
+    let pipeline!: TranslationPipeline;
+    let betaCalls = 0;
+    pipeline = makePipeline(settings({ failoverChain: ['b'] }, [a, b]), {
+      a: (c) =>
+        fake(c, {
+          translateTexts: async () => {
+            pipeline.cancelTab(7);
+            throw new ProviderError('timeout', '请求已取消');
+          },
+        }),
+      b: (c) =>
+        fake(c, {
+          translateTexts: async (texts) => {
+            betaCalls += 1;
+            return texts.map((t) => `B:${t}`);
+          },
+        }),
+    });
+    const res = await pipeline.translate([{ text: 'Hello from a cancelled tab', key: 'k1', tabId: 7 }], {
+      immediate: true,
+    });
+    expect(betaCalls).toBe(0);
+    expect(res.errors.k1?.kind).toBe('aborted');
+    expect(res.actualProviderName).toBeUndefined();
+  });
+
   it('stream cache-hits without calling translateStream', async () => {
     const cache = new MemoryTranslationCache();
     await cache.put([{ text: 'Hello', translated: '你好' }], 'a', 'English', '简体中文', 0);

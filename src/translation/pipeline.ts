@@ -96,10 +96,13 @@ export class TranslationPipeline {
   private pendingFlush = false;
   private requestSeq = 0;
   private readonly inflightByTab = new Map<number, Set<AbortController>>();
+  /** Tabs whose work was cancelled; failover must not start a new controller. */
+  private readonly cancelledTabs = new Set<number>();
 
   constructor(private readonly deps: PipelineDeps) {}
 
   cancelTab(tabId: number): void {
+    this.cancelledTabs.add(tabId);
     const set = this.inflightByTab.get(tabId);
     if (!set) return;
     this.inflightByTab.delete(tabId);
@@ -116,6 +119,9 @@ export class TranslationPipeline {
     const settings = await this.deps.getSettings();
     const providerId = settings.activeProviderId;
     const requestId = ++this.requestSeq;
+    for (const item of items) {
+      if (item.tabId !== undefined) this.cancelledTabs.delete(item.tabId);
+    }
     const pending = items.map((item, index) => {
       const resultKey = item.key && item.key !== '' ? item.key : `anon-${requestId}-${index}`;
       return new Promise<{ resultKey: string; outcome: ItemResult }>((resolve) => {
@@ -349,6 +355,10 @@ export class TranslationPipeline {
     }
 
     for (let i = 0; i < attempts.length; i++) {
+      if (this.tabWasCancelled(tabId)) {
+        this.resolveBatchAborted(batch, tabId);
+        return;
+      }
       const provider = attempts[i];
       const error = await this.runBatch(
         settings,
@@ -366,6 +376,10 @@ export class TranslationPipeline {
             provider.id,
           );
         }
+        return;
+      }
+      if (this.tabWasCancelled(tabId)) {
+        this.resolveBatchAborted(batch, tabId);
         return;
       }
       const eligible = failoverEligible(error.kind, provider.type);
@@ -490,6 +504,10 @@ export class TranslationPipeline {
     }
 
     for (let i = 0; i < attempts.length; i++) {
+      if (this.tabWasCancelled(item.tabId)) {
+        item.resolve({ error: { kind: 'aborted', message: '请求已取消' } });
+        return;
+      }
       const provider = attempts[i];
       const emitDeltas = i === 0;
       const error = await this.runStreamAttempt(
@@ -508,6 +526,10 @@ export class TranslationPipeline {
             provider.id,
           );
         }
+        return;
+      }
+      if (this.tabWasCancelled(item.tabId)) {
+        item.resolve({ error: { kind: 'aborted', message: '请求已取消' } });
         return;
       }
       const eligible = failoverEligible(error.kind, provider.type);
@@ -614,6 +636,18 @@ export class TranslationPipeline {
     } finally {
       item.signal?.removeEventListener('abort', onExternal);
     }
+  }
+
+  private tabWasCancelled(tabId: number | undefined): boolean {
+    return tabId !== undefined && this.cancelledTabs.has(tabId);
+  }
+
+  private resolveBatchAborted(batch: QueueItem[], tabId?: number): void {
+    for (const item of batch) item.resolve({ error: { kind: 'aborted', message: '请求已取消' } });
+    void this.deps.completeTasks?.(
+      tabId,
+      batch.map((b) => b.key).filter((k) => k !== ''),
+    );
   }
 
   private registerInflight(tabId: number | undefined, controller: AbortController): void {

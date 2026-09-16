@@ -25,7 +25,7 @@ import {
 import type { PdfLine, TextItemLike } from './pdf/segment';
 import { chooseFingerprint, pdfCacheScope } from './pdf/fingerprint';
 import { matchPdfResumeTasks, pdfParagraphKey } from './resume';
-import { keepExistingParas } from './parasDom';
+import { keepExistingParas, scannedOcrParaFromSegment } from './parasDom';
 import {
   SCANNED_PAGE_OCR_BUDGET,
   canvasToOcrDataUrl,
@@ -590,10 +590,7 @@ async function recognizeScannedPage(
     }
     scannedOcrCount += 1;
     page.paragraphs = res.segments.map((seg) => ({
-      text: seg.text,
-      status: 'done' as const,
-      translated: seg.translation.trim() !== '' ? seg.translation : seg.text,
-      error: null,
+      ...scannedOcrParaFromSegment(seg),
       el: null,
     }));
     page.scanned = false;

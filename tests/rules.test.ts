@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  disableOrRemoveSiteRule,
   hostMatchesPattern,
   matchRulesForHost,
   mergeEffectiveRules,
@@ -126,5 +127,25 @@ describe('renderGlossary', () => {
   });
   it('returns empty string for an empty glossary', () => {
     expect(renderGlossary([])).toBe('');
+  });
+});
+
+describe('disableOrRemoveSiteRule (M-64)', () => {
+  it('disables built-in rules instead of dropping them', () => {
+    const rules: SiteRule[] = [
+      { id: 'builtin-wikipedia', match: ['*.wikipedia.org'], enabled: true },
+      { id: 'user-1', match: ['example.com'], enabled: true },
+    ];
+    const next = disableOrRemoveSiteRule(rules, 'builtin-wikipedia');
+    expect(next.find((r) => r.id === 'builtin-wikipedia')?.enabled).toBe(false);
+    expect(next).toHaveLength(2);
+  });
+
+  it('removes user rules', () => {
+    const rules: SiteRule[] = [
+      { id: 'builtin-wikipedia', match: ['*.wikipedia.org'], enabled: true },
+      { id: 'user-1', match: ['example.com'], enabled: true },
+    ];
+    expect(disableOrRemoveSiteRule(rules, 'user-1').map((r) => r.id)).toEqual(['builtin-wikipedia']);
   });
 });

@@ -135,3 +135,14 @@ describe('applyFullSettingsSave (M-40)', () => {
     expect(next.ocrPacks.extraLangs).toEqual([]);
   });
 });
+
+describe('built-in site rules (M-64)', () => {
+  it('keeps a disabled built-in after normalize instead of resurrecting a second copy', () => {
+    const s = normalizeSettings({
+      siteRules: [{ id: 'builtin-wikipedia', match: ['*.wikipedia.org'], enabled: false }],
+    });
+    const wiki = s.siteRules.filter((r) => r.id === 'builtin-wikipedia');
+    expect(wiki).toHaveLength(1);
+    expect(wiki[0].enabled).toBe(false);
+  });
+});

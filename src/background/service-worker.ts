@@ -27,6 +27,7 @@ import { MEDIA_COMMAND_FRAME_ID, sendTabCommand, sendViewerResume } from '../mes
 import { hostnameFromUrl } from '../shared/siteRules';
 import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
+import { PRIVILEGED_SETTINGS_DENIED, extensionOriginOf, isExtensionPageSender } from './privilegedSender';
 import { computeOcrAvailable, imageContextMenuState, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
@@ -719,6 +720,7 @@ chrome.runtime.onMessage.addListener(
   (message: RuntimeMessage, sender: chrome.runtime.MessageSender, sendResponse) => {
     void (async () => {
       try {
+        const extensionOrigin = extensionOriginOf(chrome.runtime.getURL('/'));
         switch (message.type) {
           case 'translate':
             sendResponse(
@@ -839,9 +841,17 @@ chrome.runtime.onMessage.addListener(
             break;
           }
           case 'get-full-settings':
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ settings: null, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
             sendResponse({ settings: await getSettings(true) });
             break;
           case 'save-settings': {
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
             const normalized = normalizeSettings(message.settings);
             await saveSettings(normalized);
             settingsCache = normalized;
@@ -850,6 +860,10 @@ chrome.runtime.onMessage.addListener(
             break;
           }
           case 'test-provider':
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
             sendResponse(await handleTestProvider(normalizeProviderSafe(message.provider)));
             break;
           case 'get-cache-stats':
@@ -921,6 +935,10 @@ chrome.runtime.onMessage.addListener(
           }
           /* ---------------------------- 3.0 additions --------------------------- */
           case 'ocr-request':
+            if (!sender.url) {
+              sendResponse({ ok: false, kind: 'config', error: '缺少调用方 URL' });
+              break;
+            }
             sendResponse(
               await handleOcrRequest(
                 message.requestId,

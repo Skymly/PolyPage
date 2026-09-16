@@ -15,7 +15,7 @@
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import os from 'node:os';
@@ -30,10 +30,17 @@ const PORT_API = 8124;
 const PORT_XORIGIN = 8125;
 const BROWSER = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const GATEWAY_EXE = DEFAULT_GATEWAY_EXE;
-const HOST_NAME = 'com.skymly.polypage.gateway';
+const PRODUCTION_HOST_NAME = 'com.skymly.polypage.gateway';
+const HOST_NAME = 'com.skymly.polypage.gateway.smoke';
 const LOCAL_APP_DATA = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
 const GATEWAY_DIR = path.join(LOCAL_APP_DATA, 'PolyPage');
 const HOST_MANIFEST = path.join(GATEWAY_DIR, `${HOST_NAME}.json`);
+const SMOKE_INSTALLED_EXE = path.join(GATEWAY_DIR, `${HOST_NAME}.exe`);
+const NMH_ROOTS = [
+  'Software\\Google\\Chrome\\NativeMessagingHosts',
+  'Software\\Microsoft\\Edge\\NativeMessagingHosts',
+  'Software\\Mozilla\\NativeMessagingHosts',
+];
 
 /* ------------------------------- test fixtures ------------------------------- */
 
@@ -561,6 +568,85 @@ function killTree(proc) {
   }
 }
 
+function nmhKey(root, hostName) {
+  return `HKCU\\${root}\\${hostName}`;
+}
+
+function queryRegDefault(key) {
+  const r = spawnSync('reg', ['query', key, '/ve'], { encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  const m = (r.stdout || '').match(/REG_SZ\s+(.+)$/m);
+  return m ? m[1].trim() : null;
+}
+
+function snapshotHost(hostName) {
+  const keys = {};
+  for (const root of NMH_ROOTS) {
+    const key = nmhKey(root, hostName);
+    keys[key] = queryRegDefault(key);
+  }
+  const exeName =
+    hostName === PRODUCTION_HOST_NAME ? 'PolyPage.Gateway.exe' : `${hostName}.exe`;
+  const fileMap = {};
+  for (const name of [`${hostName}.json`, `${hostName}.firefox.json`, exeName]) {
+    const p = path.join(GATEWAY_DIR, name);
+    fileMap[p] = existsSync(p) ? readFileSync(p) : null;
+  }
+  return { keys, files: fileMap };
+}
+
+function restoreHostSnapshot(label, snap) {
+  let restored = 0;
+  for (const [filePath, bytes] of Object.entries(snap.files)) {
+    const exists = existsSync(filePath);
+    if (bytes == null) {
+      if (exists) {
+        try {
+          rmSync(filePath, { force: true });
+          restored++;
+        } catch {
+          /* locked copy — finally still uninstalled the smoke host */
+        }
+      }
+      continue;
+    }
+    const current = exists ? readFileSync(filePath) : null;
+    if (!current || Buffer.compare(current, bytes) !== 0) {
+      writeFileSync(filePath, bytes);
+      restored++;
+    }
+  }
+  for (const [key, value] of Object.entries(snap.keys)) {
+    const current = queryRegDefault(key);
+    if (value == null) {
+      if (current != null) {
+        spawnSync('reg', ['delete', key, '/f'], { stdio: 'ignore' });
+        restored++;
+      }
+      continue;
+    }
+    if (current !== value) {
+      spawnSync('reg', ['add', key, '/ve', '/t', 'REG_SZ', '/d', value, '/f'], { stdio: 'ignore' });
+      restored++;
+    }
+  }
+  if (restored > 0) {
+    console.log(`Restored ${restored} production ${label} artefact(s) after smoke.`);
+  }
+}
+
+function uninstallSmokeHost() {
+  spawnSync(GATEWAY_EXE, ['--host-name', HOST_NAME, '--uninstall'], { stdio: 'ignore' });
+}
+
+process.on('exit', () => {
+  try {
+    uninstallSmokeHost();
+  } catch {
+    /* ignore */
+  }
+});
+
 const pageServer = await startPageServer();
 const xoriginServer = await startCrossOriginServer();
 const mock = await startMockApi();
@@ -598,16 +684,22 @@ try {
   process.exit(1);
 }
 
-// Install the gateway BEFORE launching the browser. allowed_origins gets the
-// real extension id once the service worker target reveals it (the manifest
-// file is re-read by the browser on connectNative).
-let gatewayExistedBefore = existsSync(HOST_MANIFEST);
+const productionSnapshot = snapshotHost(PRODUCTION_HOST_NAME);
+uninstallSmokeHost();
+
+// Isolated smoke host — never --install the production host name (M-45).
 if (existsSync(GATEWAY_EXE)) {
-  const install = spawnSync(GATEWAY_EXE, ['--install', '--allow', 'chrome-extension://placeholder/'], {
-    encoding: 'utf8',
-  });
+  const install = spawnSync(
+    GATEWAY_EXE,
+    ['--host-name', HOST_NAME, '--install', '--allow', 'chrome-extension://placeholder/'],
+    { encoding: 'utf8' },
+  );
   gatewayInstalled = install.status === 0;
-  console.log(gatewayInstalled ? 'Gateway installed for smoke test.' : `Gateway install failed: ${install.stderr}`);
+  console.log(
+    gatewayInstalled
+      ? `Gateway smoke host ${HOST_NAME} installed.`
+      : `Gateway install failed: ${install.stderr || install.stdout}`,
+  );
 } else {
   console.log(`WARN: gateway exe not found at ${GATEWAY_EXE} — native-host phases will fail.`);
 }
@@ -2153,22 +2245,18 @@ try {
   xoriginServer.close();
   mock.server.close();
 
-  // Restore the machine: uninstall the gateway we installed for the test.
-  if (gatewayInstalled && !gatewayExistedBefore) {
-    try {
-      spawnSync(GATEWAY_EXE, ['--uninstall'], { stdio: 'ignore' });
-      // The running exe was copied into %LocalAppData%; remove that copy too.
-      const installedCopy = path.join(GATEWAY_DIR, 'PolyPage.Gateway.exe');
-      for (let i = 0; i < 5 && existsSync(installedCopy); i++) {
-        try {
-          await rm(installedCopy, { force: true });
-        } catch {
-          await sleep(600); // host process may still be exiting
-        }
+  try {
+    uninstallSmokeHost();
+    for (let i = 0; i < 5 && existsSync(SMOKE_INSTALLED_EXE); i++) {
+      try {
+        await rm(SMOKE_INSTALLED_EXE, { force: true });
+      } catch {
+        await sleep(600);
       }
-    } catch {
-      /* best effort */
     }
+    restoreHostSnapshot('host', productionSnapshot);
+  } catch {
+    /* best effort */
   }
   await rm(path.dirname(gatewayConfigPath), { recursive: true, force: true }).catch(() => {});
 }

@@ -356,6 +356,64 @@ public class GatewayServerTests
         }, new MultimodalFakeBackend());
         Assert.Equal("[fake] hello", responses.Single().GetProperty("result").GetProperty("translations")[0].GetString());
     }
+
+    [Fact]
+    public async Task BinaryChunkRejectsDuplicateIndex()
+    {
+        var data = Convert.ToBase64String(new byte[] { 1, 2, 3 });
+        var responses = await Pipe.RunAsync(new[]
+        {
+            Pipe.Request(50, "binary.chunk", new { transferId = "dup", index = 0, total = 2, mime = "application/octet-stream", data }),
+            Pipe.Request(51, "binary.chunk", new { transferId = "dup", index = 0, total = 2, mime = "application/octet-stream", data }),
+        }, new FakeBackend());
+        var err = responses.Single(r => r.GetProperty("id").GetInt32() == 51).GetProperty("error");
+        Assert.Equal(RpcCodes.Config, err.GetProperty("code").GetInt32());
+        Assert.Contains("重复", err.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task BinaryChunkRejectsTooManyInflightTransfers()
+    {
+        var data = Convert.ToBase64String(new byte[] { 1 });
+        var requests = Enumerable.Range(0, GatewayServer.MaxInflightTransfers + 1).Select(i =>
+            Pipe.Request(100 + i, "binary.chunk", new
+            {
+                transferId = $"cap-{i}",
+                index = 0,
+                total = 2,
+                mime = "application/octet-stream",
+                data,
+            })).ToArray();
+        var responses = await Pipe.RunAsync(requests, new FakeBackend());
+        var errors = responses.Where(r => r.TryGetProperty("error", out _)).ToList();
+        Assert.NotEmpty(errors);
+        Assert.Contains(errors, e => e.GetProperty("error").GetProperty("message").GetString()!.Contains("上限"));
+    }
+
+    [Fact]
+    public async Task FailedTranscribeKeepsAssembledTransferForRetry()
+    {
+        var audio = new byte[] { 9, 8, 7, 6 };
+        var chunk = Pipe.Request(60, "binary.chunk", new
+        {
+            transferId = "keep-me",
+            index = 0,
+            total = 1,
+            mime = "audio/webm",
+            data = Convert.ToBase64String(audio),
+        });
+        var first = await Pipe.RunAsync(new[]
+        {
+            chunk,
+            Pipe.Request(61, "transcribe", new { transferId = "keep-me" }),
+            Pipe.Request(62, "transcribe", new { transferId = "keep-me" }),
+        }, new FakeBackend());
+        Assert.Equal(RpcCodes.Config, first.Single(r => r.GetProperty("id").GetInt32() == 61).GetProperty("error").GetProperty("code").GetInt32());
+        var second = first.Single(r => r.GetProperty("id").GetInt32() == 62).GetProperty("error");
+        Assert.Equal(RpcCodes.Config, second.GetProperty("code").GetInt32());
+        Assert.DoesNotContain("未知", second.GetProperty("message").GetString());
+        Assert.Contains("不支持转写", second.GetProperty("message").GetString());
+    }
 }
 
 /// <summary>Fake backend that implements vision + ASR for protocol v2 tests.</summary>

@@ -18,6 +18,8 @@ public sealed class GatewayServer
     public const string Version = "4.2.0";
     public const int ProtocolVersion = 2;
     public const int DefaultMaxBinaryBytes = 32 * 1024 * 1024;
+    public const int MaxInflightTransfers = 16;
+    public static readonly TimeSpan TransferTtl = TimeSpan.FromMinutes(2);
 
     private readonly IReadOnlyDictionary<string, IGatewayBackend> _backends;
     private readonly string _defaultBackendId;
@@ -34,6 +36,8 @@ public sealed class GatewayServer
         public string? Sha256 { get; set; }
         public Dictionary<int, byte[]> Parts { get; } = new();
         public byte[]? Assembled { get; set; }
+        public DateTime LastUtc { get; set; } = DateTime.UtcNow;
+        public long ReceivedBytes { get; set; }
     }
 
     public GatewayServer(IEnumerable<IGatewayBackend> backends, string defaultBackendId, GatewayLog log, int maxBinaryBytes = DefaultMaxBinaryBytes)
@@ -92,6 +96,7 @@ public sealed class GatewayServer
             // One task per request so streaming notifications and cancels
             // interleave freely; writes stay serialized. Tracked so RunAsync
             // can drain before returning (keeps contract tests deterministic).
+            handlers.RemoveAll(t => t.IsCompleted);
             handlers.Add(Task.Run(() => HandleAsync(output, request, requestId, requestCts, ct), CancellationToken.None));
         }
         try
@@ -326,8 +331,14 @@ public sealed class GatewayServer
         BinaryTransfer transfer;
         lock (_transfers)
         {
+            PurgeExpiredTransfersLocked();
             if (!_transfers.TryGetValue(transferId, out transfer!))
             {
+                if (_transfers.Count >= MaxInflightTransfers)
+                {
+                    throw new GatewayBackendException(RpcCodes.Config,
+                        $"同时进行的 binary.chunk 传输超过上限（{MaxInflightTransfers}）");
+                }
                 transfer = new BinaryTransfer { Mime = mime, Total = total };
                 _transfers[transferId] = transfer;
             }
@@ -335,7 +346,20 @@ public sealed class GatewayServer
             {
                 throw new GatewayBackendException(RpcCodes.Config, "binary.chunk total 与已有传输不一致");
             }
+            if (transfer.Assembled is not null || transfer.Parts.ContainsKey(index))
+            {
+                throw new GatewayBackendException(RpcCodes.Config, "binary.chunk 重复 index");
+            }
+            var nextBytes = transfer.ReceivedBytes + part.Length;
+            if (nextBytes > _maxBinaryBytes)
+            {
+                _transfers.Remove(transferId);
+                throw new GatewayBackendException(RpcCodes.Config,
+                    $"拼装中二进制超过上限（{nextBytes} > {_maxBinaryBytes}）");
+            }
             transfer.Parts[index] = part;
+            transfer.ReceivedBytes = nextBytes;
+            transfer.LastUtc = DateTime.UtcNow;
             if (!string.IsNullOrWhiteSpace(sha256)) transfer.Sha256 = sha256;
             if (transfer.Parts.Count < transfer.Total)
             {
@@ -381,6 +405,7 @@ public sealed class GatewayServer
     private async Task<JsonRpcResponse> HandleTranslateImageAsync(JsonRpcRequest request, CancellationToken ct)
     {
         var backend = ResolveBackend(request.Params);
+        var transferId = GetString(request.Params, "transferId");
         var (bytes, mime) = ResolveImagePayload(request.Params);
         var source = GetString(request.Params, "source") ?? "auto";
         var target = GetString(request.Params, "target") ?? "zh-CN";
@@ -389,6 +414,7 @@ public sealed class GatewayServer
         {
             throw new GatewayBackendException(RpcCodes.Config, $"后端 \"{backend.Id}\" 不支持视觉翻译");
         }
+        if (!string.IsNullOrWhiteSpace(transferId)) RemoveTransfer(transferId);
         return JsonRpc.Ok(request.Id, new
         {
             segments = result.Segments.Select(s => new { text = s.Text, translation = s.Translation }).ToArray(),
@@ -405,7 +431,7 @@ public sealed class GatewayServer
         {
             throw new GatewayBackendException(JsonRpc.InvalidParams, "transcribe 不接受内联音频");
         }
-        var (bytes, mime) = TakeTransfer(transferId);
+        var (bytes, mime) = PeekAssembled(transferId);
         var source = GetString(request.Params, "source") ?? "auto";
         var target = GetString(request.Params, "target") ?? "zh-CN";
         var hint = GetString(request.Params, "languageHint");
@@ -415,6 +441,7 @@ public sealed class GatewayServer
         {
             throw new GatewayBackendException(RpcCodes.Config, $"后端 \"{backend.Id}\" 不支持转写");
         }
+        RemoveTransfer(transferId);
         return JsonRpc.Ok(request.Id, new
         {
             text = result.Text,
@@ -426,25 +453,35 @@ public sealed class GatewayServer
     private (byte[] bytes, string mime) ResolveImagePayload(JsonElement? paramsElement)
     {
         var transferId = GetString(paramsElement, "transferId");
-        if (!string.IsNullOrWhiteSpace(transferId)) return TakeTransfer(transferId);
+        if (!string.IsNullOrWhiteSpace(transferId)) return PeekAssembled(transferId);
         var dataUrl = GetString(paramsElement, "dataUrl")
             ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "translate.image 需要 transferId 或 dataUrl");
         return DecodeDataUrl(dataUrl);
     }
 
-    private (byte[] bytes, string mime) TakeTransfer(string transferId)
+    private (byte[] bytes, string mime) PeekAssembled(string transferId)
     {
         lock (_transfers)
         {
+            PurgeExpiredTransfersLocked();
             if (!_transfers.TryGetValue(transferId, out var transfer) || transfer.Assembled is null)
             {
                 throw new GatewayBackendException(RpcCodes.Config, $"未知或未完成的 transferId: {transferId}");
             }
-            var bytes = transfer.Assembled;
-            var mime = transfer.Mime;
-            _transfers.Remove(transferId);
-            return (bytes, mime);
+            return (transfer.Assembled, transfer.Mime);
         }
+    }
+
+    private void RemoveTransfer(string transferId)
+    {
+        lock (_transfers) _transfers.Remove(transferId);
+    }
+
+    private void PurgeExpiredTransfersLocked()
+    {
+        var cutoff = DateTime.UtcNow - TransferTtl;
+        var stale = _transfers.Where(kv => kv.Value.LastUtc < cutoff).Select(kv => kv.Key).ToList();
+        foreach (var id in stale) _transfers.Remove(id);
     }
 
     private (byte[] bytes, string mime) DecodeDataUrl(string dataUrl)

@@ -117,11 +117,14 @@ export function detectLanguage(samples: string[]): DetectionResult {
   const total = Math.max(1, counts.total);
   const scores: Record<string, number> = {};
 
-  // Japanese uses kana alongside kanji; pure Hangul means Korean.
+  // Japanese uses kana alongside kanji; a decorative の on a Chinese page
+  // must not flip the result (M-42: kana must be ≥ 5% of han+kana).
   const kana = counts.hiragana + counts.katakana;
-  if ((counts.han + kana) / total >= 0.4) {
-    const lang = kana > 0 ? 'ja' : 'zh';
-    scores[lang] = (counts.han + kana) / total;
+  const cjk = counts.han + kana;
+  if (cjk / total >= 0.4) {
+    const kanaRatio = kana / Math.max(1, cjk);
+    const lang = kanaRatio >= 0.05 ? 'ja' : 'zh';
+    scores[lang] = cjk / total;
     return { language: lang, confident: true, scores };
   }
   if (counts.hangul / total >= 0.2) {
@@ -168,4 +171,14 @@ export function detectLanguage(samples: string[]): DetectionResult {
   }
   const confident = best.hits >= 2 && best.hits >= runnerUp * 1.5;
   return { language: confident ? best.lang : null, confident, scores };
+}
+
+/** Auto-translate skip (M-42): only a confident match against the target base. */
+export function pageLanguageBlocksAutoTranslate(
+  language: string | null,
+  confident: boolean,
+  targetBase: string | null,
+): boolean {
+  if (!confident || !language || !targetBase) return false;
+  return language.toLowerCase() === targetBase.toLowerCase();
 }

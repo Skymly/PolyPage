@@ -15,7 +15,7 @@ import {
   NAV_TRANSLATION_CLASS,
   SHADOW_STYLE_ATTR,
 } from '../shared/constants';
-import { detectLanguage } from '../shared/languageDetect';
+import { detectLanguage, pageLanguageBlocksAutoTranslate } from '../shared/languageDetect';
 import { resolveLanguageCode } from '../providers/langCodes';
 import type { ContentSettings, EffectiveRule, PageState } from '../shared/types';
 import { DomObserver } from './observer';
@@ -50,6 +50,7 @@ let contentSettings: ContentSettings | null = null;
 let effectiveRule: EffectiveRule | null = null;
 /** 3.0: detected page language (spec 3.0 §8.1). */
 let pageLanguage: string | null = null;
+let pageLanguageConfident = false;
 /** 3.0: auto-translate skipped because page language == target language. */
 let autoSkipped = false;
 
@@ -135,15 +136,16 @@ function detectPageLanguage(): void {
   }
   const result = detectLanguage(samples);
   pageLanguage = result.language;
+  pageLanguageConfident = result.confident;
 }
 
-/** True when the detected page language matches the configured target. */
+/** True when a confident detection matches the configured target. */
 function pageMatchesTargetLanguage(): boolean {
-  if (!pageLanguage || !contentSettings) return false;
+  if (!contentSettings) return false;
   const target = resolveLanguageCode(contentSettings.defaultTargetLanguage);
   if (!target) return false;
   const base = target.split('-')[0].toLowerCase();
-  return base === pageLanguage.toLowerCase();
+  return pageLanguageBlocksAutoTranslate(pageLanguage, pageLanguageConfident, base);
 }
 
 /** force is only sent by the popup / tests — there is no page-script sender (M-88). */

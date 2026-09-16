@@ -4,7 +4,7 @@
  * mixed-script guard behavior).
  */
 import { describe, expect, it } from 'vitest';
-import { countScripts, detectLanguage, stopwordVotes } from '../src/shared/languageDetect';
+import { countScripts, detectLanguage, pageLanguageBlocksAutoTranslate, stopwordVotes } from '../src/shared/languageDetect';
 
 /** One representative sample per supported language. */
 const CORPUS: { lang: string; samples: string[] }[] = [
@@ -110,5 +110,23 @@ describe('detectLanguage edge cases', () => {
     const votes = stopwordVotes(['the cat and the dog', 'that is a house']);
     expect(votes.en).toBeGreaterThan(0);
     expect(votes.fr).toBe(0);
+  });
+
+  it('does not classify Chinese plus a decorative の as Japanese (M-42)', () => {
+    const result = detectLanguage([
+      '开源软件改变了世界，越来越多的公司开始拥抱开源社区の。',
+    ]);
+    expect(result.language).toBe('zh');
+    expect(result.confident).toBe(true);
+  });
+
+  it('still classifies mixed kanji+kana as Japanese', () => {
+    expect(detectLanguage(['日本語のテストです。これは仮名が多い文章です。']).language).toBe('ja');
+  });
+
+  it('does not skip auto-translate on unconfident detections (M-42)', () => {
+    expect(pageLanguageBlocksAutoTranslate('ja', false, 'ja')).toBe(false);
+    expect(pageLanguageBlocksAutoTranslate('ja', true, 'ja')).toBe(true);
+    expect(pageLanguageBlocksAutoTranslate('zh', true, 'ja')).toBe(false);
   });
 });

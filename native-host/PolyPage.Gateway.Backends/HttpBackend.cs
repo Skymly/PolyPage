@@ -109,7 +109,7 @@ public sealed class HttpBackend : IGatewayBackend
                 throw new GatewayBackendException(ClassifyStatus((int)res.StatusCode),
                     $"后端 {Id} 请求失败 (HTTP {(int)res.StatusCode})");
             }
-            var body = await res.Content.ReadAsStringAsync(timeoutCts.Token);
+            var body = await HttpContentLimits.ReadBoundedStringAsync(res.Content, timeoutCts.Token);
             try
             {
                 return JsonDocument.Parse(body).RootElement.Clone();

@@ -123,7 +123,7 @@ public sealed class OllamaBackend : IGatewayBackend
             using var res = await Http.GetAsync(url, ct);
             if (res.IsSuccessStatusCode)
             {
-                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+                using var doc = JsonDocument.Parse(await HttpContentLimits.ReadBoundedStringAsync(res.Content, ct));
                 var first = doc.RootElement.GetProperty("models")[0].GetProperty("name").GetString();
                 if (!string.IsNullOrWhiteSpace(first)) return first;
             }
@@ -205,7 +205,7 @@ public sealed class OllamaBackend : IGatewayBackend
                 throw new GatewayBackendException(ClassifyStatus((int)res.StatusCode),
                     $"Ollama 视觉请求失败 (HTTP {(int)res.StatusCode})");
             }
-            using var json = JsonDocument.Parse(await res.Content.ReadAsStringAsync(timeoutCts.Token));
+            using var json = JsonDocument.Parse(await HttpContentLimits.ReadBoundedStringAsync(res.Content, timeoutCts.Token));
             var content = json.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
             if (string.IsNullOrWhiteSpace(content))
                 throw new GatewayBackendException(RpcCodes.InvalidResponse, "Ollama 视觉返回了空内容");
@@ -259,7 +259,7 @@ public sealed class OllamaBackend : IGatewayBackend
                 throw new GatewayBackendException(ClassifyStatus((int)res.StatusCode),
                     $"Ollama 请求失败 (HTTP {(int)res.StatusCode})");
             }
-            var json = JsonDocument.Parse(await res.Content.ReadAsStringAsync(timeoutCts.Token));
+            var json = JsonDocument.Parse(await HttpContentLimits.ReadBoundedStringAsync(res.Content, timeoutCts.Token));
             var content = json.RootElement
                 .GetProperty("choices")[0]
                 .GetProperty("message")

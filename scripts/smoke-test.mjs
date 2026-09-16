@@ -851,6 +851,17 @@ function sendToTabWithUrl(urlPrefix, cmdJson) {
     })()`;
 }
 
+async function readOcrPanel(urlPrefix) {
+  const state = await ext.eval(sendToTabWithUrl(urlPrefix, `{ type: 'wt:get-state' }`));
+  return state?.ocrPanelText ?? '';
+}
+
+async function requestImageOcr(urlPrefix, src) {
+  return ext.eval(
+    sendToTabWithUrl(urlPrefix, `{ type: 'wt:translate-image', url: ${JSON.stringify(src)} }`),
+  );
+}
+
 /** Open a fixture page in a new tab. */
 async function openPage(browserCdp, url) {
   await browserCdp.send('Target.createTarget', { url });
@@ -1819,12 +1830,11 @@ try {
   check('image hover translate button appears (>=200px)', hoverBtn === true);
 
   const visionBefore = mock.visionCount();
-  await imageClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  const imageSrc = `http://127.0.0.1:${PORT_PAGE}/img.png`;
+  await requestImageOcr(imageUrl, imageSrc);
   let ocrText = '';
   for (let i = 0; i < 40; i++) {
-    ocrText = await imageClient.eval(
-      `document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelector('.wt-ocr-body')?.textContent ?? ''`,
-    );
+    ocrText = await readOcrPanel(imageUrl);
     if (ocrText.includes('你好，世界')) break;
     await sleep(400);
   }
@@ -1837,27 +1847,15 @@ try {
   check(
     'OCR panel isolated in Shadow DOM (never page DOM)',
     (await imageClient.eval(
-      `!!document.querySelector('.wt-ocr-host')?.shadowRoot && document.body.querySelector('.wt-ocr-panel') === null`,
+      `!!document.querySelector('.wt-ocr-host') && document.querySelector('.wt-ocr-host').shadowRoot === null && document.body.querySelector('.wt-ocr-panel') === null`,
     )) === true,
   );
 
-  // Close + re-trigger the same image: cache hit, no second vision call.
-  await imageClient.eval(`
-    (() => {
-      const btns = [...document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelectorAll('button') ?? []];
-      btns.find((b) => b.textContent === '收起')?.click();
-    })()`);
-  await sleep(400);
-  await imageClient.eval(
-    `document.getElementById('photo').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`,
-  );
-  await sleep(400);
-  await imageClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  // Re-trigger the same image: cache hit, no second vision call.
+  await requestImageOcr(imageUrl, imageSrc);
   let ocrAgain = '';
   for (let i = 0; i < 40; i++) {
-    ocrAgain = await imageClient.eval(
-      `document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelector('.wt-ocr-body')?.textContent ?? ''`,
-    );
+    ocrAgain = await readOcrPanel(imageUrl);
     if (ocrAgain.includes('你好，世界')) break;
     await sleep(400);
   }
@@ -1952,12 +1950,10 @@ try {
   }
   check('tesseract hover button appears', tessHover === true);
   const visionBeforeTess = mock.visionCount();
-  await tessClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  await requestImageOcr(tessUrl, `http://127.0.0.1:${PORT_PAGE}/hello-world.png`);
   let tessText = '';
   for (let i = 0; i < 200; i++) {
-    tessText = await tessClient.eval(
-      `document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelector('.wt-ocr-body')?.textContent ?? ''`,
-    );
+    tessText = await readOcrPanel(tessUrl);
     if (/HELLO\s+WORLD/i.test(tessText) || tessText.includes('失败') || tessText.includes('未识别')) break;
     await sleep(500);
   }

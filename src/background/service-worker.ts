@@ -25,6 +25,7 @@
  */
 import { MEDIA_COMMAND_FRAME_ID, sendTabCommand, sendViewerResume } from '../messaging/messages';
 import { hostnameFromUrl } from '../shared/siteRules';
+import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
 import { computeOcrAvailable, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
@@ -490,8 +491,20 @@ async function handleOcrRequest(
   url: string,
   naturalWidth: number | undefined,
   naturalHeight: number | undefined,
-  cacheIdentity?: string,
+  cacheIdentity: string | undefined,
+  sender: chrome.runtime.MessageSender,
+  userGesture: boolean,
 ): Promise<OcrResponse> {
+  if (
+    !ocrRequestAllowed({
+      imageUrl: url,
+      tabUrl: sender.tab?.url,
+      senderUrl: sender.url,
+      userGesture,
+    })
+  ) {
+    return { ok: false, kind: 'config', error: '图片地址与当前页面不同源，已拒绝抓取' };
+  }
   const controller = new AbortController();
   ocrControllers.set(requestId, controller);
   try {
@@ -889,6 +902,8 @@ chrome.runtime.onMessage.addListener(
                 message.naturalWidth,
                 message.naturalHeight,
                 message.cacheIdentity,
+                sender,
+                message.userGesture === true,
               ),
             );
             break;

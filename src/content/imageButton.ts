@@ -10,6 +10,7 @@
  */
 import { sendRuntime } from '../messaging/messages';
 import { IMAGE_HOVER_MIN_PX } from '../shared/constants';
+import { isTrustedGesture } from '../shared/imageAccess';
 import type { ImageTranslateTrigger } from '../shared/types';
 import { OcrResultPanel } from '../ocr/resultPanel';
 import { applyImageOverlay, removeImageOverlay } from '../ocr/overlay';
@@ -113,12 +114,17 @@ export class ImageTranslateController {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
+      if (!isTrustedGesture(e)) return;
       if (!this.config.ocrAvailable) return;
-      this.translateImage(img.src, img);
+      this.translateImage(img.src, img, true);
     });
     document.documentElement.appendChild(btn);
     this.button = btn;
     this.buttonImg = img;
+  }
+
+  panelText(): string {
+    return this.panel.panelText();
   }
 
   private hideButton(): void {
@@ -128,7 +134,7 @@ export class ImageTranslateController {
   }
 
   /** Entry for both hover button and background context-menu command. */
-  translateImage(url: string, near?: Element): void {
+  translateImage(url: string, near?: Element, userGesture = false): void {
     if (!this.config.enabled) return;
     if (!this.config.ocrAvailable) {
       this.panel.setCallbacks({ onCancel: () => undefined, onClose: () => undefined });
@@ -152,6 +158,7 @@ export class ImageTranslateController {
       type: 'ocr-request',
       requestId,
       url,
+      userGesture,
       ...(near instanceof HTMLImageElement
         ? { naturalWidth: near.naturalWidth, naturalHeight: near.naturalHeight }
         : {}),

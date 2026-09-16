@@ -51,7 +51,7 @@ export class OcrResultPanel {
     if (this.host) return;
     const host = document.createElement('div');
     host.className = 'wt-ocr-host';
-    const shadow = host.attachShadow({ mode: 'open' });
+    const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = PANEL_CSS;
     const panel = document.createElement('div');
@@ -187,5 +187,10 @@ export class OcrResultPanel {
 
   get visible(): boolean {
     return this.host !== null;
+  }
+
+  /** Readable only inside the content script that created the closed shadow (M-06). */
+  panelText(): string {
+    return this.body?.textContent ?? '';
   }
 }

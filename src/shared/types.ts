@@ -339,6 +339,8 @@ export interface PageState {
   asrActive?: boolean;
   /** 3.0: auto-translate skipped because page language == target language. */
   autoSkipped?: boolean;
+  /** Closed-shadow OCR panel text, readable only via the content script (M-06). */
+  ocrPanelText?: string;
 }
 
 /** Aggregated per-frame state served to the popup (spec 2.0 §6.2). */

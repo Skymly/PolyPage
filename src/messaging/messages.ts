@@ -84,7 +84,7 @@ export type RuntimeMessage =
   | { type: 'get-export-payload'; v?: number; tabId?: number }
   /* ------------------------------ 3.0 additions ----------------------------- */
   /** 3.0 (pillar F): translate an image through the vision pipeline. */
-  | { type: 'ocr-request'; v?: number; requestId: string; url: string; naturalWidth?: number; naturalHeight?: number; cacheIdentity?: string }
+  | { type: 'ocr-request'; v?: number; requestId: string; url: string; naturalWidth?: number; naturalHeight?: number; cacheIdentity?: string; userGesture?: boolean }
   /** 3.0 (pillar F): abort an in-flight OCR request. */
   | { type: 'ocr-cancel'; v?: number; requestId: string }
   /** 3.0 (pillar H): mark a bad translation into the feedback log. */

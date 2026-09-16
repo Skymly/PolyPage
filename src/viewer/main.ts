@@ -12,7 +12,7 @@
  */
 import { sendRuntime, VIEWER_RESUME_TYPE } from '../messaging/messages';
 import { loadSettings } from '../storage/settings';
-import { PDF_PARAGRAPH_BUDGET } from '../shared/constants';
+import { PDF_FETCH_TIMEOUT_MS, PDF_MAX_BYTES, PDF_PARAGRAPH_BUDGET } from '../shared/constants';
 import type { PdfViewerMode } from '../shared/types';
 import { openPdfDocument } from './pdf/loader';
 import type { PdfDocumentLike, PdfPageLike } from './pdf/loader';
@@ -123,7 +123,14 @@ function sourceUrl(): string | null {
 }
 
 async function fetchPdf(url: string): Promise<{ bytes: ArrayBuffer; etag: string | null; lastModified: string | null }> {
-  const res = await fetch(url, { credentials: 'include' });
+  const ac = new AbortController();
+  const timer = window.setTimeout(() => ac.abort(), PDF_FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, { credentials: 'omit', signal: ac.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
   if (!res.ok) {
     throw new Error(`下载 PDF 失败（HTTP ${res.status}）`);
   }
@@ -131,8 +138,15 @@ async function fetchPdf(url: string): Promise<{ bytes: ArrayBuffer; etag: string
   if (contentType !== '' && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
     throw new Error(`该地址返回的不是 PDF（Content-Type: ${contentType}）`);
   }
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > PDF_MAX_BYTES) {
+    throw new Error(`PDF 超过大小上限（${PDF_MAX_BYTES} 字节）`);
+  }
   const bytes = await res.arrayBuffer();
   if (bytes.byteLength === 0) throw new Error('下载的 PDF 内容为空');
+  if (bytes.byteLength > PDF_MAX_BYTES) {
+    throw new Error(`PDF 超过大小上限（${PDF_MAX_BYTES} 字节）`);
+  }
   return {
     bytes,
     etag: res.headers.get('etag'),

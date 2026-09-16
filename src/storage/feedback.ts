@@ -23,7 +23,7 @@ export async function loadFeedbackLog(): Promise<FeedbackEntry[]> {
 /** Prepend one entry and enforce the ring limit. */
 export async function appendFeedback(entry: FeedbackEntry): Promise<void> {
   const entries = await loadFeedbackLog();
-  entries.unshift(entry);
+  entries.unshift({ ...entry, pageUrl: sanitizeFeedbackPageUrl(entry.pageUrl) });
   await chrome.storage.local.set({
     [FEEDBACK_LOG_KEY]: entries.slice(0, FEEDBACK_LOG_MAX),
   });
@@ -38,6 +38,21 @@ export async function deleteFeedbackEntry(ts: number): Promise<void> {
 
 export async function clearFeedbackLog(): Promise<void> {
   await chrome.storage.local.remove(FEEDBACK_LOG_KEY);
+}
+
+/** Drop query/hash so feedback logs do not store tokens (M-59). */
+export function sanitizeFeedbackPageUrl(raw: string): string {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return '';
+  try {
+    const u = new URL(trimmed);
+    if (u.protocol === 'http:' || u.protocol === 'https:') {
+      return `${u.origin}${u.pathname}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return trimmed.split(/[?#]/, 1)[0] ?? '';
 }
 
 /** CSV escaping: quote fields, double embedded quotes, neutralize formula prefixes (M-39). */

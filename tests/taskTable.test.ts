@@ -58,6 +58,16 @@ describe('resume idempotency (缓存幂等跳过已完成条目)', () => {
     await table.markDone(2, ['a']);
     expect(await table.count()).toBe(1);
   });
+
+  it('markDone with frameId leaves the same key inflight on another frame (M-26)', async () => {
+    const { table } = makeTable();
+    await table.markInflight(1, 0, [{ key: 'wt-1', text: 'x' }]);
+    await table.markInflight(1, 3, [{ key: 'wt-1', text: 'y' }]);
+    await table.markDone(1, ['wt-1'], 0);
+    const inflight = await table.listInflight();
+    expect(inflight).toHaveLength(1);
+    expect(inflight[0]).toMatchObject({ tabId: 1, frameId: 3, taskKey: 'wt-1' });
+  });
 });
 
 describe('tab cleanup (tabs.onRemoved)', () => {

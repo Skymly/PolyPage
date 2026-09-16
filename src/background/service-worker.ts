@@ -218,10 +218,14 @@ async function logError(
  *  is unavailable (never blocks translation). */
 const taskTable = new TaskTable(new IdbTaskStore());
 
-async function completeTasks(tabId: number | undefined, keys: string[]): Promise<void> {
+async function completeTasks(
+  tabId: number | undefined,
+  keys: string[],
+  frameId?: number,
+): Promise<void> {
   if (tabId === undefined || keys.length === 0) return;
   try {
-    await taskTable.markDone(tabId, keys);
+    await taskTable.markDone(tabId, keys, frameId);
   } catch {
     /* persistence is best-effort */
   }

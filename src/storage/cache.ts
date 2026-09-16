@@ -9,6 +9,7 @@
  *
  * 2.0: the glossary version participates in the cache key so glossary edits
  * never serve stale cached translations (spec 2.0 §7.4).
+ * 4.2: model / prompt / temperature fingerprint is also in the key (M-24).
  */
 import { CACHE_INDEX_KEY, CACHE_KEY_PREFIX, CACHE_MAX_ENTRIES } from '../shared/constants';
 import { hashText } from '../shared/utils';
@@ -22,16 +23,29 @@ interface CacheIndex {
   order: string[];
 }
 
-/** Cache key independent of element ids: provider + languages + glossary + text. */
+/** Fingerprint of model + prompts + temperature (M-24). */
+export function cacheFingerprint(provider: {
+  model: string;
+  systemPrompt: string;
+  userPromptTemplate: string;
+  temperature: number;
+}): string {
+  return hashText(
+    `${provider.model}|${provider.systemPrompt}|${provider.userPromptTemplate}|${provider.temperature}`,
+  );
+}
+
+/** Cache key independent of element ids: provider + languages + glossary + fingerprint + text. */
 export function buildCacheKey(
   providerId: string,
   sourceLanguage: string,
   targetLanguage: string,
   text: string,
   glossaryVersion = 0,
+  fingerprint = '',
 ): string {
   return hashText(
-    `${providerId}|${sourceLanguage}|${targetLanguage}|g${glossaryVersion}|${text}`,
+    `${providerId}|${sourceLanguage}|${targetLanguage}|g${glossaryVersion}|f${fingerprint}|${text}`,
   );
 }
 
@@ -56,12 +70,14 @@ export async function cacheGet(
   sourceLanguage: string,
   targetLanguage: string,
   glossaryVersion = 0,
+  fingerprint = '',
 ): Promise<Map<string, string>> {
   const hits = new Map<string, string>();
   if (texts.length === 0) return hits;
   const storageKeys = texts.map(({ key, text }) => ({
     storageKey:
-      CACHE_KEY_PREFIX + buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion),
+      CACHE_KEY_PREFIX +
+      buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion, fingerprint),
     key,
   }));
   const data = await chrome.storage.local.get(storageKeys.map((k) => k.storageKey));
@@ -78,13 +94,21 @@ export async function cachePut(
   sourceLanguage: string,
   targetLanguage: string,
   glossaryVersion = 0,
+  fingerprint = '',
 ): Promise<void> {
   if (items.length === 0) return;
   const now = Date.now();
   const writes: Record<string, CacheEntry> = {};
   const hashes: string[] = [];
   for (const { text, translated } of items) {
-    const hash = buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion);
+    const hash = buildCacheKey(
+      providerId,
+      sourceLanguage,
+      targetLanguage,
+      text,
+      glossaryVersion,
+      fingerprint,
+    );
     writes[CACHE_KEY_PREFIX + hash] = { t: translated, ts: now };
     hashes.push(hash);
   }
@@ -102,6 +126,27 @@ export async function cachePut(
       if (oldest) evict.push(CACHE_KEY_PREFIX + oldest);
     }
     if (evict.length > 0) await chrome.storage.local.remove(evict);
+    await chrome.storage.local.set({ [CACHE_INDEX_KEY]: index });
+  });
+}
+
+export async function cacheDelete(
+  texts: string[],
+  providerId: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+  glossaryVersion = 0,
+  fingerprint = '',
+): Promise<void> {
+  if (texts.length === 0) return;
+  const hashes = texts.map((text) =>
+    buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion, fingerprint),
+  );
+  await chrome.storage.local.remove(hashes.map((h) => CACHE_KEY_PREFIX + h));
+  await withIndexLock(async () => {
+    const index = await readIndex();
+    const hashSet = new Set(hashes);
+    index.order = index.order.filter((h) => !hashSet.has(h));
     await chrome.storage.local.set({ [CACHE_INDEX_KEY]: index });
   });
 }
@@ -128,6 +173,7 @@ export interface TranslationCache {
     sourceLanguage: string,
     targetLanguage: string,
     glossaryVersion?: number,
+    fingerprint?: string,
   ): Promise<Map<string, string>>;
   put(
     items: { text: string; translated: string }[],
@@ -135,6 +181,15 @@ export interface TranslationCache {
     sourceLanguage: string,
     targetLanguage: string,
     glossaryVersion?: number,
+    fingerprint?: string,
+  ): Promise<void>;
+  delete?(
+    texts: string[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion?: number,
+    fingerprint?: string,
   ): Promise<void>;
 }
 
@@ -146,8 +201,9 @@ export class ChromeTranslationCache implements TranslationCache {
     sourceLanguage: string,
     targetLanguage: string,
     glossaryVersion = 0,
+    fingerprint = '',
   ): Promise<Map<string, string>> {
-    return cacheGet(texts, providerId, sourceLanguage, targetLanguage, glossaryVersion);
+    return cacheGet(texts, providerId, sourceLanguage, targetLanguage, glossaryVersion, fingerprint);
   }
 
   put(
@@ -156,8 +212,20 @@ export class ChromeTranslationCache implements TranslationCache {
     sourceLanguage: string,
     targetLanguage: string,
     glossaryVersion = 0,
+    fingerprint = '',
   ): Promise<void> {
-    return cachePut(items, providerId, sourceLanguage, targetLanguage, glossaryVersion);
+    return cachePut(items, providerId, sourceLanguage, targetLanguage, glossaryVersion, fingerprint);
+  }
+
+  delete(
+    texts: string[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion = 0,
+    fingerprint = '',
+  ): Promise<void> {
+    return cacheDelete(texts, providerId, sourceLanguage, targetLanguage, glossaryVersion, fingerprint);
   }
 }
 
@@ -171,10 +239,18 @@ export class MemoryTranslationCache implements TranslationCache {
     sourceLanguage: string,
     targetLanguage: string,
     glossaryVersion = 0,
+    fingerprint = '',
   ): Promise<Map<string, string>> {
     const hits = new Map<string, string>();
     for (const { key, text } of texts) {
-      const hashed = buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion);
+      const hashed = buildCacheKey(
+        providerId,
+        sourceLanguage,
+        targetLanguage,
+        text,
+        glossaryVersion,
+        fingerprint,
+      );
       const hit = this.map.get(hashed);
       if (hit !== undefined) hits.set(key, hit);
     }
@@ -187,10 +263,39 @@ export class MemoryTranslationCache implements TranslationCache {
     sourceLanguage: string,
     targetLanguage: string,
     glossaryVersion = 0,
+    fingerprint = '',
   ): Promise<void> {
     for (const { text, translated } of items) {
-      const hashed = buildCacheKey(providerId, sourceLanguage, targetLanguage, text, glossaryVersion);
+      const hashed = buildCacheKey(
+        providerId,
+        sourceLanguage,
+        targetLanguage,
+        text,
+        glossaryVersion,
+        fingerprint,
+      );
       this.map.set(hashed, translated);
+    }
+  }
+
+  async delete(
+    texts: string[],
+    providerId: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    glossaryVersion = 0,
+    fingerprint = '',
+  ): Promise<void> {
+    for (const text of texts) {
+      const hashed = buildCacheKey(
+        providerId,
+        sourceLanguage,
+        targetLanguage,
+        text,
+        glossaryVersion,
+        fingerprint,
+      );
+      this.map.delete(hashed);
     }
   }
 }

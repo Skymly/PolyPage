@@ -269,6 +269,7 @@ async function buildPages(doc: PdfDocumentLike): Promise<void> {
       skipHeadersFooters,
       headerFooterSet: repeating,
       cluster,
+      pageHeight: pdfPage.getViewport({ scale: 1 }).height,
     });
     const paragraphs: ParaState[] = result.paragraphs.map((p) => ({
       text: p.text,

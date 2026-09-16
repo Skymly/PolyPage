@@ -14,6 +14,7 @@ import {
   clusterParagraphs,
   collectRepeatingLines,
   extractLines,
+  isNearPageEdge,
   isPageNumberLine,
 } from '../src/viewer/pdf/segment';
 import type { PdfLine, TextItemLike } from '../src/viewer/pdf/segment';
@@ -110,14 +111,31 @@ describe('page number filtering (页码过滤)', () => {
     expect(isPageNumberLine('The year 2020')).toBe(false);
   });
 
+  it('treats only the top/bottom 8% as the page-number band (M-37)', () => {
+    expect(isNearPageEdge(-792, 792)).toBe(true);
+    expect(isNearPageEdge(-10, 792)).toBe(true);
+    expect(isNearPageEdge(-400, 792)).toBe(false);
+  });
+
   it('drops standalone page numbers from clustering', () => {
     const items = [
       item('A real paragraph with enough text to matter.', 50, 100),
-      item('42', 300, 700),
+      item('42', 300, 760),
     ];
     const { paragraphs } = clusterPage(items);
     expect(paragraphs).toHaveLength(1);
     expect(paragraphs[0].text).toContain('real paragraph');
+  });
+
+  it('keeps a mid-page 1-4 digit quantity (M-37)', () => {
+    const items = [
+      item('Invoice header with enough text to matter.', 50, 180),
+      item('12', 240, 220),
+      item('More body text after the quantity cell.', 50, 260),
+    ];
+    const { paragraphs } = clusterPage(items);
+    const texts = paragraphs.map((p) => p.text).join('\n');
+    expect(texts).toMatch(/\b12\b/);
   });
 });
 
@@ -210,6 +228,9 @@ describe('table fixture (4.2 P2)', () => {
     expect(texts.some((t) => t.includes('Widget A') && t.includes('3.50'))).toBe(false);
     expect(texts.some((t) => /Widget A/.test(t))).toBe(true);
     expect(texts.some((t) => /Gadget B/.test(t))).toBe(true);
+    // M-37: mid-page table quantities are not page numbers.
+    expect(texts.some((t) => /(^|\s)12(\s|$)/.test(t))).toBe(true);
+    expect(texts.some((t) => /(^|\s)4(\s|$)/.test(t))).toBe(true);
   });
 });
 
@@ -230,5 +251,11 @@ describe('scanned pages', () => {
   it('text pages are not scanned', () => {
     const result = clusterPage([item('Real text', 50, 100)]);
     expect(result.scanned).toBe(false);
+  });
+
+  it('marks pages whose only text is a footer page number as scanned (M-37)', () => {
+    const result = clusterPage([item('12', 300, 760)]);
+    expect(result.paragraphs).toEqual([]);
+    expect(result.scanned).toBe(true);
   });
 });

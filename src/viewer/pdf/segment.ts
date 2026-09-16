@@ -91,6 +91,26 @@ export function isPageNumberLine(text: string): boolean {
   return false;
 }
 
+/** US Letter height used by tests and as fallback when the viewer omits viewport height. */
+export const DEFAULT_PDF_PAGE_HEIGHT = 792;
+
+/** Drop page-number-like lines only in the top/bottom band (M-37). */
+export const PAGE_NUMBER_EDGE_RATIO = 0.08;
+
+/**
+ * `y` is the inverted text-item coordinate (smaller = higher on the page).
+ * Top ≈ -pageHeight, bottom ≈ 0.
+ */
+export function isNearPageEdge(
+  y: number,
+  pageHeight: number,
+  ratio = PAGE_NUMBER_EDGE_RATIO,
+): boolean {
+  if (!(pageHeight > 0) || !Number.isFinite(y)) return false;
+  const band = pageHeight * ratio;
+  return y <= -pageHeight + band || y >= -band;
+}
+
 interface Segment {
   y: number;
   x0: number;
@@ -324,17 +344,23 @@ function normalizeForRepeat(text: string): string {
  *  which extracts once to feed collectRepeatingLines). */
 export function clusterPageFromLines(
   lines: PdfLine[],
-  options: { skipHeadersFooters?: boolean; headerFooterSet?: Set<string>; cluster?: ClusterOptions } = {},
+  options: {
+    skipHeadersFooters?: boolean;
+    headerFooterSet?: Set<string>;
+    cluster?: ClusterOptions;
+    pageHeight?: number;
+  } = {},
 ): PageClusterResult {
   const skip = options.skipHeadersFooters ?? true;
   const hf = options.headerFooterSet;
+  const pageHeight = options.pageHeight ?? DEFAULT_PDF_PAGE_HEIGHT;
   const filtered = lines.filter((line) => {
-    if (isPageNumberLine(line.text)) return false;
+    if (isPageNumberLine(line.text) && isNearPageEdge(line.y, pageHeight)) return false;
     if (skip && hf && hf.has(normalizeForRepeat(line.text))) return false;
     return true;
   });
   const paragraphs = clusterParagraphs(filtered, options.cluster);
-  const scanned = lines.length === 0;
+  const scanned = filtered.length === 0;
   return { paragraphs, scanned };
 }
 
@@ -344,7 +370,12 @@ export function clusterPageFromLines(
  */
 export function clusterPage(
   items: TextItemLike[],
-  options: { skipHeadersFooters?: boolean; headerFooterSet?: Set<string>; cluster?: ClusterOptions } = {},
+  options: {
+    skipHeadersFooters?: boolean;
+    headerFooterSet?: Set<string>;
+    cluster?: ClusterOptions;
+    pageHeight?: number;
+  } = {},
 ): PageClusterResult {
   return clusterPageFromLines(extractLines(items, options.cluster), options);
 }

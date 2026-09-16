@@ -3,7 +3,7 @@
  * WASM stub fills text; translation is applied by the caller via translateTexts.
  */
 import { describe, expect, it } from 'vitest';
-import { splitOcrText, TesseractEngine } from '../src/ocr/tesseract';
+import { splitOcrText, TesseractEngine, TessWorkerPool } from '../src/ocr/tesseract';
 import type { TessRecognizeFn } from '../src/ocr/tesseract';
 import type { TranslationContext, TranslationProvider } from '../src/providers/provider';
 
@@ -53,5 +53,48 @@ describe('TesseractEngine', () => {
       { text: 'HELLO WORLD', translation: '你好世界' },
       { text: 'SECOND LINE', translation: '第二行' },
     ]);
+  });
+});
+
+describe('TessWorkerPool (M-58)', () => {
+  it('reuses one worker for the same language', async () => {
+    let created = 0;
+    let terminated = 0;
+    const pool = new TessWorkerPool(async () => {
+      created += 1;
+      return {
+        recognize: async () => ({ data: { text: 'HI', lines: [] } }),
+        terminate: async () => {
+          terminated += 1;
+        },
+      };
+    });
+    await pool.recognize('eng', 'data:image/png;base64,AA', new AbortController().signal);
+    await pool.recognize('eng', 'data:image/png;base64,BB', new AbortController().signal);
+    expect(created).toBe(1);
+    expect(terminated).toBe(0);
+  });
+
+  it('aborts an in-flight recognize and does not return its text', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const startedAt = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pool = new TessWorkerPool(async () => ({
+      recognize: () => {
+        started();
+        return new Promise((resolve) => {
+          release = () => resolve({ data: { text: 'LATE', lines: [] } });
+        });
+      },
+      terminate: async () => {},
+    }));
+    const ac = new AbortController();
+    const pending = pool.recognize('eng', 'data:image/png;base64,AA', ac.signal);
+    await startedAt;
+    ac.abort();
+    await expect(pending).rejects.toMatchObject({ kind: 'aborted' });
+    release();
   });
 });

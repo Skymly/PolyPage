@@ -31,6 +31,118 @@ export function splitOcrText(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+export interface TessJsWorker {
+  recognize(dataUrl: string): Promise<{ data?: { text?: string; lines?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }> } }>;
+  terminate(): Promise<void> | Promise<unknown>;
+}
+
+/** Reuse one tesseract worker per language; abort drops it so cancelled work cannot complete into cache (M-58). */
+export class TessWorkerPool {
+  private current: { lang: string; worker: TessJsWorker } | null = null;
+
+  constructor(private readonly createWorker: (lang: string) => Promise<TessJsWorker>) {}
+
+  async drop(): Promise<void> {
+    const cur = this.current;
+    this.current = null;
+    if (cur) await cur.worker.terminate();
+  }
+
+  async recognize(
+    lang: string,
+    dataUrl: string,
+    signal: AbortSignal,
+  ): Promise<{ text: string; lines?: TessLineBox[] }> {
+    if (signal.aborted) throw new ProviderError('aborted', '已取消');
+    const worker = await this.ensure(lang);
+    if (signal.aborted) {
+      await this.drop();
+      throw new ProviderError('aborted', '已取消');
+    }
+    return await new Promise<{ text: string; lines?: TessLineBox[] }>((resolve, reject) => {
+      const failAbort = () => reject(new ProviderError('aborted', '已取消'));
+      const onAbort = () => {
+        void this.drop();
+        failAbort();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      worker.recognize(dataUrl).then(
+        ({ data }) => {
+          signal.removeEventListener('abort', onAbort);
+          if (signal.aborted) {
+            failAbort();
+            return;
+          }
+          const page = data as {
+            text?: string;
+            lines?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }>;
+          };
+          const lines = Array.isArray(page?.lines)
+            ? page.lines
+                .map((line) => ({
+                  text: (line.text ?? '').trim(),
+                  ...(line.bbox ? { bbox: line.bbox } : {}),
+                }))
+                .filter((line) => line.text.length > 0)
+            : undefined;
+          resolve({ text: data?.text ?? '', lines });
+        },
+        (err) => {
+          signal.removeEventListener('abort', onAbort);
+          if (signal.aborted) {
+            failAbort();
+            return;
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          reject(new ProviderError('invalid_response', `Tesseract 识别失败: ${message}`));
+        },
+      );
+    });
+  }
+
+  private async ensure(lang: string): Promise<TessJsWorker> {
+    if (this.current?.lang === lang) return this.current.worker;
+    await this.drop();
+    const worker = await this.createWorker(lang);
+    this.current = { lang, worker };
+    return worker;
+  }
+}
+
+const defaultPool = new TessWorkerPool(async (lang) => {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.getURL) {
+    throw new ProviderError('config', 'Tesseract WASM 只能在扩展后台加载');
+  }
+  const vendor = (name: string) => chrome.runtime.getURL(`vendor/${name}`);
+  let createWorker: (typeof import('tesseract.js'))['createWorker'];
+  try {
+    const mod = await import(/* @vite-ignore */ vendor('tesseract.esm.min.js'));
+    createWorker = resolveCreateWorker(mod);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new ProviderError('config', `Tesseract WASM 加载失败: ${message}`);
+  }
+  const tessGlobal = globalThis as unknown as { __ppTessLog?: unknown; __ppTessErr?: string };
+  return createWorker(lang, 1, {
+    workerPath: vendor('tesseract-worker.min.js'),
+    corePath: vendor('tesseract-core-simd-lstm.wasm.js'),
+    langPath: vendor('tessdata'),
+    workerBlobURL: false,
+    gzip: false,
+    cacheMethod: 'none',
+    errorHandler: (err) => {
+      tessGlobal.__ppTessErr = err instanceof Error ? err.message : String(err);
+    },
+    logger: (m) => {
+      tessGlobal.__ppTessLog = m;
+    },
+  });
+});
+
 export class TesseractEngine implements OcrEngine {
   readonly id = 'tesseract-wasm' as const;
 
@@ -129,6 +241,7 @@ async function recognizeViaOffscreen(
       const timer = setTimeout(() => reject(new ProviderError('invalid_response', 'Tesseract 识别超时')), 90_000);
       const onAbort = () => {
         clearTimeout(timer);
+        void chrome.runtime.sendMessage({ type: 'tesseract-abort' }).catch(() => undefined);
         reject(new ProviderError('aborted', '已取消'));
       };
       signal.addEventListener('abort', onAbort, { once: true });
@@ -189,49 +302,10 @@ export async function runVendoredCreateWorker(
     throw new ProviderError('config', 'Tesseract WASM 只能在扩展后台加载');
   }
   const lang = (input.langs.length > 0 ? input.langs : DEFAULT_TESS_LANGS).join('+');
-  const vendor = (name: string) => chrome.runtime.getURL(`vendor/${name}`);
-  let createWorker: (typeof import('tesseract.js'))['createWorker'];
-  try {
-    const mod = await import(/* @vite-ignore */ vendor('tesseract.esm.min.js'));
-    createWorker = resolveCreateWorker(mod);
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new ProviderError('config', `Tesseract WASM 加载失败: ${message}`);
-  }
   if (signal.aborted) throw new ProviderError('aborted', '已取消');
-  const tessGlobal = globalThis as unknown as { __ppTessLog?: unknown; __ppTessErr?: string };
-  const worker = await createWorker(lang, 1, {
-    workerPath: vendor('tesseract-worker.min.js'),
-    corePath: vendor('tesseract-core-simd-lstm.wasm.js'),
-    langPath: vendor('tessdata'),
-    workerBlobURL: false,
-    gzip: false,
-    cacheMethod: 'none',
-    errorHandler: (err) => {
-      tessGlobal.__ppTessErr = err instanceof Error ? err.message : String(err);
-    },
-    logger: (m) => {
-      tessGlobal.__ppTessLog = m;
-    },
-  });
-  try {
-    if (signal.aborted) throw new ProviderError('aborted', '已取消');
-    const { data } = await worker.recognize(input.dataUrl);
-    const page = data as unknown as { lines?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }> };
-    const lines = Array.isArray(page.lines)
-      ? page.lines
-          .map((line) => ({
-            text: (line.text ?? '').trim(),
-            ...(line.bbox ? { bbox: line.bbox } : {}),
-          }))
-          .filter((line) => line.text.length > 0)
-      : undefined;
-    return { text: data?.text ?? '', lines };
-  } catch (e) {
-    if (e instanceof ProviderError) throw e;
-    const message = e instanceof Error ? e.message : String(e);
-    throw new ProviderError('invalid_response', `Tesseract 识别失败: ${message}`);
-  } finally {
-    await worker.terminate();
-  }
+  return defaultPool.recognize(lang, input.dataUrl, signal);
+}
+
+export async function abortVendoredTesseract(): Promise<void> {
+  await defaultPool.drop();
 }

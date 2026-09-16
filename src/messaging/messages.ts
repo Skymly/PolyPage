@@ -219,7 +219,7 @@ export type TabCommand =
   /** 3.0 (pillar H): repeat the last selection translation (Alt+Q). */
   | { type: 'wt:repeat-selection'; v?: number }
   /** 3.0 (pillar H): re-submit persisted in-flight tasks after SW restart. */
-  | { type: 'wt:resume-inflight'; v?: number; keys: string[] }
+  | { type: 'wt:resume-inflight'; v?: number; tasks: Array<{ key: string; textHash: string }> }
   | { type: 'wt:transcribe-media'; v?: number; force?: boolean }
   | { type: 'wt:asr-partial'; v?: number; cues: Array<{ start: number; end: number; text: string }> };
 

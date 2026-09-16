@@ -307,11 +307,13 @@ export class PageTranslator {
    * in-flight before a service-worker restart. Re-submit them; completed
    * items are skipped by the cache (idempotent).
    */
-  async resumeInflight(keys: string[]): Promise<void> {
-    const wanted = new Set(keys);
+  async resumeInflight(tasks: Array<{ key: string; textHash: string }>): Promise<void> {
+    const wanted = new Map(tasks.map((t) => [t.key, t.textHash]));
     const targets: NodeEntry[] = [];
     for (const entry of this.entries.values()) {
-      if (!wanted.has(entry.id)) continue;
+      const expectedHash = wanted.get(entry.id);
+      if (expectedHash === undefined) continue;
+      if (entry.textHash !== expectedHash) continue;
       if (entry.status === 'done') continue; // cache idempotency
       entry.status = 'idle';
       entry.error = null;

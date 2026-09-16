@@ -55,7 +55,7 @@ import {
   deleteFeedbackEntry,
   loadFeedbackLog,
 } from '../storage/feedback';
-import { IdbTaskStore, TaskTable } from '../storage/taskTable';
+import { IdbTaskStore, resumePayloadForTab, TaskTable } from '../storage/taskTable';
 import { detectLanguage } from '../shared/languageDetect';
 import {
   DEFAULT_NATIVE_HOST_NAME,
@@ -206,7 +206,13 @@ const pipeline = new TranslationPipeline({
   recordInflight: async (tabId, frameId, items) => {
     if (tabId === undefined || items.length === 0) return;
     try {
-      await taskTable.markInflight(tabId, frameId ?? 0, items);
+      let pageUrl: string | undefined;
+      try {
+        pageUrl = (await chrome.tabs.get(tabId)).url;
+      } catch {
+        /* tab gone */
+      }
+      await taskTable.markInflight(tabId, frameId ?? 0, items, pageUrl);
     } catch {
       /* persistence is best-effort */
     }
@@ -392,7 +398,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') frameStates.delete(tabId);
+  if (changeInfo.status !== 'loading') return;
+  frameStates.delete(tabId);
+  pipeline.cancelTab(tabId);
+  void taskTable.removeTab(tabId).catch(() => undefined);
 });
 
 async function handleGetFrameStates(tabId?: number): Promise<{ frames: FrameStateEntry[] }> {
@@ -495,17 +504,20 @@ async function recoverInflightTasks(): Promise<void> {
   try {
     const inflight = await taskTable.listInflight();
     if (inflight.length === 0) return;
-    const byTab = new Map<number, string[]>();
+    const byTab = new Map<number, typeof inflight>();
     for (const rec of inflight) {
       if (rec.tabId < 0) continue;
-      const keys = byTab.get(rec.tabId) ?? [];
-      keys.push(rec.taskKey);
-      byTab.set(rec.tabId, keys);
+      const list = byTab.get(rec.tabId) ?? [];
+      list.push(rec);
+      byTab.set(rec.tabId, list);
     }
-    for (const [tabId, keys] of byTab) {
+    for (const [tabId, records] of byTab) {
       try {
-        await chrome.tabs.get(tabId); // throws when the tab is gone
-        await sendTabCommand(tabId, { type: 'wt:resume-inflight', keys });
+        const tab = await chrome.tabs.get(tabId); // throws when the tab is gone
+        const tasks = resumePayloadForTab(records, tab.url);
+        if (tasks.length > 0) {
+          await sendTabCommand(tabId, { type: 'wt:resume-inflight', tasks });
+        }
       } catch {
         // Tab closed or content script absent — drop the records.
       }

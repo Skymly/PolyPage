@@ -15,5 +15,9 @@ describe('Firefox native-host identity', () => {
     expect(cs).toContain('Software\\Mozilla\\NativeMessagingHosts');
     expect(cs).toContain('allowed_extensions');
     expect(cs).toContain('.firefox.json');
+    expect(mjs).toContain("p !== 'offscreen'");
+    const manifest = JSON.parse(readFileSync(resolve('public/manifest.json'), 'utf8'));
+    expect(manifest.permissions).toContain('offscreen');
+    expect(manifest.content_security_policy?.extension_pages).toContain("wasm-unsafe-eval");
   });
 });

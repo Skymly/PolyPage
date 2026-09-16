@@ -37,6 +37,10 @@ export async function writeFirefoxDist(
   if (sw) {
     manifest.background = { scripts: [sw], type: 'module' };
   }
+  // Firefox event pages can new Worker; they do not implement chrome.offscreen.
+  if (Array.isArray(manifest.permissions)) {
+    manifest.permissions = manifest.permissions.filter((p) => p !== 'offscreen');
+  }
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return { outDir, geckoId: GECKO_ID };
 }

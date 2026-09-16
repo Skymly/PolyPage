@@ -205,11 +205,20 @@ const fixturePdf = buildFixturePdf();
 const PNG_1PX_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
+const helloWorldPng = readFileSync(path.join(root, 'scripts', 'fixtures', 'hello-world.png'));
+
 const imagePage = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Image</title></head>
 <body>
   <p id="img-caption">Hover the picture below and use PolyPage to translate its text.</p>
   <img id="photo" src="/img.png" alt="fixture" style="width:320px;height:240px;background:#ddd;" />
+</body></html>`;
+
+const tessImagePage = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Tesseract</title></head>
+<body>
+  <p id="tess-caption">Hover the HELLO WORLD fixture and run local OCR.</p>
+  <img id="photo" src="/hello-world.png" alt="hello world" style="width:480px;height:140px;background:#fff;" />
 </body></html>`;
 
 const subtitleVtt = `WEBVTT
@@ -275,6 +284,7 @@ function startPageServer() {
   '/tm-a.html': `<!doctype html><html><body><p id="tm-sent">The translation memory should reuse this exact sentence.</p></body></html>`,
   '/tm-b.html': `<!doctype html><html><body><p id="tm-sent">The translation memory should reuse this exact sentence.</p></body></html>`,
         '/image.html': imagePage,
+        '/tess-image.html': tessImagePage,
         '/video.html': videoPage,
         '/captionless.html': captionlessPage,
       };
@@ -286,6 +296,10 @@ function startPageServer() {
       if (pathOnly === '/img.png') {
         res.writeHead(200, { 'Content-Type': 'image/png' });
         return res.end(Buffer.from(PNG_1PX_BASE64, 'base64'));
+      }
+      if (pathOnly === '/hello-world.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        return res.end(helloWorldPng);
       }
       if (pathOnly === '/subs.vtt') {
         res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8' });
@@ -1907,6 +1921,84 @@ try {
     (await imageClient.eval(`document.querySelector('.wt-ocr-host') === null`)) === true,
   );
   check('settings restored after grey-out test', await saveSettingsThroughExtension(settingsPayload({ cacheEnabled: true })));
+
+  // M-02: Chrome SW has no Worker; offscreen (or Firefox event-page Worker)
+  // must still run vendored tesseract-wasm against a fixed fixture.
+  const tessSettings = settingsPayload({
+    cacheEnabled: false,
+    imageTranslate: {
+      enabled: true,
+      trigger: 'both',
+      engine: 'tesseract-wasm',
+      maxEdgePx: 2048,
+      tessLangs: ['eng'],
+    },
+  });
+  check('tesseract-wasm engine saved', await saveSettingsThroughExtension(tessSettings));
+  const csTess = await ext.eval(`chrome.runtime.sendMessage({ type: 'get-content-settings' })`);
+  check('content settings report tesseract available', csTess?.ocrEngine === 'tesseract-wasm' && csTess?.ocrAvailable === true, JSON.stringify(csTess));
+  const tessUrl = `http://127.0.0.1:${PORT_PAGE}/tess-image.html`;
+  await openPage(browserCdp, tessUrl);
+  const tessClient = await pageFor(tessUrl);
+  await sleep(900);
+  await tessClient.eval(
+    `document.getElementById('photo').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`,
+  );
+  let tessHover = false;
+  for (let i = 0; i < 20; i++) {
+    tessHover = await tessClient.eval(`document.querySelector('.wt-img-btn') !== null`);
+    if (tessHover) break;
+    await sleep(300);
+  }
+  check('tesseract hover button appears', tessHover === true);
+  const visionBeforeTess = mock.visionCount();
+  await tessClient.eval(`document.querySelector('.wt-img-btn')?.click()`);
+  let tessText = '';
+  for (let i = 0; i < 200; i++) {
+    tessText = await tessClient.eval(
+      `document.querySelector('.wt-ocr-host')?.shadowRoot?.querySelector('.wt-ocr-body')?.textContent ?? ''`,
+    );
+    if (/HELLO\s+WORLD/i.test(tessText) || tessText.includes('失败') || tessText.includes('未识别')) break;
+    await sleep(500);
+  }
+  let tessDiag = tessText.slice(0, 200);
+  if (!/HELLO\s+WORLD/i.test(tessText)) {
+    try {
+      const errLog = await ext.eval(`chrome.runtime.sendMessage({ type: 'get-error-log' })`);
+      tessDiag += ` | errors=${JSON.stringify((errLog?.entries ?? []).slice(-3))}`;
+    } catch (e) {
+      tessDiag += ` | error-log=${e instanceof Error ? e.message : e}`;
+    }
+    try {
+      const targets = await fetchJson('http://127.0.0.1:9222/json');
+      const off = (targets ?? []).find((t) => String(t.url ?? '').includes('offscreen'));
+      tessDiag += ` | offscreen=${off ? off.url : 'missing'}`;
+      if (off?.webSocketDebuggerUrl) {
+        const offClient = await CDP.connect(off.webSocketDebuggerUrl);
+        try {
+          const log = await offClient.eval(`globalThis.__ppTessLog ?? null`, 5000);
+          tessDiag += ` | tessLog=${JSON.stringify(log)}`;
+        } finally {
+          offClient.close();
+        }
+      }
+    } catch (e) {
+      tessDiag += ` | cdp=${e instanceof Error ? e.message : e}`;
+    }
+  }
+  check(
+    'tesseract-wasm recognizes HELLO WORLD on fixture',
+    /HELLO\s+WORLD/i.test(tessText),
+    JSON.stringify(tessDiag),
+  );
+  check(
+    'tesseract path does not call the vision endpoint',
+    mock.visionCount() === visionBeforeTess,
+    `vision=${mock.visionCount()}`,
+  );
+  await closePage(browserCdp, tessUrl);
+  tessClient.close();
+  check('settings restored after tesseract OCR', await saveSettingsThroughExtension(settingsPayload({ cacheEnabled: true })));
   await closePage(browserCdp, imageUrl);
   imageClient.close();
 

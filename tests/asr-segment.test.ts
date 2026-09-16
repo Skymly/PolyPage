@@ -34,6 +34,24 @@ describe('segmentTranscript', () => {
     expect(cues[1].end).toBe(18);
   });
 
+  it('rebases backend segment times onto windowStart (M-09)', () => {
+    const cues = segmentTranscript(
+      {
+        text: 'ignored',
+        segments: [
+          { start: 1, end: 2, text: 'Hello there' },
+          { start: 2, end: 4, text: 'General Kenobi' },
+        ],
+      },
+      30,
+      10,
+    );
+    expect(cues).toEqual([
+      { start: 31, end: 32, text: 'Hello there' },
+      { start: 32, end: 34, text: 'General Kenobi' },
+    ]);
+  });
+
   it('recuts a cue longer than 80 characters', () => {
     const long = 'A'.repeat(ASR_MAX_CUE_CHARS + 20);
     const cues = segmentTranscript({ text: long }, 0, 4);

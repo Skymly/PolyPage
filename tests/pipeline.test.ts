@@ -3,7 +3,7 @@
  * sit behind one interface. Cue (immediate) and stream share them.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultProvider, defaultSettings } from '../src/shared/constants';
+import { BATCH_WINDOW_MS, defaultProvider, defaultSettings } from '../src/shared/constants';
 import type { ProviderConfig, Settings } from '../src/shared/types';
 import type { TranslationProvider } from '../src/providers/provider';
 import { ProviderError } from '../src/providers/provider';
@@ -307,5 +307,40 @@ describe('TranslationPipeline', () => {
     gate.splice(0).forEach((r) => r());
     await pending;
     expect(max).toBe(2);
+  });
+
+  it('writes cache.put on a Provider miss with the source text (M-18)', async () => {
+    const cache = new MemoryTranslationCache();
+    const put = vi.spyOn(cache, 'put');
+    const pipeline = makePipeline(settings(), { a: (c) => fake(c) }, { cache });
+    const res = await pipeline.translate([{ text: 'Hello', key: 'k1' }], { immediate: true });
+    expect(res.results.k1).toBe('译:Hello');
+    expect(put).toHaveBeenCalled();
+    const [items, providerId, source, target, glossaryVersion] = put.mock.calls[0];
+    expect(items).toEqual([{ text: 'Hello', translated: '译:Hello' }]);
+    expect(providerId).toBe('a');
+    expect(source).toBe('English');
+    expect(target).toBe('简体中文');
+    expect(glossaryVersion).toBe(0);
+  });
+
+  it('flushes a non-immediate enqueue after the batch window (M-18)', async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    const pipeline = makePipeline(settings(), {
+      a: (c) =>
+        fake(c, {
+          translateTexts: async (texts) => {
+            calls.push(texts);
+            return texts.map((t) => `译:${t}`);
+          },
+        }),
+    });
+    const pending = pipeline.translate([{ text: 'Hello', key: 'k1' }]);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS);
+    const res = await pending;
+    expect(res.results.k1).toBe('译:Hello');
+    expect(calls).toEqual([['Hello']]);
   });
 });

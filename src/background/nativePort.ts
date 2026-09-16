@@ -9,6 +9,7 @@
  * - a host that is not installed surfaces as ProviderError kind "config".
  */
 import { NATIVE_PORT_IDLE_MS } from '../shared/constants';
+import { deniedNativeHostMessage, isAllowedNativeHostName } from '../shared/nativeHostName';
 import type { JsonRpcResponse } from '../shared/nativeRpc';
 import { rpcCodeToErrorKind } from '../shared/nativeRpc';
 import { ProviderError } from '../providers/provider';
@@ -64,6 +65,9 @@ export function disconnectHost(hostName: string, _reason?: string): void {
 }
 
 function connectHost(hostName: string): HostConnection {
+  if (!isAllowedNativeHostName(hostName)) {
+    throw new ProviderError('config', deniedNativeHostMessage(hostName));
+  }
   const existing = connections.get(hostName);
   if (existing && !existing.dead) return existing;
 

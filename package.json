@@ -12,10 +12,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke": "node scripts/smoke-test.mjs",
-    "verify": "npm run typecheck && npm run test && npm run build",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run test:gateway",
     "test:gateway": "dotnet test native-host/PolyPage.slnx -v q",
     "test:contract": "node scripts/gateway-contract-test.mjs",
-    "verify:all": "npm run verify && npm run test:gateway && npm run test:contract && npm run smoke",
+    "verify:all": "npm run verify && npm run test:contract && npm run smoke",
     "firefox:gateway": "node scripts/firefox-gateway-check.mjs"
   },
   "devDependencies": {

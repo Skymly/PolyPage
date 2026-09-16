@@ -83,8 +83,16 @@ export interface OcrPackStore {
 
 export type PackFetch = (
   url: string,
-  init: { signal?: AbortSignal; onProgress?: (received: number, total: number) => void },
+  init: { signal?: AbortSignal; onProgress?: (received: number, total: number) => void; maxBytes?: number },
 ) => Promise<ArrayBuffer>;
+
+/** Hard cap for a single pack fetch (M-63). */
+export const OCR_PACK_HARD_MAX_BYTES = 20 * 1024 * 1024;
+
+export function packMaxBytes(catalogBytes: number): number {
+  const soft = Math.max(catalogBytes * 2, 1024 * 1024);
+  return Math.min(soft, OCR_PACK_HARD_MAX_BYTES);
+}
 
 export class MemoryOcrPackStore implements OcrPackStore {
   readonly map = new Map<string, StoredOcrPack>();
@@ -193,15 +201,21 @@ export async function sha256Hex(data: ArrayBuffer): Promise<string> {
 
 export async function defaultPackFetch(
   url: string,
-  init: { signal?: AbortSignal; onProgress?: (received: number, total: number) => void } = {},
+  init: { signal?: AbortSignal; onProgress?: (received: number, total: number) => void; maxBytes?: number } = {},
 ): Promise<ArrayBuffer> {
+  const maxBytes = init.maxBytes ?? OCR_PACK_HARD_MAX_BYTES;
   const res = await fetch(url, { signal: init.signal, credentials: 'omit' });
   if (!res.ok) {
     throw new Error('download failed HTTP ' + res.status);
   }
-  const total = Number(res.headers.get('content-length') ?? 0);
+  const declared = Number(res.headers.get('content-length') ?? 0);
+  if (declared > 0 && declared > maxBytes) {
+    throw new Error('OCR pack exceeds size limit');
+  }
   if (!res.body || !init.onProgress) {
-    return res.arrayBuffer();
+    const data = await res.arrayBuffer();
+    if (data.byteLength > maxBytes) throw new Error('OCR pack exceeds size limit');
+    return data;
   }
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -210,9 +224,13 @@ export async function defaultPackFetch(
     const { done, value } = await reader.read();
     if (done) break;
     if (value) {
-      chunks.push(value);
       received += value.byteLength;
-      init.onProgress(received, total);
+      if (received > maxBytes) {
+        await reader.cancel();
+        throw new Error('OCR pack exceeds size limit');
+      }
+      chunks.push(value);
+      init.onProgress(received, declared);
     }
   }
   const out = new Uint8Array(received);
@@ -226,6 +244,7 @@ export async function defaultPackFetch(
 
 export class OcrPackManager {
   readonly progress = new Map<string, OcrPackStatus>();
+  private readonly inflight = new Map<string, Promise<StoredOcrPack>>();
 
   constructor(
     private readonly store: OcrPackStore,
@@ -249,7 +268,7 @@ export class OcrPackManager {
       })),
       ...this.catalog.map((meta) => {
         const live = this.progress.get(meta.id);
-        if (live) return live;
+        if (live && (live.status === 'downloading' || live.status === 'error')) return live;
         return {
           id: meta.id,
           name: meta.name,
@@ -261,6 +280,16 @@ export class OcrPackManager {
   }
 
   async download(id: string, signal?: AbortSignal): Promise<StoredOcrPack> {
+    const pending = this.inflight.get(id);
+    if (pending) return pending;
+    const run = this.downloadOnce(id, signal).finally(() => {
+      this.inflight.delete(id);
+    });
+    this.inflight.set(id, run);
+    return run;
+  }
+
+  private async downloadOnce(id: string, signal?: AbortSignal): Promise<StoredOcrPack> {
     const meta = this.meta(id);
     if (!meta) throw new Error('unknown OCR pack: ' + id);
     this.progress.set(id, {
@@ -273,6 +302,7 @@ export class OcrPackManager {
     try {
       const data = await this.fetchImpl(meta.url, {
         signal,
+        maxBytes: packMaxBytes(meta.bytes),
         onProgress: (received, total) => {
           this.progress.set(id, {
             id,
@@ -283,6 +313,9 @@ export class OcrPackManager {
           });
         },
       });
+      if (data.byteLength > packMaxBytes(meta.bytes)) {
+        throw new Error('OCR pack exceeds size limit');
+      }
       const digest = await sha256Hex(data);
       if (digest !== meta.sha256) {
         throw new Error('OCR pack hash mismatch');
@@ -314,16 +347,21 @@ export class OcrPackManager {
     const meta = this.meta(id);
     if (!meta) throw new Error('unknown OCR pack: ' + id);
     await this.store.delete(id);
-    this.progress.set(id, {
-      id,
-      name: meta?.name ?? id,
-      bytes: meta?.bytes ?? 0,
-      status: 'absent',
-    });
+    this.progress.delete(id);
+    await clearTesseractLangCache(id);
   }
 
   async getReady(id: string): Promise<StoredOcrPack | undefined> {
-    return this.store.get(id);
+    const pack = await this.store.get(id);
+    if (!pack) return undefined;
+    const meta = this.meta(id);
+    if (meta && pack.sha256 !== meta.sha256) {
+      await this.store.delete(id);
+      this.progress.delete(id);
+      await clearTesseractLangCache(id);
+      return undefined;
+    }
+    return pack;
   }
 
   async readyIds(): Promise<string[]> {
@@ -357,6 +395,39 @@ export async function resolveTessLangs(
   }
   if (langs.length === 0) langs.push(...DEFAULT_TESS_LANGS);
   return { langs, missing };
+}
+
+/**
+ * Drop a seeded tesseract.js idb-keyval traineddata entry (M-63).
+ */
+export async function clearTesseractLangCache(lang: string): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.open('keyval-store', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('keyval')) db.createObjectStore('keyval');
+    };
+    req.onerror = () => reject(req.error ?? new Error('tesseract cache open failed'));
+    req.onsuccess = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('keyval')) {
+        db.close();
+        resolve();
+        return;
+      }
+      const tx = db.transaction('keyval', 'readwrite');
+      tx.objectStore('keyval').delete('./' + lang + '.traineddata');
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error ?? new Error('tesseract cache delete failed'));
+      };
+    };
+  });
 }
 
 /**

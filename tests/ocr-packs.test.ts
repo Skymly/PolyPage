@@ -8,8 +8,10 @@ import {
   OCR_PACK_CATALOG,
   OcrPackManager,
   catalogPack,
+  defaultPackFetch,
   formatPackMegabytes,
   knownPackId,
+  packMaxBytes,
   resolveTessLangs,
   sha256Hex,
 } from '../src/ocr/packs';
@@ -73,6 +75,46 @@ describe('OcrPackManager', () => {
     const mgr = new OcrPackManager(new MemoryOcrPackStore(), async () => bytesOf('x'));
     await expect(mgr.download('spa')).rejects.toThrow(/unknown/i);
   });
+
+  it('shares one in-flight download per pack id (M-63)', async () => {
+    const payload = bytesOf('stub-jpn-traineddata');
+    const digest = await sha256Hex(payload);
+    let started = 0;
+    let finish!: (value: ArrayBuffer) => void;
+    const mgr = new OcrPackManager(
+      new MemoryOcrPackStore(),
+      () => {
+        started += 1;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+      stubCatalog('jpn', digest, payload.byteLength),
+    );
+    const a = mgr.download('jpn');
+    const b = mgr.download('jpn');
+    expect(started).toBe(1);
+    finish(payload);
+    const [pa, pb] = await Promise.all([a, b]);
+    expect(pa.sha256).toBe(digest);
+    expect(pb.sha256).toBe(digest);
+    expect(started).toBe(1);
+  });
+
+  it('getReady drops stored packs whose hash no longer matches the catalog (M-63)', async () => {
+    const payload = bytesOf('stale-pack');
+    const store = new MemoryOcrPackStore();
+    await store.put({
+      id: 'jpn',
+      sha256: '0'.repeat(64),
+      bytes: payload.byteLength,
+      data: payload,
+      ts: Date.now(),
+    });
+    const mgr = new OcrPackManager(store, async () => payload, stubCatalog('jpn', 'a'.repeat(64)));
+    expect(await mgr.getReady('jpn')).toBeUndefined();
+    expect(await store.listIds()).not.toContain('jpn');
+  });
 });
 
 describe('resolveTessLangs', () => {
@@ -83,5 +125,26 @@ describe('resolveTessLangs', () => {
     expect(resolved.langs).toContain('jpn');
     expect(resolved.langs).not.toContain('kor');
     expect(resolved.missing).toContain('kor');
+  });
+});
+
+describe('defaultPackFetch size cap (M-63)', () => {
+  it('caps catalog packs below the 20MB hard max', () => {
+    expect(packMaxBytes(2_471_260)).toBeLessThanOrEqual(20 * 1024 * 1024);
+    expect(packMaxBytes(100)).toBe(1024 * 1024);
+  });
+
+  it('rejects a response whose content-length exceeds maxBytes', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array(32), {
+        status: 200,
+        headers: { 'content-length': '32' },
+      })) as typeof fetch;
+    try {
+      await expect(defaultPackFetch('https://example.test/x', { maxBytes: 8 })).rejects.toThrow(/size limit/i);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

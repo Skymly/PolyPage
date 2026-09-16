@@ -24,6 +24,7 @@ import type {
 } from '../shared/types';
 import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
 import { normalizeSettings, validateImportedSettings } from '../storage/settings';
+import { feedbackToCsv, feedbackToJson } from '../storage/feedback';
 import { minimaxHostHint } from '../shared/sanitize';
 import { renderErrorLogEntry, renderFeedbackLogHead } from './logDom';
 
@@ -300,23 +301,10 @@ async function exportFeedback(format: 'csv' | 'json'): Promise<void> {
       return;
     }
     if (format === 'json') {
-      downloadText('polypage-feedback.json', JSON.stringify(entries, null, 2), 'application/json');
+      downloadText('polypage-feedback.json', feedbackToJson(entries), 'application/json');
       return;
     }
-    const csvEscape = (value: string): string =>
-      /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-    const header = 'ts,source,translation,provider,pageUrl,where';
-    const rows = entries.map((e) =>
-      [
-        new Date(e.ts).toISOString(),
-        csvEscape(e.source),
-        csvEscape(e.translation),
-        csvEscape(e.providerName ?? ''),
-        csvEscape(e.pageUrl),
-        csvEscape(e.where),
-      ].join(','),
-    );
-    downloadText('polypage-feedback.csv', [header, ...rows].join('\r\n'), 'text/csv;charset=utf-8');
+    downloadText('polypage-feedback.csv', feedbackToCsv(entries), 'text/csv;charset=utf-8');
   } catch (e) {
     toast(`导出失败：${e instanceof Error ? e.message : String(e)}`, true);
   }

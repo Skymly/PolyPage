@@ -35,6 +35,14 @@ describe('csvEscape', () => {
     expect(csvEscape('say "hi"')).toBe('"say ""hi"""');
     expect(csvEscape('line1\nline2')).toBe('"line1\nline2"');
   });
+
+  it('neutralizes formula-like prefixes (M-39)', () => {
+    expect(csvEscape('=cmd|A1')).toBe(`"'=cmd|A1"`);
+    expect(csvEscape('+1+1')).toBe(`"'+1+1"`);
+    expect(csvEscape('-SUM(A1)')).toBe(`"'-SUM(A1)"`);
+    expect(csvEscape('@HYPERLINK("http://x")')).toBe(`"'@HYPERLINK(""http://x"")"`);
+    expect(csvEscape('\t=1+1')).toBe(`"'\t=1+1"`);
+  });
 });
 
 describe('feedbackToCsv', () => {
@@ -51,5 +59,14 @@ describe('feedbackToCsv', () => {
 
   it('handles empty logs', () => {
     expect(feedbackToCsv([])).toBe('ts,source,translation,provider,pageUrl,where');
+  });
+
+  it('neutralizes formula cells in exported rows (M-39)', () => {
+    const csv = feedbackToCsv([
+      { ...entry(1), source: '=1+1', translation: '+cmd', pageUrl: '-http://x' },
+    ]);
+    expect(csv).toContain(`"'=1+1"`);
+    expect(csv).toContain(`"'+cmd"`);
+    expect(csv).toContain(`"'-http://x"`);
   });
 });

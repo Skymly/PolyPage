@@ -2,7 +2,7 @@
  * Scanned-page OCR must rebuild paragraph DOM (M-08).
  */
 import { describe, expect, it } from 'vitest';
-import { keepExistingParas, scannedOcrParaFromSegment } from '../src/viewer/parasDom';
+import { keepExistingParas, scannedOcrParaFromSegment, pdfDstNeedsRetryClick, assignPdfDstRetryClick, pdfTranslateAborted } from '../src/viewer/parasDom';
 
 const existing = {} as Element;
 
@@ -36,5 +36,26 @@ describe('keepExistingParas (M-08)', () => {
       translated: null,
       error: '译文为空',
     });
+  });
+
+  it('only error paragraphs keep a retry click handler (M-89)', () => {
+    expect(pdfDstNeedsRetryClick('error')).toBe(true);
+    expect(pdfDstNeedsRetryClick('done')).toBe(false);
+    expect(pdfDstNeedsRetryClick('pending')).toBe(false);
+
+    const dst: { onclick: ((this: GlobalEventHandlers, ev: PointerEvent) => unknown) | null } = {
+      onclick: () => undefined,
+    };
+    assignPdfDstRetryClick(dst, 'error', () => undefined);
+    expect(dst.onclick).not.toBeNull();
+    assignPdfDstRetryClick(dst, 'done', () => undefined);
+    expect(dst.onclick).toBeNull();
+  });
+
+  it('stops PDF translate after pagehide abort (M-89)', () => {
+    const ac = new AbortController();
+    expect(pdfTranslateAborted(ac.signal)).toBe(false);
+    ac.abort();
+    expect(pdfTranslateAborted(ac.signal)).toBe(true);
   });
 });

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultProvider, defaultSettings } from '../src/shared/constants';
 import type { ProviderConfig, Settings } from '../src/shared/types';
 import { MemoryOcrCache, buildOcrCacheKey } from '../src/ocr/resultCache';
-import { OcrRoundTrip } from '../src/ocr/roundtrip';
+import { OcrRoundTrip, OCR_LOCAL_CACHE_PROVIDER, resolveOcrCacheIdentity } from '../src/ocr/roundtrip';
 import type { OcrEngine } from '../src/ocr/engine';
 import { ProviderError } from '../src/providers/provider';
 import type { TranslationProvider } from '../src/providers/provider';
@@ -263,5 +263,73 @@ describe('OcrRoundTrip', () => {
     const res = await pending;
     expect(res.ok).toBe(false);
     expect((cache as MemoryOcrCache).map.size).toBe(0);
+  });
+
+  it('uses provided cacheIdentity without hashing the image (M-89)', async () => {
+    let hashed = 0;
+    const id = await resolveOcrCacheIdentity(
+      { cacheIdentity: 'pdf|p1|s0', url: 'https://example.test/a.png' },
+      new Uint8Array([1, 2, 3]).buffer,
+      async () => {
+        hashed += 1;
+        return 'should-not-run';
+      },
+    );
+    expect(id).toBe('pdf|p1|s0');
+    expect(hashed).toBe(0);
+
+    const cache = new MemoryOcrCache();
+    const key = buildOcrCacheKey({
+      providerId: 'a',
+      engineId: 'llm-vision',
+      sourceLanguage: 'English',
+      targetLanguage: '简体中文',
+      glossaryVersion: 0,
+      identity: 'pdf|p1|s0',
+    });
+    await cache.put(key, [{ text: 'FROM-ID', translation: '来自身份' }]);
+    const { trip, engineCalls } = make(settings(), { cache });
+    const res = await trip.recognize({ ...input, cacheIdentity: 'pdf|p1|s0' });
+    expect(res.ok && res.cached).toBe(true);
+    if (res.ok) expect(res.segments[0].text).toBe('FROM-ID');
+    expect(engineCalls.length).toBe(0);
+  });
+
+  it('caches tesseract OCR-only results under ocr-local when no provider (M-89)', async () => {
+    const tessSettings = settings(
+      { imageTranslate: { ...defaultSettings().imageTranslate, engine: 'tesseract-wasm', enabled: true } },
+      [],
+    );
+    tessSettings.activeProviderId = '';
+    tessSettings.providers = [];
+    const { trip, engineCalls } = make(tessSettings, {
+      engineSegments: [{ text: 'ONLY', translation: '' }],
+    });
+    const first = await trip.recognize(input);
+    expect(first.ok && first.cached).toBe(false);
+    if (first.ok) expect(first.segments[0].translation).toBe('');
+    expect(engineCalls.length).toBe(1);
+    const second = await trip.recognize(input);
+    expect(second.ok && second.cached).toBe(true);
+    if (second.ok) expect(second.segments[0].text).toBe('ONLY');
+    expect(engineCalls.length).toBe(1);
+
+    const { sha256Hex } = await import('../src/ocr/imagePrep');
+    const hash = await sha256Hex(new Uint8Array([1, 2, 3]).buffer);
+    const key = buildOcrCacheKey({
+      providerId: OCR_LOCAL_CACHE_PROVIDER,
+      engineId: 'tesseract-wasm',
+      sourceLanguage: tessSettings.defaultSourceLanguage,
+      targetLanguage: tessSettings.defaultTargetLanguage,
+      glossaryVersion: tessSettings.glossaryVersion,
+      identity: `img|${hash}`,
+    });
+    const seeded = make(tessSettings, {
+      cache: new MemoryOcrCache(),
+      engineSegments: [{ text: 'ONLY', translation: '' }],
+    });
+    await seeded.cache.put(key, [{ text: 'ONLY', translation: '' }]);
+    const hit = await seeded.trip.recognize(input);
+    expect(hit.ok && hit.cached).toBe(true);
   });
 });

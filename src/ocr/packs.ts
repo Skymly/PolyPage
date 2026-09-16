@@ -397,6 +397,12 @@ export async function resolveTessLangs(
   return { langs, missing };
 }
 
+/** Log-ready copy when extras were requested but not installed (M-89). */
+export function ocrMissingPackMessage(missing: string[]): string | null {
+  if (missing.length === 0) return null;
+  return `未安装的 OCR 语言包已跳过：${missing.join('、')}`;
+}
+
 /**
  * Drop a seeded tesseract.js idb-keyval traineddata entry (M-63).
  */

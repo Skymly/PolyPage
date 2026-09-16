@@ -31,7 +31,12 @@ import {
 import type { PdfLine, TextItemLike } from './pdf/segment';
 import { chooseFingerprint, pdfCacheScope } from './pdf/fingerprint';
 import { matchPdfResumeTasks, pdfParagraphKey } from './resume';
-import { keepExistingParas, scannedOcrParaFromSegment } from './parasDom';
+import {
+  assignPdfDstRetryClick,
+  keepExistingParas,
+  pdfTranslateAborted,
+  scannedOcrParaFromSegment,
+} from './parasDom';
 import {
   SCANNED_PAGE_OCR_BUDGET,
   canvasToOcrDataUrl,
@@ -95,6 +100,7 @@ let fingerprint = '';
 let degradedViewport = false;
 let maxConcurrentPages = 3;
 let skipHeadersFooters = true;
+let translateWork = new AbortController();
 let scannedPageOcr = true;
 let layoutPreset: 'auto' | 'single' | 'columns' | 'table' = 'auto';
 let maxEdgePx = 4096;
@@ -251,6 +257,7 @@ async function main(): Promise<void> {
   }
 
   window.addEventListener('pagehide', () => {
+    translateWork.abort();
     for (const p of pages) releaseOffscreenPage(p);
     pdfDoc = null;
     void doc.destroy().catch(() => undefined);
@@ -430,6 +437,7 @@ async function translatePage(page: PageState): Promise<void> {
   renderPageParas(page);
 
   for (let i = 0; i < todo.length; i += CHUNK) {
+    if (pdfTranslateAborted(translateWork.signal)) return;
     const chunk = todo.slice(i, i + CHUNK);
     const items = chunk.map((para) => {
       const paraIndex = page.paragraphs.indexOf(para);
@@ -661,6 +669,7 @@ function renderPageParas(page: PageState): void {
       dst.style.display = 'none';
       mark.style.display = 'none';
       src.textContent = para.text;
+      assignPdfDstRetryClick(dst, 'idle', () => undefined);
       continue;
     }
     const bilingual = mode === 'bilingual';
@@ -675,15 +684,15 @@ function renderPageParas(page: PageState): void {
       dst.textContent = `翻译失败：${para.error ?? '未知错误'}（点击重试）`;
       dst.classList.add('error');
       mark.style.display = 'none';
-      dst.onclick = (): void => {
-        para.status = 'idle';
-        void translatePage(page);
-      };
     } else {
       dst.textContent = '翻译中…';
       dst.classList.add('pending');
       mark.style.display = 'none';
     }
+    assignPdfDstRetryClick(dst, para.status, () => {
+      para.status = 'idle';
+      void translatePage(page);
+    });
   }
 }
 

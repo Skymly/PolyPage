@@ -14,6 +14,7 @@ import {
   packMaxBytes,
   resolveTessLangs,
   sha256Hex,
+  ocrMissingPackMessage,
 } from '../src/ocr/packs';
 
 function bytesOf(text: string): ArrayBuffer {
@@ -125,6 +126,11 @@ describe('resolveTessLangs', () => {
     expect(resolved.langs).toContain('jpn');
     expect(resolved.langs).not.toContain('kor');
     expect(resolved.missing).toContain('kor');
+  });
+
+  it('formats a skip message for missing extras (M-89)', () => {
+    expect(ocrMissingPackMessage([])).toBeNull();
+    expect(ocrMissingPackMessage(['jpn', 'kor'])).toBe('未安装的 OCR 语言包已跳过：jpn、kor');
   });
 });
 

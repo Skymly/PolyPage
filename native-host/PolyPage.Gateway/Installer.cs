@@ -29,9 +29,18 @@ public static class Installer
     public static string HostName { get; set; } = DefaultHostName;
 
     private static string InstallDir => GatewayConfig.InstallDir;
-    private static string InstalledExe => Path.Combine(InstallDir, "PolyPage.Gateway.exe");
+    private static string InstalledExe => Path.Combine(InstallDir, InstalledExecutableFileName(HostName));
     private static string ManifestPath => Path.Combine(InstallDir, $"{HostName}.json");
     private static string FirefoxManifestPath => Path.Combine(InstallDir, $"{HostName}.firefox.json");
+
+    /// <summary>
+    /// Default host keeps the historical exe name. Other host names (smoke, side-by-side)
+    /// get their own file so <c>--install</code> cannot overwrite a production gateway.
+    /// </summary>
+    public static string InstalledExecutableFileName(string hostName) =>
+        string.Equals(hostName, DefaultHostName, StringComparison.OrdinalIgnoreCase)
+            ? "PolyPage.Gateway.exe"
+            : $"{hostName}.exe";
 
     public static int Install(string[] allowOrigins, string[]? allowGeckoIds = null)
     {

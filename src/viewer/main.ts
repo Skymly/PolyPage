@@ -23,7 +23,7 @@ import {
   extractLines,
 } from './pdf/segment';
 import type { PdfLine, TextItemLike } from './pdf/segment';
-import { chooseFingerprint, pdfScopedCacheText } from './pdf/fingerprint';
+import { chooseFingerprint, pdfCacheScope } from './pdf/fingerprint';
 import { matchPdfResumeTasks, pdfParagraphKey } from './resume';
 import {
   SCANNED_PAGE_OCR_BUDGET,
@@ -401,7 +401,8 @@ async function translatePage(page: PageState): Promise<void> {
       const paraIndex = page.paragraphs.indexOf(para);
       return {
         key: pdfParagraphKey(page.index, paraIndex),
-        text: pdfScopedCacheText(fingerprint, page.index, paraIndex, para.text),
+        text: para.text,
+        cacheScope: pdfCacheScope(fingerprint, page.index, paraIndex),
       };
     });
     try {

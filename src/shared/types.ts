@@ -280,6 +280,8 @@ export interface TranslationItem {
   /** Stable key within the page (the element's data-wt-id). */
   key: string;
   text: string;
+  /** Participates in the translation cache key; never sent to a Provider or TM. */
+  cacheScope?: string;
 }
 
 export type ErrorKind =

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chooseFingerprint,
   fingerprintFromMeta,
+  pdfCacheScope,
   pdfScopedCacheText,
 } from '../src/viewer/pdf/fingerprint';
 import { buildCacheKey } from '../src/storage/cache';
@@ -45,10 +46,14 @@ describe('chooseFingerprint', () => {
 });
 
 describe('PDF cache keys (spec 3.0 §5.5.2)', () => {
-  it('scope includes fingerprint + page + index + text', () => {
+  it('scope includes fingerprint + page + index, not the body (M-07)', () => {
+    const scope = pdfCacheScope('fileid:X', 3, 7);
+    expect(scope).toBe('pdf|fileid:X|p3|i7|');
+    expect(scope.includes('hello')).toBe(false);
     const t1 = pdfScopedCacheText('fileid:X', 3, 7, 'hello');
     const t2 = pdfScopedCacheText('fileid:X', 3, 8, 'hello');
     const t3 = pdfScopedCacheText('fileid:Y', 3, 7, 'hello');
+    expect(t1).toBe(`${scope}hello`);
     expect(t1).not.toBe(t2);
     expect(t1).not.toBe(t3);
   });

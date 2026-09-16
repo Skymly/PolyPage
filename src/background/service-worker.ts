@@ -309,6 +309,7 @@ async function handleTranslate(
   return pipeline.translate(
     items.map((item) => ({
       text: item.text,
+      cacheScope: item.cacheScope,
       key: item.key,
       domain,
       tabId,
@@ -341,7 +342,12 @@ async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortIn
   const controller = new AbortController();
   port.onDisconnect.addListener(() => controller.abort());
   const res = await pipeline.translate(
-    init.items.map((item) => ({ text: item.text, key: item.key, domain: init.domain })),
+    init.items.map((item) => ({
+      text: item.text,
+      key: item.key,
+      cacheScope: item.cacheScope,
+      domain: init.domain,
+    })),
     {
       immediate: true,
       onDelta: (key, delta) => post({ type: 'delta', key, delta }),

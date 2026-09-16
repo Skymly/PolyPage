@@ -755,4 +755,121 @@ describe('TranslationPipeline', () => {
     expect(r1.errors.k1?.kind).toBe('aborted');
     expect(r2.errors.k2?.kind).toBe('aborted');
   });
+
+  it('keeps cacheScope off the Provider and TM, and in the cache key (M-07)', async () => {
+    const cache = new MemoryTranslationCache();
+    const tm = new TranslationMemory(new MemoryTmStore(), 100);
+    const calls: string[][] = [];
+    const inflight: Array<{ key: string; text: string }> = [];
+    const s = settings({ translationMemory: { enabled: true, maxEntries: 100 } });
+    const fp = cacheFingerprint(s.providers[0]);
+    const pipeline = makePipeline(
+      s,
+      {
+        a: (c) =>
+          fake(c, {
+            translateTexts: async (texts) => {
+              calls.push(texts);
+              return texts.map((t) => `译:${t}`);
+            },
+          }),
+      },
+      {
+        cache,
+        tm,
+        recordInflight: async (_tab, _frame, items) => {
+          inflight.push(...items);
+        },
+      },
+    );
+    const body = 'Hello, world!';
+    const scopeA = 'pdf|fileid:X|p1|i0|';
+    const scopeB = 'pdf|fileid:X|p1|i1|';
+    const res = await pipeline.translate(
+      [{ text: body, key: 'p1-0', cacheScope: scopeA, tabId: 9 }],
+      { immediate: true },
+    );
+    expect(res.results['p1-0']).toBe(`译:${body}`);
+    expect(calls).toEqual([[body]]);
+    expect(inflight).toEqual([{ key: 'p1-0', text: `${scopeA}${body}` }]);
+
+    const tmHits = await tm.lookup([{ key: 'body', text: body }], 'English|简体中文');
+    expect(tmHits.get('body')).toBe(`译:${body}`);
+    const tmPrefixed = await tm.lookup(
+      [{ key: 'scoped', text: `${scopeA}${body}` }],
+      'English|简体中文',
+    );
+    expect(tmPrefixed.size).toBe(0);
+
+    const cacheHits = await cache.get(
+      [{ key: 'scoped', text: `${scopeA}${body}` }],
+      'a',
+      'English',
+      '简体中文',
+      0,
+      fp,
+    );
+    expect(cacheHits.get('scoped')).toBe(`译:${body}`);
+    const cacheBody = await cache.get(
+      [{ key: 'body', text: body }],
+      'a',
+      'English',
+      '简体中文',
+      0,
+      fp,
+    );
+    expect(cacheBody.size).toBe(0);
+
+    const cacheOther = await cache.get(
+      [{ key: 'other', text: `${scopeB}${body}` }],
+      'a',
+      'English',
+      '简体中文',
+      0,
+      fp,
+    );
+    expect(cacheOther.size).toBe(0);
+
+    calls.length = 0;
+    const hit = await pipeline.translate(
+      [{ text: body, key: 'p1-0b', cacheScope: scopeA, tabId: 9 }],
+      { immediate: true },
+    );
+    expect(hit.results['p1-0b']).toBe(`译:${body}`);
+    expect(calls).toEqual([]);
+
+    const cacheOnly = new MemoryTranslationCache();
+    const cacheCalls: string[][] = [];
+    const cachePipeline = makePipeline(
+      settings({ cacheEnabled: true, translationMemory: { enabled: false, maxEntries: 100 } }),
+      {
+        a: (c) =>
+          fake(c, {
+            translateTexts: async (texts) => {
+              cacheCalls.push(texts);
+              return texts.map((t) => `译:${t}`);
+            },
+          }),
+      },
+      { cache: cacheOnly },
+    );
+    await cachePipeline.translate(
+      [{ text: body, key: 'p1-0', cacheScope: scopeA }],
+      { immediate: true },
+    );
+    cacheCalls.length = 0;
+    const miss = await cachePipeline.translate(
+      [{ text: body, key: 'p1-1', cacheScope: scopeB }],
+      { immediate: true },
+    );
+    expect(miss.results['p1-1']).toBe(`译:${body}`);
+    expect(cacheCalls).toEqual([[body]]);
+    cacheCalls.length = 0;
+    const scopedHit = await cachePipeline.translate(
+      [{ text: body, key: 'p1-0c', cacheScope: scopeA }],
+      { immediate: true },
+    );
+    expect(scopedHit.results['p1-0c']).toBe(`译:${body}`);
+    expect(cacheCalls).toEqual([]);
+  });
 });

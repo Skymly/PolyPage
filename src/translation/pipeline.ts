@@ -26,11 +26,18 @@ import {
 
 export interface PipelineItem {
   text: string;
+  /** Participates in the translation cache key; never sent to a Provider or TM. */
+  cacheScope?: string;
   key?: string;
   domain?: string;
   pageLanguage?: string | null;
   tabId?: number;
   frameId?: number;
+}
+
+/** Cache identity = optional scope prefix + body. Provider / TM see `text` only. */
+export function cacheLookupText(item: { text: string; cacheScope?: string }): string {
+  return item.cacheScope ? `${item.cacheScope}${item.text}` : item.text;
 }
 
 export interface TranslateOptions {
@@ -81,6 +88,7 @@ interface QueueItem {
   resultKey: string;
   providerId: string;
   text: string;
+  cacheScope?: string;
   key: string;
   domain?: string;
   pageLanguage?: string | null;
@@ -156,7 +164,8 @@ export class TranslationPipeline {
               q.tabId === item.tabId &&
               q.frameId === item.frameId &&
               q.key === item.key &&
-              q.text === item.text,
+              q.text === item.text &&
+              (q.cacheScope ?? '') === (item.cacheScope ?? ''),
           );
         if (dup) {
           const inner = dup.resolve;
@@ -171,6 +180,7 @@ export class TranslationPipeline {
           resultKey,
           providerId,
           text: item.text,
+          cacheScope: item.cacheScope,
           key: item.key ?? '',
           domain: item.domain,
           pageLanguage: item.pageLanguage,
@@ -300,7 +310,7 @@ export class TranslationPipeline {
     if (settings.cacheEnabled) {
       try {
         hits = await this.deps.cache.get(
-          group.map((g, i) => ({ key: String(i), text: g.text })),
+          group.map((g, i) => ({ key: String(i), text: cacheLookupText(g) })),
           providerId,
           source,
           target,
@@ -320,7 +330,7 @@ export class TranslationPipeline {
         const cleaned = applyOutputSanitize(cached, settings);
         if (cleaned.ok) item.resolve({ translated: cleaned.text });
         else {
-          stale.push(item.text);
+          stale.push(cacheLookupText(item));
           misses.push(item);
         }
       } else misses.push(item);
@@ -371,7 +381,7 @@ export class TranslationPipeline {
         await this.deps.recordInflight?.(
           groupTabId,
           groupFrameId,
-          resumeItems.map((m) => ({ key: m.key, text: m.text })),
+          resumeItems.map((m) => ({ key: m.key, text: cacheLookupText(m) })),
         );
       } catch {
         /* best-effort */
@@ -512,7 +522,7 @@ export class TranslationPipeline {
       const fingerprint = cacheFingerprint(providerConfig);
       const cacheId = cacheOwnerId ?? providerConfig.id;
       const translated = await instance.translateTexts(texts, ctx, controller.signal);
-      const successes: { text: string; translated: string }[] = [];
+      const successes: { body: string; cacheText: string; translated: string }[] = [];
       const doneKeys: string[] = [];
       batch.forEach((item, i) => {
         const t = translated[i];
@@ -527,7 +537,11 @@ export class TranslationPipeline {
             translated: cleaned.text,
             ...(actualProviderName ? { actualProviderName } : {}),
           });
-          successes.push({ text: item.text, translated: cleaned.text });
+          successes.push({
+            body: item.text,
+            cacheText: cacheLookupText(item),
+            translated: cleaned.text,
+          });
           if (item.key !== '' && item.key !== 'selection') doneKeys.push(item.key);
         } else {
           item.resolve({ error: { kind: 'invalid_response', message: '该条目缺少翻译结果' } });
@@ -542,7 +556,7 @@ export class TranslationPipeline {
       if (settings.cacheEnabled && successes.length > 0) {
         try {
           await this.deps.cache.put(
-            successes,
+            successes.map((s) => ({ text: s.cacheText, translated: s.translated })),
             cacheId,
             ctx.sourceLanguage,
             ctx.targetLanguage,
@@ -556,7 +570,7 @@ export class TranslationPipeline {
       if (settings.translationMemory.enabled && successes.length > 0) {
         try {
           await this.deps.tm.remember(
-            successes.map((s) => ({ source: s.text, target: s.translated })),
+            successes.map((s) => ({ source: s.body, target: s.translated })),
             tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
           );
@@ -695,7 +709,7 @@ export class TranslationPipeline {
       if (settings.cacheEnabled) {
         try {
           await this.deps.cache.put(
-            [{ text: item.text, translated: cleaned.text }],
+            [{ text: cacheLookupText(item), translated: cleaned.text }],
             cacheOwnerId,
             ctx.sourceLanguage,
             ctx.targetLanguage,

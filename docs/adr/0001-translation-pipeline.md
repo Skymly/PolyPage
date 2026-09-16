@@ -5,3 +5,5 @@ Cue 与 stream 曾经各写一份 cache / TM / sanitize / failover，看起来�
 决定抽出 in-process **翻译管线**：网页、PDF、划词、字幕 cue、流式、OCR 二步穿过同一 interface。`immediate` 只跳过 80ms 合并窗。chrome.runtime 上的 `translate` / `translate-cue` / stream port 留作 adapter，不把消息协议收进这一刀。
 
 探活不是翻译，不走管线。视觉一步也不走管线。
+
+`PipelineItem.cacheScope`（可选）只参与翻译缓存 key，不发给 Provider、不进句子 TM。PDF 段落把 `pdf|<fingerprint>|pN|iN|` 放在这里，`text` 只放正文（M-07）。续译 `textHash` 对 `cacheScope+text` 取哈希，与改前 `pdfScopedCacheText` 一致。

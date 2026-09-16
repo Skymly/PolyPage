@@ -67,6 +67,30 @@ export async function saveSettings(settings: Settings): Promise<void> {
   await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: settings });
 }
 
+/**
+ * Apply an Options/import document onto the stored settings (M-40).
+ * `merge-packs` keeps `ocrPacks.extraLangs` owned by download/remove RPCs so a
+ * stale Options draft cannot orphan an IDB language pack. `replace` is import.
+ */
+export type SettingsSaveMode = 'merge-packs' | 'replace';
+
+export function applyFullSettingsSave(
+  incoming: Settings,
+  current: Settings,
+  mode: SettingsSaveMode,
+): Settings {
+  if (mode === 'replace') return incoming;
+  const extraLangs = [...current.ocrPacks.extraLangs];
+  return {
+    ...incoming,
+    ocrPacks: { extraLangs },
+    imageTranslate: {
+      ...incoming.imageTranslate,
+      tessLangs: [...new Set([...incoming.imageTranslate.tessLangs, ...extraLangs])],
+    },
+  };
+}
+
 const PROVIDER_TYPES: ProviderType[] = [
   'openai-compatible',
   'custom-http',

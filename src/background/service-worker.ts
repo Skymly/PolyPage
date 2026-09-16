@@ -45,7 +45,7 @@ import '../providers/google-translate';
 import '../providers/native-host';
 import { pingNativeHost } from './nativePort';
 import { cacheClear, cacheStats, ChromeTranslationCache } from '../storage/cache';
-import { loadSettings, normalizeSettings, saveSettings } from '../storage/settings';
+import { applyFullSettingsSave, loadSettings, normalizeSettings, saveSettings } from '../storage/settings';
 import { IdbTmStore, TranslationMemory } from '../storage/tm';
 import {
   IdbOcrPackStore,
@@ -854,11 +854,17 @@ chrome.runtime.onMessage.addListener(
               sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
               break;
             }
-            const normalized = normalizeSettings(message.settings);
-            await saveSettings(normalized);
-            settingsCache = normalized;
-            setupContextMenus(normalized);
-            sendResponse({ ok: true });
+            const incoming = normalizeSettings(message.settings);
+            const current = await getSettings(true);
+            const next = applyFullSettingsSave(
+              incoming,
+              current,
+              message.replaceAll ? 'replace' : 'merge-packs',
+            );
+            await saveSettings(next);
+            settingsCache = next;
+            setupContextMenus(next);
+            sendResponse({ ok: true, settings: next });
             break;
           }
           case 'set-selection-translate': {

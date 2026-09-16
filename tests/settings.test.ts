@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../src/shared/constants';
-import { normalizeProvider, normalizeSettings, redactSettings, validateImportedSettings } from '../src/storage/settings';
+import { applyFullSettingsSave, normalizeProvider, normalizeSettings, redactSettings, validateImportedSettings } from '../src/storage/settings';
 
 describe('normalizeSettings', () => {
   it('returns defaults for garbage input', () => {
@@ -108,5 +108,30 @@ describe('redactSettings (M-53)', () => {
     expect(redacted.providers[0].headers).toEqual({});
     expect(s.providers[0].apiKey).toBe('secret');
     expect(s.providers[0].headers).toEqual({ Authorization: 'Bearer x' });
+  });
+});
+
+describe('applyFullSettingsSave (M-40)', () => {
+  it('does not let a stale Options draft drop OCR extraLangs', () => {
+    const current = defaultSettings();
+    current.ocrPacks = { extraLangs: ['jpn'] };
+    current.imageTranslate = { ...current.imageTranslate, tessLangs: ['eng', 'jpn'] };
+    const incoming = defaultSettings();
+    incoming.defaultTargetLanguage = 'ja';
+    incoming.ocrPacks = { extraLangs: [] };
+    incoming.imageTranslate = { ...incoming.imageTranslate, tessLangs: ['eng'] };
+    const next = applyFullSettingsSave(incoming, current, 'merge-packs');
+    expect(next.ocrPacks.extraLangs).toEqual(['jpn']);
+    expect(next.imageTranslate.tessLangs).toEqual(['eng', 'jpn']);
+    expect(next.defaultTargetLanguage).toBe('ja');
+  });
+
+  it('replaceAll overwrites pack langs (import)', () => {
+    const current = defaultSettings();
+    current.ocrPacks = { extraLangs: ['jpn'] };
+    const incoming = defaultSettings();
+    incoming.ocrPacks = { extraLangs: [] };
+    const next = applyFullSettingsSave(incoming, current, 'replace');
+    expect(next.ocrPacks.extraLangs).toEqual([]);
   });
 });

@@ -46,7 +46,11 @@ function scheduleIdleDisconnect(hostName: string, conn: HostConnection): void {
     conn.idleTimer = null;
     if (conn.pending.size === 0) {
       disconnectHost(hostName, '空闲超时，已断开本地网关连接');
+      return;
     }
+    // Still in-flight (long ASR/translate): keep the port, but arm idle
+    // again so a later timeout/cancel path cannot leak the connection (M-73).
+    scheduleIdleDisconnect(hostName, conn);
   }, NATIVE_PORT_IDLE_MS);
 }
 
@@ -164,7 +168,9 @@ export function nativeRequest<T = unknown>(
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       conn.pending.delete(id);
+      nativeNotify(hostName, 'cancel', { id });
       reject(new ProviderError('timeout', `本地网关响应超时（${timeoutMs}ms）: ${method}`));
+      scheduleIdleDisconnect(hostName, conn);
     }, timeoutMs);
     conn.pending.set(id, {
       resolve: resolve as (r: unknown) => void,

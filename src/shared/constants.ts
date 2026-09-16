@@ -136,6 +136,15 @@ export const LANGUAGE_DETECT_SAMPLE_CHARS = 240;
 
 /** ASR capture window in seconds (spec 4.0 §9.3). */
 export const DEFAULT_ASR_MAX_SECONDS = 90;
+/**
+ * Floor for transcribe HTTP/RPC timeouts (M-73). The text default is 60s
+ * while the capture window is 90s; keep ASR from sharing that budget.
+ */
+export const ASR_REQUEST_TIMEOUT_MS = 180_000;
+
+export function asrRequestTimeoutMs(configuredMs: number): number {
+  return Math.max(configuredMs, ASR_REQUEST_TIMEOUT_MS);
+}
 /** ASR upload size cap in MiB (spec 4.0 §9.3). */
 export const DEFAULT_ASR_MAX_UPLOAD_MB = 20;
 /** Default subtitle cue background (spec 4.0 §9.3). */

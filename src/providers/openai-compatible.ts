@@ -8,6 +8,7 @@
  *    {{targetLanguage}}, {{domain}}, {{glossary}} before sending.
  */
 import type { ProviderConfig } from '../shared/types';
+import { asrRequestTimeoutMs } from '../shared/constants';
 import { minimaxHostHint } from '../shared/sanitize';
 import { parseBatchTranslation, renderTemplate } from '../shared/utils';
 import { buildVisionRequest, buildVisionUserPrompt } from '../ocr/llm-vision';
@@ -293,7 +294,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         const raw = await res.text();
         return parseTranscriptionResponse(raw);
       },
-      { timeoutMs: config.timeoutMs, signal, retries: 1 },
+      { timeoutMs: asrRequestTimeoutMs(config.timeoutMs), signal, retries: 0 },
     );
   }
 

@@ -28,6 +28,7 @@ import { hostnameFromUrl } from '../shared/siteRules';
 import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
 import { PRIVILEGED_SETTINGS_DENIED, extensionOriginOf, isExtensionPageSender } from './privilegedSender';
+import { deniedNativeHostMessage, isAllowedNativeHostName } from '../shared/nativeHostName';
 import { computeOcrAvailable, imageContextMenuState, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
@@ -927,6 +928,16 @@ chrome.runtime.onMessage.addListener(
             break;
           case 'host-status': {
             const hostName = message.hostName?.trim() || DEFAULT_NATIVE_HOST_NAME;
+            if (!isAllowedNativeHostName(hostName)) {
+              sendResponse({
+                installed: false,
+                error: deniedNativeHostMessage(hostName),
+                browser: detectBrowser(),
+                reason: deniedNativeHostMessage(hostName),
+                probe: 'missing',
+              });
+              break;
+            }
             gatewayProbeInflight = probeGatewayOnce(hostName);
             await gatewayProbeInflight;
             const ping = lastGatewayPing ?? { ok: false };

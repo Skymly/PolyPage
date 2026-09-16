@@ -12,6 +12,7 @@
  */
 import type { ProviderConfig } from '../shared/types';
 import { DEFAULT_NATIVE_HOST_NAME } from '../shared/constants';
+import { deniedNativeHostMessage, isAllowedNativeHostName } from '../shared/nativeHostName';
 import type { GatewayCapabilities } from '../shared/nativeRpc';
 import { nativeNotify, nativeRequest } from '../background/nativePort';
 import { base64ToBytes, sha256Hex, splitBinaryChunks } from '../shared/binaryChunk';
@@ -30,7 +31,11 @@ export class NativeHostProvider implements TranslationProvider {
   constructor(public readonly config: ProviderConfig) {}
 
   private get hostName(): string {
-    return this.config.hostName?.trim() || DEFAULT_NATIVE_HOST_NAME;
+    const name = this.config.hostName?.trim() || DEFAULT_NATIVE_HOST_NAME;
+    if (!isAllowedNativeHostName(name)) {
+      throw new ProviderError('config', deniedNativeHostMessage(name));
+    }
+    return name;
   }
 
   private baseParams(ctx: TranslationContext): Record<string, unknown> {

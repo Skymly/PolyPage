@@ -54,6 +54,7 @@ import type {
   TranslationMemorySettings,
 } from '../shared/types';
 import { normalizeSiteRule } from '../shared/siteRules';
+import { isAllowedNativeHostName } from '../shared/nativeHostName';
 import { clamp } from '../shared/utils';
 
 export async function loadSettings(): Promise<Settings> {
@@ -372,7 +373,8 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
     provider.region = str(r.region);
   }
   if (type === 'native-host') {
-    provider.hostName = str(r.hostName, DEFAULT_NATIVE_HOST_NAME).trim() || DEFAULT_NATIVE_HOST_NAME;
+    const host = str(r.hostName, DEFAULT_NATIVE_HOST_NAME).trim() || DEFAULT_NATIVE_HOST_NAME;
+    provider.hostName = isAllowedNativeHostName(host) ? host : DEFAULT_NATIVE_HOST_NAME;
     provider.backend = str(r.backend);
     provider.fallbackProviderId = str(r.fallbackProviderId);
   }

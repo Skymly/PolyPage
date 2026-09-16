@@ -28,6 +28,7 @@ import {
   NAV_CHROME_SELECTOR,
   NAV_MIN_TEXT_LENGTH,
   NAV_TRANSLATION_CLASS,
+  SKIP_MATH_CLASSES,
   SKIP_TAGS,
 } from '../shared/constants';
 import { filterText } from '../shared/textFilters';
@@ -55,12 +56,22 @@ function climb(node: Node): Element | null {
   return null;
 }
 
+function isSkippedSubtreeRoot(el: Element): boolean {
+  if (SKIP_TAGS.has(el.tagName)) return true;
+  if (el instanceof HTMLElement && el.isContentEditable) return true;
+  if (el.classList?.contains(BILINGUAL_CLASS)) return true;
+  if (el.getAttribute('aria-hidden') === 'true') return true;
+  if (SKIP_MATH_CLASSES.has(el.tagName.toLowerCase())) return true;
+  for (const cls of SKIP_MATH_CLASSES) {
+    if (el.classList?.contains(cls)) return true;
+  }
+  return false;
+}
+
 function insideSkippedSubtree(el: Element): boolean {
   let node: Element | null = el;
   while (node) {
-    if (SKIP_TAGS.has(node.tagName)) return true;
-    if (node instanceof HTMLElement && node.isContentEditable) return true;
-    if (node.classList?.contains(BILINGUAL_CLASS)) return true;
+    if (isSkippedSubtreeRoot(node)) return true;
     node = climb(node);
   }
   return false;
@@ -137,7 +148,7 @@ export function sourceTextOf(el: HTMLElement): string {
   const parts: string[] = [];
   const walk = (node: Node): void => {
     if (node instanceof Element) {
-      if (isTranslationTextChrome(node) || SKIP_TAGS.has(node.tagName)) return;
+      if (isTranslationTextChrome(node) || isSkippedSubtreeRoot(node)) return;
     }
     if (node.nodeType === Node.TEXT_NODE) {
       parts.push(node.textContent ?? '');

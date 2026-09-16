@@ -95,4 +95,28 @@ describe('scanTranslatableNodes nav chrome', () => {
     const p = document.getElementById('p1') as HTMLElement;
     expect(sourceTextOf(p)).toBe('Visible paragraph text here.');
   });
+
+  it('does not send MathML or KaTeX formula text into the scanner (M-87)', () => {
+    mount(`
+      <p id="prose">See the identity below for the full derivation path.</p>
+      <p id="math"><math><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math></p>
+      <div id="tex" class="katex">\\frac{a}{b} equals the long formula text here</div>
+      <div id="mjx"><mjx-container>x squared plus y squared equals z squared here</mjx-container></div>
+    `);
+    const found = scanTranslatableNodes(document.body, 8);
+    const ids = found.map((el) => el.id);
+    expect(ids).toContain('prose');
+    expect(ids).not.toContain('math');
+    expect(ids).not.toContain('tex');
+    expect(ids).not.toContain('mjx');
+    expect(sourceTextOf(document.getElementById('math') as HTMLElement)).toBe('');
+  });
+
+  it('omits aria-hidden formula chrome from source text (M-87)', () => {
+    mount(
+      `<p id="p1">Visible paragraph text here.<span aria-hidden="true">hidden formula E=mc2 should not be translated</span></p>`,
+    );
+    const p = document.getElementById('p1') as HTMLElement;
+    expect(sourceTextOf(p)).toBe('Visible paragraph text here.');
+  });
 });

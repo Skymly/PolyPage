@@ -12,7 +12,7 @@
  */
 import { sendRuntime } from '../messaging/messages';
 import type { SubtitleState } from '../shared/types';
-import { CueScheduler, activeCueText, stripVttTags } from './subtitleScheduler';
+import { CueScheduler, activeCueText, mergeMemoryCues, stripVttTags } from './subtitleScheduler';
 import type { CueLike } from './subtitleScheduler';
 import {
   DEFAULT_SUBTITLE_STYLE,
@@ -61,6 +61,14 @@ class VideoSubtitleController {
     return this.subtitleTracks().length > 0;
   }
 
+  get cueCount(): number {
+    return this.memoryCues.length;
+  }
+
+  cuesSnapshot(): CueLike[] {
+    return this.memoryCues.map((c) => ({ ...c }));
+  }
+
   private subtitleTracks(): TextTrack[] {
     if (!(this.media instanceof HTMLVideoElement)) return [];
     return Array.from(this.media.textTracks ?? []).filter(
@@ -69,7 +77,7 @@ class VideoSubtitleController {
   }
 
   setMemoryCues(cues: CueLike[]): void {
-    this.memoryCues = cues;
+    this.memoryCues = mergeMemoryCues(this.memoryCues, cues);
     for (const cue of cues) {
       if (cue.translation !== undefined && cue.translation !== '') {
         this.scheduler.resolve(stripVttTags(cue.text) || cue.text, cue.translation);
@@ -264,6 +272,8 @@ class VideoSubtitleController {
 export class SubtitleManager {
   private controllers = new Map<HTMLMediaElement, VideoSubtitleController>();
   private activeVideo: HTMLVideoElement | null = null;
+  /** Media that started the current ASR capture; partials must not re-pick. */
+  private asrTarget: HTMLMediaElement | null = null;
   private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
   private selectorObserver: MutationObserver | null = null;
   private selectorTimer: number | null = null;
@@ -333,6 +343,31 @@ export class SubtitleManager {
     controller.setMemoryCues(cues);
   }
 
+  pinAsrTarget(media: HTMLMediaElement): void {
+    this.asrTarget = media;
+  }
+
+  asrTargetMedia(): HTMLMediaElement | null {
+    if (!this.asrTarget || !this.asrTarget.isConnected) {
+      this.asrTarget = null;
+      return null;
+    }
+    return this.asrTarget;
+  }
+
+  applyAsrPartial(cues: CueLike[]): void {
+    const media = this.asrTargetMedia() ?? this.pickCaptionlessMedia();
+    if (media) this.applyMemoryCues(media, cues);
+  }
+
+  memoryCueCount(media: HTMLMediaElement): number {
+    return this.controllers.get(media)?.cueCount ?? 0;
+  }
+
+  memoryCuesOf(media: HTMLMediaElement): CueLike[] {
+    return this.controllers.get(media)?.cuesSnapshot() ?? [];
+  }
+
   pickCaptionlessMedia(): HTMLMediaElement | null {
     this.wireInteraction();
     const videos = this.videos().filter((v) => !this.controllerFor(v).hasTracks);
@@ -367,6 +402,7 @@ export class SubtitleManager {
   }
 
   restoreAll(): void {
+    this.asrTarget = null;
     for (const controller of this.controllers.values()) controller.restore();
     this.restoreSelectors();
   }

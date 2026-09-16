@@ -117,7 +117,9 @@ describe('AsrRoundTrip', () => {
     const res = await trip.transcribeAndTranslate({
       ...input,
       emitPartials: true,
-      onPartial: (cues) => partials.push(cues),
+      onPartial: (cues) => {
+        partials.push(cues);
+      },
     });
     expect(partials[0][0]).toEqual({ start: 0, end: 1, text: 'Hel' });
     expect(res.ok && res.cues[0].translation).toBe('译:Final.');

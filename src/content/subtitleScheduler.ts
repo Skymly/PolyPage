@@ -11,6 +11,16 @@ export interface CueLike {
   translation?: string;
 }
 
+/** Late source-only partials must not wipe a cue that already has 译文 (M-50). */
+export function mergeMemoryCues(existing: CueLike[], incoming: CueLike[]): CueLike[] {
+  return incoming.map((cue) => {
+    if (cue.translation !== undefined && cue.translation !== '') return cue;
+    const prev = existing.find((e) => e.startTime === cue.startTime && e.endTime === cue.endTime);
+    if (prev?.translation) return { ...cue, translation: prev.translation };
+    return cue;
+  });
+}
+
 /** Strip WebVTT cue payload tags (<c>, <b>, timestamps...) and collapse
  *  whitespace. */
 export function stripVttTags(text: string): string {

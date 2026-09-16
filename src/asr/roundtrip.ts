@@ -18,7 +18,7 @@ export interface AsrRoundTripInput {
   languageHint?: string;
   signal: AbortSignal;
   emitPartials?: boolean;
-  onPartial?: (cues: Array<{ start: number; end: number; text: string }>) => void;
+  onPartial?: (cues: Array<{ start: number; end: number; text: string }>) => void | Promise<void>;
 }
 
 export interface AsrRoundTripDeps {
@@ -63,16 +63,20 @@ export class AsrRoundTrip {
       const streamingFn = instance.transcribeStream;
       let raw: { text: string; segments?: Array<{ start: number; end: number; text: string }> };
       if (input.emitPartials && typeof streamingFn === 'function') {
+        let lastPartial: Promise<void> = Promise.resolve();
         raw = await streamingFn.call(
           instance,
           { mime: input.mime, bytes: input.bytes },
           ctx,
           (partial) => {
             const cues = normalizeTranscript(partial, input.windowStart, input.windowDuration);
-            input.onPartial?.(cues.map((c) => ({ start: c.start, end: c.end, text: c.text })));
+            lastPartial = Promise.resolve(
+              input.onPartial?.(cues.map((c) => ({ start: c.start, end: c.end, text: c.text }))),
+            );
           },
           input.signal,
         );
+        await lastPartial;
       } else {
         raw = await instance.transcribe({ mime: input.mime, bytes: input.bytes }, ctx, input.signal);
       }

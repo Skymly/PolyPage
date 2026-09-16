@@ -31,7 +31,7 @@ export class DomObserver {
           for (const n of Array.from(m.addedNodes)) {
             if (n.nodeType === Node.ELEMENT_NODE && !this.isOwnNode(n)) {
               meaningful = true;
-              break;
+              this.scanForShadowRoots(n);
             }
           }
         } else if (m.type === 'characterData') {
@@ -49,12 +49,23 @@ export class DomObserver {
 
   /** Attach observers to any open shadow roots beneath a node. */
   scanForShadowRoots(node: Node): void {
+    if (node instanceof Element && node.shadowRoot) this.observeRoot(node.shadowRoot);
     if (!(node instanceof Element) && !(node instanceof Document)) return;
-    const elements = (node as Element | Document).querySelectorAll?.('*') ?? [];
+    let elements: ArrayLike<Element> = [];
+    try {
+      elements = (node as Element | Document).querySelectorAll?.('*') ?? [];
+    } catch {
+      return;
+    }
     for (const el of Array.from(elements)) {
       const shadow = (el as HTMLElement).shadowRoot;
       if (shadow) this.observeRoot(shadow);
     }
+  }
+
+  /** Whether this root is already observed (test seam). */
+  isObserving(node: Node): boolean {
+    return this.roots.has(node);
   }
 
   private schedule(): void {

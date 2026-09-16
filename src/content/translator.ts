@@ -78,6 +78,7 @@ export class PageTranslator {
   private _active = false;
   private tooltip = new Tooltip();
   private io: IntersectionObserver | null = null;
+  private readonly elIndex = new WeakMap<Element, NodeEntry>();
   private _viewportActive = false;
   private _inlineDowngraded = false;
   /** Bumped on translate / setMode / restore so in-flight chunk loops stop. */
@@ -157,6 +158,7 @@ export class PageTranslator {
         inlineDegraded: false,
         visible: !this._viewportActive,
       });
+      this.elIndex.set(el, this.entries.get(id)!);
       added++;
     }
     if (this._viewportActive && added > 0) this.observeNewEntries();
@@ -188,6 +190,7 @@ export class PageTranslator {
             if (!entry) continue;
             if (rec.isIntersecting && !entry.visible) {
               entry.visible = true;
+              this.io?.unobserve(rec.target);
               newlyVisible.push(entry);
             }
           }
@@ -205,10 +208,7 @@ export class PageTranslator {
   }
 
   private findEntryByEl(el: Element): NodeEntry | null {
-    for (const entry of this.entries.values()) {
-      if (entry.el === el) return entry;
-    }
-    return null;
+    return this.elIndex.get(el) ?? null;
   }
 
   /* ------------------------------ public actions ----------------------------- */
@@ -534,7 +534,14 @@ export class PageTranslator {
         this.lastError = message;
       }
       if (!this._active || epoch !== this._modeEpoch) return;
-      this.renderAll();
+      const unique: NodeEntry[] = [];
+      const seen = new Set<NodeEntry>();
+      for (const task of chunk) {
+        if (seen.has(task.entry)) continue;
+        seen.add(task.entry);
+        unique.push(task.entry);
+      }
+      this.renderEntries(unique);
     }
   }
 
@@ -572,7 +579,7 @@ export class PageTranslator {
       entry.status = 'pending';
       entry.error = null;
     }
-    this.renderAll();
+    this.renderEntries(targets);
 
     for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
       const chunk = targets.slice(i, i + CHUNK_SIZE);
@@ -608,7 +615,7 @@ export class PageTranslator {
       // The page may have been restored or the display mode switched while
       // awaiting; never apply stale results to a newer epoch.
       if (!this._active || epoch !== this._modeEpoch) return;
-      this.renderAll();
+      this.renderEntries(chunk);
       this.refreshTooltipForChunk(chunk);
       this.report();
     }
@@ -619,7 +626,7 @@ export class PageTranslator {
     const epoch = this._modeEpoch;
     entry.status = 'pending';
     entry.error = null;
-    this.renderAll();
+    this.renderEntries([entry]);
     this.report();
     let accumulated = '';
     void this.translateItems([{ key: entry.id, text: entry.originalText }], {
@@ -645,7 +652,7 @@ export class PageTranslator {
           entry.error = err?.message ?? '流式连接中断';
           this.lastError = entry.error;
         }
-        this.renderAll();
+        this.renderEntries([entry]);
         this.refreshTooltipForChunk([entry]);
         this.report();
       })
@@ -654,7 +661,7 @@ export class PageTranslator {
         entry.status = 'error';
         entry.error = e instanceof Error ? e.message : String(e);
         this.lastError = entry.error;
-        this.renderAll();
+        this.renderEntries([entry]);
         this.report();
       });
   }
@@ -750,13 +757,18 @@ export class PageTranslator {
 
   /* --------------------------------- rendering -------------------------------- */
 
-  private renderAll(): void {
-    for (const [id, entry] of this.entries) {
+  private dropEntry(id: string, entry: NodeEntry): void {
+    entry.originalWatcher?.disconnect();
+    entry.originalWatcher = null;
+    this.io?.unobserve(entry.el);
+    removeBilingualBlock(entry);
+    this.entries.delete(id);
+  }
+
+  private renderEntries(list: Iterable<NodeEntry>): void {
+    for (const entry of list) {
       if (!entry.el.isConnected) {
-        entry.originalWatcher?.disconnect();
-        entry.originalWatcher = null;
-        removeBilingualBlock(entry);
-        this.entries.delete(id);
+        this.dropEntry(entry.id, entry);
         continue;
       }
       if (this._mode === 'inline' && entry.inlineSegments) {
@@ -766,6 +778,10 @@ export class PageTranslator {
       }
       this.watchDetachedOriginal(entry);
     }
+  }
+
+  private renderAll(): void {
+    this.renderEntries([...this.entries.values()]);
   }
 
   private watchDetachedOriginal(entry: NodeEntry): void {

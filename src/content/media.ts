@@ -27,6 +27,46 @@ export function subtitleLayerParent(): Element {
   return document.fullscreenElement ?? document.documentElement;
 }
 
+/** Match `node` or a descendant against CSS selectors; skip illegal ones (M-86). */
+export function matchSelectorAgainstNode(node: Element, selectors: string[]): Element | null {
+  for (const sel of selectors) {
+    if (!sel) continue;
+    try {
+      if (node.matches(sel)) return node;
+    } catch {
+      continue;
+    }
+    try {
+      const child = node.querySelector(sel);
+      if (child) return child;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** `querySelectorAll` per selector, ignoring SyntaxError from bad CSS (M-86). */
+export function queryAllSafeSelectors(root: ParentNode, selectors: string[]): Element[] {
+  const out: Element[] = [];
+  const seen = new Set<Element>();
+  for (const sel of selectors) {
+    if (!sel) continue;
+    let found: Element[] = [];
+    try {
+      found = Array.from(root.querySelectorAll(sel));
+    } catch {
+      continue;
+    }
+    for (const el of found) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      out.push(el);
+    }
+  }
+  return out;
+}
+
 const SUB_CSS = `
 :host { all: initial; }
 .wt-sub-box {
@@ -464,24 +504,26 @@ export class SubtitleManager {
     }
     if (this.selectorObserver) return;
     this.selectorObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        const node =
-          mutation.type === 'characterData' ? mutation.target.parentElement : mutation.target;
-        if (!(node instanceof Element)) continue;
-        const matched = node.matches?.(this.selectors.join(','))
-          ? node
-          : node.querySelector?.(this.selectors.join(','));
-        if (matched) this.selectorDirty.add(matched);
+      try {
+        for (const mutation of mutations) {
+          const node =
+            mutation.type === 'characterData' ? mutation.target.parentElement : mutation.target;
+          if (!(node instanceof Element)) continue;
+          const matched = matchSelectorAgainstNode(node, this.selectors);
+          if (matched) this.selectorDirty.add(matched);
+        }
+        if (this.selectorDirty.size === 0) return;
+        if (this.selectorTimer !== null) return;
+        // 150ms debounce (spec 3.0 §7.2 item 1).
+        this.selectorTimer = window.setTimeout(() => {
+          this.selectorTimer = null;
+          const dirty = [...this.selectorDirty];
+          this.selectorDirty.clear();
+          for (const el of dirty) void this.translateSelectorNode(el);
+        }, 150);
+      } catch {
+        /* illegal selector / detached node — keep observing (M-86) */
       }
-      if (this.selectorDirty.size === 0) return;
-      if (this.selectorTimer !== null) return;
-      // 150ms debounce (spec 3.0 §7.2 item 1).
-      this.selectorTimer = window.setTimeout(() => {
-        this.selectorTimer = null;
-        const dirty = [...this.selectorDirty];
-        this.selectorDirty.clear();
-        for (const el of dirty) void this.translateSelectorNode(el);
-      }, 150);
     });
     this.selectorObserver.observe(document.body ?? document.documentElement, {
       childList: true,
@@ -489,10 +531,8 @@ export class SubtitleManager {
       characterData: true,
     });
     // Prime existing nodes.
-    for (const sel of selectors) {
-      for (const el of Array.from(document.querySelectorAll(sel))) {
-        this.selectorDirty.add(el);
-      }
+    for (const el of queryAllSafeSelectors(document, selectors)) {
+      this.selectorDirty.add(el);
     }
     if (this.selectorDirty.size > 0 && this.selectorTimer === null) {
       this.selectorTimer = window.setTimeout(() => {

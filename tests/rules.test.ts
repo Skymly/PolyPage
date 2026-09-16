@@ -26,6 +26,19 @@ describe('hostMatchesPattern', () => {
     expect(hostMatchesPattern('', 'example.com')).toBe(false);
     expect(hostMatchesPattern('example.com', '')).toBe(false);
   });
+
+  it('does not treat a bare * as matching every host (M-86)', () => {
+    expect(hostMatchesPattern('example.com', '*')).toBe(false);
+    expect(hostMatchesPattern('www.example.com', '*')).toBe(false);
+    expect(matchRulesForHost('example.com', [
+      { id: 'star', match: ['*'], enabled: true },
+    ])).toEqual([]);
+  });
+
+  it('still matches a non-empty *suffix pattern', () => {
+    expect(hostMatchesPattern('example.com', '*example.com')).toBe(true);
+    expect(hostMatchesPattern('other.com', '*example.com')).toBe(false);
+  });
 });
 
 describe('matchRulesForHost', () => {

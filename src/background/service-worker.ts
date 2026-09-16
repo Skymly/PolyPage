@@ -113,8 +113,43 @@ async function getSettings(force = false): Promise<Settings> {
   return settingsCache;
 }
 
-/** Last probed gateway capabilities (protocol=1 greys vision/ASR). */
+/** Last probed gateway capabilities. null after a failed probe. */
 let lastGatewayCaps: GatewayCapabilities | null = null;
+let lastGatewayPing: { ok: boolean; version?: string; protocol?: number; error?: string } | null = null;
+let gatewayProbed = false;
+let gatewayProbeInflight: Promise<void> | null = null;
+
+async function probeGatewayOnce(hostName = DEFAULT_NATIVE_HOST_NAME): Promise<void> {
+  try {
+    const ping = await pingNativeHost(hostName);
+    lastGatewayPing = ping;
+    if (ping.ok) {
+      try {
+        lastGatewayCaps = await nativeRequest<GatewayCapabilities>(
+          hostName,
+          'capabilities',
+          {},
+          { timeoutMs: 8000 },
+        );
+      } catch {
+        lastGatewayCaps = { protocol: typeof ping.protocol === 'number' ? ping.protocol : 1 };
+      }
+    } else {
+      lastGatewayCaps = null;
+    }
+  } catch (e) {
+    lastGatewayPing = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    lastGatewayCaps = null;
+  } finally {
+    gatewayProbed = true;
+  }
+}
+
+async function ensureGatewayProbed(): Promise<void> {
+  if (gatewayProbed) return;
+  if (!gatewayProbeInflight) gatewayProbeInflight = probeGatewayOnce();
+  await gatewayProbeInflight;
+}
 
 function activeProviderCapabilities(settings: Settings) {
   const provider = settings.providers.find((p) => p.id === settings.activeProviderId);
@@ -124,7 +159,7 @@ function activeProviderCapabilities(settings: Settings) {
   } catch {
     instance = null;
   }
-  return providerCapabilities(provider, instance, lastGatewayCaps);
+  return providerCapabilities(provider, instance, lastGatewayCaps, gatewayProbed);
 }
 
 /* ------------------------------- provider stats ------------------------------ */
@@ -679,6 +714,7 @@ chrome.runtime.onMessage.addListener(
             break;
           }
           case 'get-content-settings': {
+            await ensureGatewayProbed();
             const s = await getSettings();
             const vision = activeProviderCapabilities(s).vision;
             const cs: ContentSettings = {
@@ -722,6 +758,7 @@ chrome.runtime.onMessage.addListener(
             break;
           }
           case 'get-settings-summary': {
+            await ensureGatewayProbed();
             const s = await getSettings();
             const provider = s.providers.find((p) => p.id === s.activeProviderId);
             const summary: SettingsSummary = {
@@ -787,28 +824,23 @@ chrome.runtime.onMessage.addListener(
             break;
           case 'host-status': {
             const hostName = message.hostName?.trim() || DEFAULT_NATIVE_HOST_NAME;
-            const ping = await pingNativeHost(hostName);
-            if (ping.ok) {
-              try {
-                lastGatewayCaps = await nativeRequest<GatewayCapabilities>(
-                  hostName,
-                  'capabilities',
-                  {},
-                  { timeoutMs: 8000 },
-                );
-              } catch {
-                lastGatewayCaps = { protocol: typeof ping.protocol === 'number' ? ping.protocol : 1 };
-              }
-            } else {
-              lastGatewayCaps = null;
-            }
+            gatewayProbeInflight = probeGatewayOnce(hostName);
+            await gatewayProbeInflight;
+            const ping = lastGatewayPing ?? { ok: false };
+            const caps = activeProviderCapabilities(await getSettings());
+            const stale = caps.gatewayProbe === 'stale-protocol';
             sendResponse({
               installed: ping.ok,
               version: ping.version,
               protocol: lastGatewayCaps?.protocol ?? ping.protocol,
               error: ping.error,
               browser: detectBrowser(),
-              reason: ping.ok ? undefined : nativeFailureReason(ping.error),
+              reason: ping.ok
+                ? stale
+                  ? '网关协议过旧，视觉/转写/流式不可用'
+                  : undefined
+                : nativeFailureReason(ping.error),
+              probe: caps.gatewayProbe,
             });
             break;
           }
@@ -1058,6 +1090,7 @@ void getSettings(true)
 
 // 3.0 resume: recover persisted in-flight tasks on every SW start.
 void recoverInflightTasks();
+void ensureGatewayProbed();
 
 chrome.commands.onCommand.addListener(async (command) => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

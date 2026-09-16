@@ -38,6 +38,7 @@ describe('providerCapabilities', () => {
       vision: false,
       asr: false,
       streaming: false,
+      gatewayProbe: 'stale-protocol',
     });
     expect(
       providerCapabilities(native(), inst, {
@@ -46,7 +47,23 @@ describe('providerCapabilities', () => {
         supportsVision: true,
         supportsAsr: false,
       }),
-    ).toEqual({ vision: true, asr: false, streaming: true });
+    ).toEqual({ vision: true, asr: false, streaming: true, gatewayProbe: 'ok' });
+  });
+
+  it('does not treat an unprobed native-host as protocol 1 (M-04)', () => {
+    const inst = instance({ stream: true, vision: true, asr: true });
+    expect(providerCapabilities(native(), inst, null, false)).toEqual({
+      vision: false,
+      asr: false,
+      streaming: false,
+      gatewayProbe: 'unprobed',
+    });
+    expect(providerCapabilities(native(), inst, null, true)).toEqual({
+      vision: false,
+      asr: false,
+      streaming: false,
+      gatewayProbe: 'missing',
+    });
   });
 
   it('is none when unconfigured', () => {

@@ -137,7 +137,7 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'report-frame-state' } ? { ok: true } :
   M extends { type: 'cancel-translations' } ? { ok: true } :
   M extends { type: 'get-frame-states' } ? { frames: FrameStateEntry[] } :
-  M extends { type: 'host-status' } ? { installed: boolean; version?: string; protocol?: number; error?: string; browser?: 'firefox' | 'chromium'; reason?: string } :
+  M extends { type: 'host-status' } ? { installed: boolean; version?: string; protocol?: number; error?: string; browser?: 'firefox' | 'chromium'; reason?: string; probe?: 'unprobed' | 'missing' | 'stale-protocol' | 'ok' } :
   M extends { type: 'get-provider-stats' } ? { stats: Record<string, ProviderStats> } :
   M extends { type: 'get-export-payload' } ? { ok: boolean; entries?: ExportEntry[]; title?: string; url?: string; error?: string } :
   M extends { type: 'ocr-request' } ? OcrResponse :

@@ -27,7 +27,7 @@ import { hashText } from '../shared/utils';
 import type { ExportEntry } from '../messaging/messages';
 import { allocateInlineBudget, collectInlineSegments, renderInlineSegment } from './inline';
 import type { InlineSegmentState, NodeEntry } from './nodeEntry';
-import { ensureStylesFor, renderEntry, removeBilingualBlock } from './renderer';
+import { ensureStylesFor, renderEntry, removeBilingualBlock, removeInjectedShadowStyles } from './renderer';
 import { defaultRuntimeTranslateItems } from './runtimeTranslate';
 import type { TranslateItemsFn } from './runtimeTranslate';
 import { isMenuChrome, scanTranslatableNodesWithRule, sourceTextOf } from './scanner';
@@ -128,6 +128,7 @@ export class PageTranslator {
 
   /** Scan the page and register new candidate nodes. Returns #added. */
   scan(): number {
+    if (this.blacklisted) return 0;
     if (!document.body) return 0;
     const elements = scanTranslatableNodesWithRule(document.body, {
       minTextLength: this.config.minTextLength,
@@ -136,9 +137,10 @@ export class PageTranslator {
     let added = 0;
     for (const el of elements) {
       const existingId = el.getAttribute(DATA_ATTR);
-      if (existingId && this.entries.has(existingId)) continue;
-      const id = existingId ?? `wt-${++this.counter}`;
-      if (!existingId) el.setAttribute(DATA_ATTR, id);
+      const existing = existingId ? this.entries.get(existingId) : undefined;
+      if (existing && existing.el === el) continue;
+      const id = `wt-${++this.counter}`;
+      el.setAttribute(DATA_ATTR, id);
       const text = sourceTextOf(el);
       this.entries.set(id, {
         id,
@@ -294,6 +296,12 @@ export class PageTranslator {
       }
     }
     this.renderAll();
+    for (const entry of this.entries.values()) {
+      entry.el.removeAttribute(DATA_ATTR);
+    }
+    removeInjectedShadowStyles(document);
+    this.entries.clear();
+    this.counter = 0;
     this.report();
   }
 

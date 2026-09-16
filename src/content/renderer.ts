@@ -38,6 +38,30 @@ export function ensureShadowStyle(root: ShadowRoot): void {
   root.prepend(style);
 }
 
+/** Drop style clones we injected into open shadow roots (M-31). */
+export function removeInjectedShadowStyles(root: ParentNode = document): void {
+  const visit = (r: ParentNode): void => {
+    let styles: Element[] = [];
+    try {
+      styles = Array.from(r.querySelectorAll(`style[${SHADOW_STYLE_ATTR}]`));
+    } catch {
+      return;
+    }
+    for (const style of styles) style.remove();
+    let all: Element[] = [];
+    try {
+      all = Array.from(r.querySelectorAll('*'));
+    } catch {
+      return;
+    }
+    for (const el of all) {
+      const shadow = (el as HTMLElement).shadowRoot;
+      if (shadow) visit(shadow);
+    }
+  };
+  visit(root);
+}
+
 /** Ensure styles exist in whichever root the element lives in. */
 export function ensureStylesFor(el: Element): void {
   const root = el.getRootNode();

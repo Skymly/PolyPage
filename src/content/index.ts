@@ -365,7 +365,7 @@ async function init(): Promise<void> {
   }
 
   observer.start();
-  translator.rescan();
+  if (!blacklisted) translator.rescan();
 
   if (contentSettings.autoTranslate && !blacklisted) {
     // Guard (spec 3.0 §8.1 item 3): never auto-translate pages already in

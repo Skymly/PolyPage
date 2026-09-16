@@ -166,6 +166,7 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 - **用户触发优先**：禁止自动转写整页视频；图片 / 扫描页只响应用户点击。
   PDF 阅读器打开后的按页惰性翻译受视口与并发限制。
 - **不破坏原始内容**：不改 PDF 源文件、不改视频源与字幕文件、不写回 SRT/VTT。
+  网页翻译的还原是文本/标记结构级可逆（卸掉译文 chrome 与 `data-wt-id`），不是逐字节 DOM 等价；inline 模式用 `cloneNode` 保存原文，还原不恢复事件监听与框架绑定。
 - **消息协议 v4**（`src/messaging/messages.ts`）：在 v3 上增加 ASR / 扫描页 OCR 等命令；
   旧消息仍可处理。
 - **续译**：任务表记录在途网页/PDF 任务；ASR 不入 3.0 续译表。tab 关闭即清理。

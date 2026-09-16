@@ -27,7 +27,7 @@ import { hashText } from '../shared/utils';
 import type { ExportEntry } from '../messaging/messages';
 import { allocateInlineBudget, collectInlineSegments, renderInlineSegment } from './inline';
 import type { InlineSegmentState, NodeEntry } from './nodeEntry';
-import { ensureStylesFor, renderEntry } from './renderer';
+import { ensureStylesFor, renderEntry, removeBilingualBlock } from './renderer';
 import { defaultRuntimeTranslateItems } from './runtimeTranslate';
 import type { TranslateItemsFn } from './runtimeTranslate';
 import { isMenuChrome, scanTranslatableNodesWithRule, sourceTextOf } from './scanner';
@@ -646,7 +646,7 @@ export class PageTranslator {
       entry.originalNodes = null;
       entry.inlineSegments = null;
       entry.inlineDegraded = false;
-      entry.bilingualEl = null;
+      removeBilingualBlock(entry);
       entry.translated = null;
       entry.error = null;
       entry.status = 'idle';
@@ -686,7 +686,7 @@ export class PageTranslator {
   private renderAll(): void {
     for (const [id, entry] of this.entries) {
       if (!entry.el.isConnected) {
-        entry.bilingualEl = null;
+        removeBilingualBlock(entry);
         this.entries.delete(id);
         continue;
       }

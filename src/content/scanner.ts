@@ -23,6 +23,8 @@
 import {
   BILINGUAL_CLASS,
   CANDIDATE_SELECTOR,
+  INLINE_DST_CLASS,
+  INLINE_SRC_CLASS,
   NAV_CHROME_SELECTOR,
   NAV_MIN_TEXT_LENGTH,
   NAV_TRANSLATION_CLASS,
@@ -109,15 +111,32 @@ export function isMenuChrome(el: Element): boolean {
   return elementMatchesWithin(el, NAV_CHROME_SELECTOR);
 }
 
-/** Original label text, ignoring our inserted translation suffixes. */
+/**
+ * Subtrees whose text is ours, not the page original (nav suffix, bilingual
+ * block, inline destination). `wt-inline-src` is *not* included: it wraps
+ * the original text nodes and must still be read.
+ */
+export function isTranslationTextChrome(el: Element): boolean {
+  return (
+    el.classList.contains(NAV_TRANSLATION_CLASS) ||
+    el.classList.contains(BILINGUAL_CLASS) ||
+    el.classList.contains(INLINE_DST_CLASS)
+  );
+}
+
+/**
+ * Nodes we inserted into the page. Shared by `sourceTextOf` (text chrome) and
+ * the content-script `isOwnNode` filter (also the inline source wrapper).
+ */
+export function isInsertedOwnElement(el: Element): boolean {
+  return isTranslationTextChrome(el) || el.classList.contains(INLINE_SRC_CLASS);
+}
+
+/** Original label text, ignoring inserted translation chrome. */
 export function sourceTextOf(el: HTMLElement): string {
   const parts: string[] = [];
   const walk = (node: Node): void => {
-    if (node instanceof HTMLElement) {
-      if (node.classList.contains(NAV_TRANSLATION_CLASS) || node.classList.contains(BILINGUAL_CLASS)) {
-        return;
-      }
-    }
+    if (node instanceof Element && isTranslationTextChrome(node)) return;
     if (node.nodeType === Node.TEXT_NODE) {
       parts.push(node.textContent ?? '');
       return;

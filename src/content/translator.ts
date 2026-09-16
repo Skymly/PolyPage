@@ -629,6 +629,12 @@ export class PageTranslator {
    * Detect entries whose element text changed under us (virtual scroll
    * recycling) and reset them for re-translation (spec 2.0 §6.3).
    * Returns true when anything changed.
+   *
+   * Comparison uses `sourceTextOf`, which strips translation chrome, so
+   * inline destination / bilingual / nav suffixes never look like a recycle.
+   * We do not `restoreOriginal` before comparing: the page already replaced
+   * recycled virtual-list nodes, and restoring the stale clone would clobber
+   * the new content.
    */
   detectRecycledNodes(): boolean {
     let changed = false;

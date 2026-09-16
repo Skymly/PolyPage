@@ -449,6 +449,33 @@ async function fetchJson(url) {
   return res.json();
 }
 
+function truncateExpr(expression, max = 240) {
+  const oneLine = String(expression).replace(/\s+/g, ' ').trim();
+  return oneLine.length <= max ? `${oneLine}` : `${oneLine.slice(0, max)}…`;
+}
+
+async function captureSmokeScreenshot() {
+  const dir = path.join(os.tmpdir(), 'polypage-smoke-diagnostics');
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `crash-${Date.now()}.png`);
+  try {
+    const targets = await fetchJson('http://127.0.0.1:9222/json');
+    const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+    if (!page) return null;
+    const client = await CDP.connect(page.webSocketDebuggerUrl);
+    try {
+      const { data } = await client.send('Page.captureScreenshot', { format: 'png' }, 8000);
+      if (!data) return null;
+      writeFileSync(file, Buffer.from(data, 'base64'));
+      return file;
+    } finally {
+      client.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 class CDP {
   constructor(ws) {
     this.ws = ws;
@@ -481,19 +508,32 @@ class CDP {
       setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
-          reject(new Error(`CDP timeout: ${method}`));
+          const expr =
+            typeof params?.expression === 'string' ? ` expr=${truncateExpr(params.expression)}` : '';
+          reject(new Error(`CDP timeout: ${method}${expr}`));
         }
       }, timeoutMs);
     });
   }
   async eval(expression, timeoutMs = 20000) {
-    const { result, exceptionDetails } = await this.send(
-      'Runtime.evaluate',
-      { expression, awaitPromise: true, returnByValue: true },
-      timeoutMs,
-    );
-    if (exceptionDetails) throw new Error(`evaluate failed: ${JSON.stringify(exceptionDetails)}`);
-    return result?.value;
+    try {
+      const { result, exceptionDetails } = await this.send(
+        'Runtime.evaluate',
+        { expression, awaitPromise: true, returnByValue: true },
+        timeoutMs,
+      );
+      if (exceptionDetails) {
+        throw new Error(
+          `evaluate failed: ${JSON.stringify(exceptionDetails)}\n  expression: ${truncateExpr(expression, 400)}`,
+        );
+      }
+      return result?.value;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('\n  expression:')) throw e;
+      const err = new Error(`${msg}\n  expression: ${truncateExpr(expression, 400)}`);
+      throw err;
+    }
   }
   close() {
     try {
@@ -723,7 +763,9 @@ const browser = spawn(BROWSER, browserArgs, {
 
 let failures = 0;
 let passed = 0;
+let lastCheckName = '(none yet)';
 function check(name, cond, detail = '') {
+  lastCheckName = name;
   if (cond) {
     passed++;
     console.log(`  PASS  ${name}`);
@@ -2238,7 +2280,10 @@ try {
   }
 } catch (e) {
   failures++;
-  console.log(`  FAIL  smoke test crashed — ${e.message}`);
+  console.log(`  FAIL  smoke test crashed — ${e instanceof Error ? e.message : e}`);
+  console.log(`         last assertion: ${lastCheckName}`);
+  const shot = await captureSmokeScreenshot();
+  console.log(`         screenshot: ${shot ?? '(unavailable)'}`);
 } finally {
   killTree(browser);
   pageServer.close();

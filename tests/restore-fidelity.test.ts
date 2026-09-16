@@ -183,3 +183,41 @@ describe('bilingual block teardown (M-12)', () => {
     expect(root.querySelector(`.${BILINGUAL_CLASS}`)).toBeNull();
   });
 });
+
+describe('setMode inline restores first (M-13)', () => {
+  it('bilingual → inline removes the bilingual sibling and keeps original in src', async () => {
+    const root = mountArticle();
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('bilingual');
+    expect(root.querySelector(`.${BILINGUAL_CLASS}`)).not.toBeNull();
+    await translator.setMode('inline');
+    expect(root.querySelector(`.${BILINGUAL_CLASS}`)).toBeNull();
+    const p = document.getElementById('p1') as HTMLElement;
+    expect(p.querySelector(`.${INLINE_SRC_CLASS}`)?.textContent).toBe(ORIGINAL);
+    expect(p.querySelector(`.${INLINE_DST_CLASS}`)?.textContent).toBe(TRANSLATED);
+  });
+
+  it('translated → inline wraps the original, not the translation (M-13)', async () => {
+    mountArticle();
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('translated');
+    expect(document.getElementById('p1')?.textContent).toBe(TRANSLATED);
+    await translator.setMode('inline');
+    const p = document.getElementById('p1') as HTMLElement;
+    expect(p.querySelector(`.${INLINE_SRC_CLASS}`)?.textContent).toBe(ORIGINAL);
+    expect(p.querySelector(`.${INLINE_DST_CLASS}`)?.textContent).toBe(TRANSLATED);
+    expect(p.textContent).not.toContain(`译:${TRANSLATED}`);
+  });
+
+  it('li bilingual → inline does not re-translate the inner block (M-13)', async () => {
+    document.body.innerHTML = `<ul id="root"><li id="item">${ORIGINAL}</li></ul>`;
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('bilingual');
+    const li = document.getElementById('item') as HTMLElement;
+    expect(li.querySelector(`.${BILINGUAL_CLASS}`)).not.toBeNull();
+    await translator.setMode('inline');
+    expect(li.querySelector(`.${BILINGUAL_CLASS}`)).toBeNull();
+    expect(li.querySelector(`.${INLINE_SRC_CLASS}`)?.textContent).toBe(ORIGINAL);
+    expect(li.querySelector(`.${INLINE_DST_CLASS}`)?.textContent).toBe(TRANSLATED);
+  });
+});

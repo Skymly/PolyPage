@@ -382,6 +382,13 @@ export class PageTranslator {
   private async translateInline(): Promise<void> {
     this._mode = 'inline';
 
+    // Leave bilingual/translated chrome before collecting segments; otherwise
+    // afterend blocks stay, and INSERT_INSIDE tags re-translate the block.
+    for (const entry of this.entries.values()) {
+      if (entry.inlineSegments) continue;
+      renderEntry(entry, null);
+    }
+
     // Phase 1: compute segments for entries not yet segmented.
     const pendingEntries: { entry: NodeEntry; segments: ReturnType<typeof collectInlineSegments> }[] = [];
     for (const entry of this.entries.values()) {

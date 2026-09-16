@@ -2241,6 +2241,64 @@ try {
     resumeBlocks.length >= 4 && resumeBlocks.every((t) => t.includes('[slow]')),
     JSON.stringify(resumeBlocks),
   );
+
+  /* PDF viewer resume (M-03): extension pages have no content script. */
+  const pdfResumeSrc = `http://127.0.0.1:${PORT_PAGE}/sample.pdf`;
+  const pdfResumeUrl = `chrome-extension://${extensionId}/viewer/pdf-viewer.html?src=${encodeURIComponent(pdfResumeSrc)}`;
+  await openPage(browserCdp, pdfResumeUrl);
+  const pdfResumeClient = await pageFor(pdfResumeUrl);
+  await sleep(800);
+  await pdfResumeClient.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  let sawPending = false;
+  for (let i = 0; i < 40; i++) {
+    const texts = await pdfResumeClient.eval(
+      `[...document.querySelectorAll('.para .dst')].map((d) => d.textContent)`,
+    );
+    if (texts.some((t) => typeof t === 'string' && t.includes('翻译中'))) {
+      sawPending = true;
+      break;
+    }
+    await sleep(250);
+  }
+  check('PDF resume: paragraphs in-flight before SW kill', sawPending === true);
+  const targetsBeforePdfKill = await fetchJson('http://127.0.0.1:9222/json');
+  const swPdf = targetsBeforePdfKill.find(
+    (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
+  );
+  if (swPdf) {
+    await browserCdp.send('Target.closeTarget', { targetId: swPdf.id });
+  }
+  await sleep(900);
+  let swPdfUp = false;
+  for (let i = 0; i < 25 && !swPdfUp; i++) {
+    try {
+      const r = await ext.eval(
+        `chrome.runtime.sendMessage({ type: 'get-cache-stats' }).then(() => 'up').catch(() => 'down')`,
+        4000,
+      );
+      swPdfUp = r === 'up';
+    } catch {
+      swPdfUp = false;
+    }
+    if (!swPdfUp) await sleep(400);
+  }
+  check('PDF resume: service worker reachable after kill', swPdfUp === true);
+  let pdfResumeDst = [];
+  for (let i = 0; i < 50; i++) {
+    pdfResumeDst = await pdfResumeClient.eval(
+      `[...document.querySelectorAll('.para .dst')].map((d) => d.textContent)`,
+    );
+    if (pdfResumeDst.filter((t) => typeof t === 'string' && t.includes('[slow]')).length >= 4) break;
+    await sleep(500);
+  }
+  check(
+    'PDF resume: in-flight paragraphs recovered after SW restart',
+    pdfResumeDst.filter((t) => typeof t === 'string' && t.includes('[slow]')).length >= 4,
+    JSON.stringify(pdfResumeDst),
+  );
+  await closePage(browserCdp, pdfResumeUrl);
+  pdfResumeClient.close();
+
   await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:restore' }`), 5000);
   check('settings restored after resume test', await saveSettingsThroughExtension(settingsPayload({})));
 

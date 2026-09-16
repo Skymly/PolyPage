@@ -4,6 +4,9 @@
  * Two channels:
  *  - RuntimeMessage: chrome.runtime.sendMessage (content/popup/options -> background)
  *  - TabCommand:     chrome.tabs.sendMessage   (background/popup -> content script)
+ *  - Viewer resume:  chrome.runtime.sendMessage type viewer:resume-inflight
+ *    (background -> PDF reader extension page; tabs.sendMessage cannot reach it)
+
  *
  * 2.0 (protocol v2, spec 2.0 §9.2):
  *  - every message carries v: 2 (absent means v1, handled compatibly);
@@ -54,7 +57,7 @@ export const PROTOCOL_VERSION = 6;
 /* --------------------------- content -> background --------------------------- */
 
 export type RuntimeMessage =
-  | { type: 'translate'; v?: number; items: TranslationItem[]; domain?: string; pageLanguage?: string | null }
+  | { type: 'translate'; v?: number; items: TranslationItem[]; domain?: string; pageLanguage?: string | null; tabId?: number }
   | { type: 'translate-selection'; v?: number; text: string; domain?: string }
   /** 3.0: low-latency single-text path for subtitle cues (no batch window). */
   | { type: 'translate-cue'; v?: number; text: string; domain?: string }
@@ -110,7 +113,9 @@ export type RuntimeMessage =
   | { type: 'tm-stats'; v?: number }
   | { type: 'ocr-pack-download'; v?: number; lang: string }
   | { type: 'ocr-pack-progress'; v?: number }
-  | { type: 'ocr-pack-remove'; v?: number; lang: string };
+  | { type: 'ocr-pack-remove'; v?: number; lang: string }
+  /** 3.0 H / M-03: PDF viewer pulls persisted inflight after it has pages. */
+  | { type: 'get-inflight'; v?: number; tabId?: number };
 
 export type OcrResponse =
   | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string }
@@ -151,6 +156,7 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'ocr-pack-download' } ? { ok: boolean; error?: string } :
   M extends { type: 'ocr-pack-progress' } ? { packs: Array<{ id: string; name: string; bytes: number; status: string; received?: number; error?: string; bundled?: boolean }> } :
   M extends { type: 'ocr-pack-remove' } ? { ok: boolean; error?: string } :
+  M extends { type: 'get-inflight' } ? { tasks: Array<{ key: string; textHash: string }> } :
   never;
 
 export type AsrResponse =
@@ -229,6 +235,30 @@ export type TabCommandResponse<C extends TabCommand> =
   C extends { type: 'wt:open-pdf-viewer' } ? { ok: true; url: string } :
   C extends { type: 'wt:transcribe-media' } ? { ok: boolean; skipped?: string; error?: string } :
   { ok: true };
+
+/** SW → PDF viewer extension page (not a content script). */
+export const VIEWER_RESUME_TYPE = 'viewer:resume-inflight' as const;
+
+export function sendViewerResume(
+  tabId: number,
+  tasks: Array<{ key: string; textHash: string }>,
+): Promise<{ ok: true }> {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(
+        { v: PROTOCOL_VERSION, type: VIEWER_RESUME_TYPE, tabId, tasks },
+        (response: { ok?: boolean } | undefined) => {
+          const err = chrome.runtime.lastError;
+          if (err) reject(new Error(err.message ?? 'viewer resume failed'));
+          else if (response?.ok !== true) reject(new Error('viewer resume not accepted'));
+          else resolve({ ok: true });
+        },
+      );
+    } catch (e) {
+      reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  });
+}
 
 export function sendTabCommand<C extends TabCommand>(
   tabId: number,

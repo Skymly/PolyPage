@@ -23,7 +23,8 @@
  *  - language detection helper + auto source-language fill-in (pillar H);
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
-import { sendTabCommand } from '../messaging/messages';
+import { sendTabCommand, sendViewerResume } from '../messaging/messages';
+import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
 import { computeOcrAvailable, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
@@ -512,16 +513,25 @@ async function recoverInflightTasks(): Promise<void> {
       byTab.set(rec.tabId, list);
     }
     for (const [tabId, records] of byTab) {
+      let tabExists = false;
+      let delivered = false;
       try {
         const tab = await chrome.tabs.get(tabId); // throws when the tab is gone
+        tabExists = true;
         const tasks = resumePayloadForTab(records, tab.url);
-        if (tasks.length > 0) {
+        if (tasks.length === 0) {
+          delivered = true;
+        } else if (isExtensionViewerUrl(tab.url)) {
+          await sendViewerResume(tabId, tasks);
+          delivered = true;
+        } else {
           await sendTabCommand(tabId, { type: 'wt:resume-inflight', tasks });
+          delivered = true;
         }
       } catch {
-        // Tab closed or content script absent — drop the records.
+        // Tab closed or receiver absent — keep records when the tab still exists.
       }
-      await taskTable.removeTab(tabId);
+      await settleInflightAfterAttempt(tabExists, delivered, () => taskTable.removeTab(tabId));
     }
   } catch {
     /* IndexedDB unavailable; resume is best-effort */
@@ -628,7 +638,7 @@ chrome.runtime.onMessage.addListener(
               await handleTranslate(
                 message.items,
                 message.domain,
-                sender.tab?.id,
+                tabIdForTranslate(message.tabId, sender.tab?.id),
                 sender.frameId,
                 message.pageLanguage,
               ),
@@ -964,6 +974,27 @@ chrome.runtime.onMessage.addListener(
           case 'asr-cancel': {
             asrControllers.get(message.requestId)?.abort();
             sendResponse({ ok: true });
+            break;
+          }
+          case 'get-inflight': {
+            const tabId = tabIdForTranslate(message.tabId, sender.tab?.id);
+            if (tabId === undefined) {
+              sendResponse({ tasks: [] });
+              break;
+            }
+            const inflight = await taskTable.listInflight();
+            const mine = inflight.filter((r) => r.tabId === tabId);
+            let url: string | undefined;
+            try {
+              url = (await chrome.tabs.get(tabId)).url;
+            } catch {
+              await taskTable.removeTab(tabId);
+              sendResponse({ tasks: [] });
+              break;
+            }
+            const tasks = resumePayloadForTab(mine, url);
+            sendResponse({ tasks });
+            if (tasks.length > 0) await taskTable.removeTab(tabId);
             break;
           }
           default:

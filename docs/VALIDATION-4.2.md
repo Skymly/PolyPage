@@ -47,7 +47,7 @@ FIREFOX GATEWAY CHECK: connectNative ping + translate OK
 
 ## 4. 支柱 R：流式 / 覆盖 / 版面
 
-- [x] `transcribeStream` 仅在 Provider 实现该方法且 `asr.streaming === true` 时注入 `wt:asr-partial`；否则与 4.1 一次转写完全一致
+- [x] 无 Provider 实现 `transcribeStream`。Options 已隐藏 `asr.streaming` 开关（保存恒为 false）；转写保持 4.1 一次注入，不提供流式 cue
 - [x] 图片原位覆盖：滚动 / resize / visualViewport 后按 `getBoundingClientRect` rAF 合批重算；`wt:restore` 与关开关卸层
 - [x] PDF 表格夹具：`layoutPreset=table` 时表头单元格不与左右栏串段（`cellBreak`）
 

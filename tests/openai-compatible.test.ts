@@ -7,6 +7,7 @@ import { createProvider } from '../src/providers/provider';
 import type { ProviderConfig } from '../src/shared/types';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -97,5 +98,40 @@ describe('openai-compatible translateStream', () => {
     );
     expect(deltas.join('')).toBe('你好');
     expect(full).toBe('你好');
+  });
+});
+
+describe('openai-compatible transcribe timeout (M-73)', () => {
+  it('does not retry a whole-file transcribe and waits past the text timeout', async () => {
+    vi.useFakeTimers();
+    let fetches = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        fetches += 1;
+        return new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+        });
+      }),
+    );
+    const provider = createProvider(config({ supportsAsr: true, timeoutMs: 5_000 }));
+    const pending = provider.transcribe!(
+      { mime: 'audio/webm', bytes: new Uint8Array([1, 2, 3]) },
+      { ...ctx, languageHint: 'en' },
+      new AbortController().signal,
+    );
+    const rejected = expect(pending).rejects.toMatchObject({ kind: 'timeout' });
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(fetches).toBe(1);
+    await vi.advanceTimersByTimeAsync(200_000);
+    await rejected;
+    expect(fetches).toBe(1);
   });
 });

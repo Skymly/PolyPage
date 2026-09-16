@@ -11,7 +11,7 @@
  * to try the fallback provider (spec 2.0 §5.6).
  */
 import type { ProviderConfig } from '../shared/types';
-import { DEFAULT_NATIVE_HOST_NAME } from '../shared/constants';
+import { asrRequestTimeoutMs, DEFAULT_NATIVE_HOST_NAME } from '../shared/constants';
 import { deniedNativeHostMessage, isAllowedNativeHostName } from '../shared/nativeHostName';
 import type { GatewayCapabilities } from '../shared/nativeRpc';
 import { nativeNotify, nativeRequest } from '../background/nativePort';
@@ -170,6 +170,7 @@ export class NativeHostProvider implements TranslationProvider {
         ...this.baseParams(ctx),
       },
       signal,
+      asrRequestTimeoutMs(this.config.timeoutMs),
     );
     const text = typeof result?.text === 'string' ? result.text : '';
     const segments = Array.isArray(result?.segments)
@@ -203,7 +204,12 @@ export class NativeHostProvider implements TranslationProvider {
     return transferId;
   }
 
-  private async rpc<T>(method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<T> {
+  private async rpc<T>(
+    method: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+    timeoutMs = this.config.timeoutMs,
+  ): Promise<T> {
     let requestId = 0;
     const onAbort = () => {
       if (requestId > 0) nativeNotify(this.hostName, 'cancel', { id: requestId });
@@ -211,7 +217,7 @@ export class NativeHostProvider implements TranslationProvider {
     signal.addEventListener('abort', onAbort);
     try {
       return await nativeRequest<T>(this.hostName, method, params, {
-        timeoutMs: this.config.timeoutMs,
+        timeoutMs,
         onId: (id) => {
           requestId = id;
           if (signal.aborted) onAbort();

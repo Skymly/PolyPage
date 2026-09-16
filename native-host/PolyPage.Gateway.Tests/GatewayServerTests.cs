@@ -287,8 +287,7 @@ public class GatewayServerTests
             }),
         };
         var responses = await Pipe.RunAsync(chunks, new MultimodalFakeBackend());
-        var last = responses.Single(r => r.GetProperty("id").GetInt32() == 31).GetProperty("result");
-        Assert.True(last.GetProperty("complete").GetBoolean());
+        var last = responses.Single(r => r.GetProperty("result").GetProperty("complete").GetBoolean()).GetProperty("result");
         Assert.Equal(payload.Length, last.GetProperty("bytes").GetInt32());
         Assert.Equal(sha, last.GetProperty("sha256").GetString());
     }

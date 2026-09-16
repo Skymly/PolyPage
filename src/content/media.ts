@@ -462,6 +462,28 @@ export class SubtitleManager {
   }
 }
 
+/** Reject whole-file fetch fallback (M-11): it ignores the confirmed window. */
+export function rejectWholeFileFallback(cause: unknown): { ok: false; error: string } {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return {
+    ok: false,
+    error: `无法采集当前窗口（${detail}）。已拒绝下载整段文件，请改用可采集音轨的播放器。`,
+  };
+}
+
+/** Always call sendResponse, including when the command promise rejects (M-11). */
+export function settleTabResponse(
+  work: Promise<unknown>,
+  sendResponse: (value: unknown) => void,
+): void {
+  void work.then(sendResponse, (error) => {
+    sendResponse({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 export function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.message === '请求已取消');
 }

@@ -24,6 +24,7 @@ import type {
 } from '../shared/types';
 import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
 import { normalizeSettings, redactSettings, validateImportedSettings } from '../storage/settings';
+import { ensureSelectOption } from './providerTypeSelect';
 import { feedbackToCsv, feedbackToJson } from '../storage/feedback';
 import { minimaxHostHint } from '../shared/sanitize';
 import { renderErrorLogEntry, renderFeedbackLogHead } from './logDom';
@@ -489,7 +490,9 @@ function renderEditor(): void {
   $<HTMLElement>('editor-title').textContent = `编辑：${provider.name}`;
 
   $<HTMLInputElement>('f-name').value = provider.name;
-  $<HTMLSelectElement>('f-type').value = provider.type;
+  const typeSelect = $<HTMLSelectElement>('f-type');
+  ensureSelectOption(typeSelect, provider.type, `${provider.type}（未知，保留）`);
+  typeSelect.value = provider.type;
   $<HTMLInputElement>('f-baseurl').value = provider.baseUrl;
   $<HTMLInputElement>('f-apikey').value = provider.apiKey;
   $<HTMLInputElement>('f-model').value = provider.model;

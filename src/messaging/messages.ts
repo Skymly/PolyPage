@@ -260,17 +260,27 @@ export function sendViewerResume(
   });
 }
 
+/** Top frame only — media commands must not fan out under all_frames (M-51). */
+export const MEDIA_COMMAND_FRAME_ID = 0;
+
 export function sendTabCommand<C extends TabCommand>(
   tabId: number,
   command: C,
+  options?: { frameId?: number },
 ): Promise<TabCommandResponse<C>> {
   return new Promise((resolve, reject) => {
     try {
-      chrome.tabs.sendMessage(tabId, { v: PROTOCOL_VERSION, ...command }, (response) => {
+      const payload = { v: PROTOCOL_VERSION, ...command };
+      const reply = (response: TabCommandResponse<C>): void => {
         const err = chrome.runtime.lastError;
         if (err) reject(new Error(err.message ?? 'tab message failed'));
-        else resolve(response as TabCommandResponse<C>);
-      });
+        else resolve(response);
+      };
+      if (options?.frameId !== undefined) {
+        chrome.tabs.sendMessage(tabId, payload, { frameId: options.frameId }, reply);
+      } else {
+        chrome.tabs.sendMessage(tabId, payload, reply);
+      }
     } catch (e) {
       reject(e instanceof Error ? e : new Error(String(e)));
     }

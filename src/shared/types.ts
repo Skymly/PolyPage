@@ -436,6 +436,8 @@ export interface ContentSettings {
   asrStreaming: boolean;
   /** Active provider can stream text translation (hover). */
   streamingSupported: boolean;
+  /** Top-level tab hostname from sender.tab.url (M-51 cross-origin blacklist). */
+  tabHostname?: string;
 }
 
 /** Per-provider sliding-window stats (in-memory only, spec 2.0 §8.3). */

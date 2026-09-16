@@ -3,6 +3,7 @@
  * Wraps the pure matching logic from shared/siteRules with hostname access.
  */
 import { matchRulesForHost, mergeEffectiveRules } from '../shared/siteRules';
+export { hostnameFromUrl, resolveBlacklistHost } from '../shared/siteRules';
 import type { EffectiveRule, SiteRule } from '../shared/types';
 
 /** Resolve the effective rule for a hostname (enabled rules only). */
@@ -15,10 +16,9 @@ export function effectiveRuleForHost(hostname: string, rules: SiteRule[]): Effec
 }
 
 /**
- * Blacklist check (1.0 semantics, kept here for reuse by frames):
- * a frame that cannot read the top hostname (cross-origin) is not
- * blacklisted on its own — the top frame enforces the blacklist
- * (spec 2.0 §6.2 item 7).
+ * Blacklist check. Cross-origin iframes cannot read window.top; they
+ * must use resolveBlacklistHost(topLevelHostname(), tabHostname) so an
+ * empty top host still matches the tab URL (M-51).
  */
 export function hostBlacklisted(hostname: string, blacklist: string[]): boolean {
   const host = hostname.toLowerCase();

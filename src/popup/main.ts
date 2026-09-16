@@ -6,7 +6,7 @@
  *  - selection-translate toggle (spec 2.0 §7.1);
  *  - bilingual export HTML/Markdown (spec 2.0 §7.5).
  */
-import { sendRuntime, sendTabCommand } from '../messaging/messages';
+import { MEDIA_COMMAND_FRAME_ID, sendRuntime, sendTabCommand } from '../messaging/messages';
 import type { ExportEntry } from '../messaging/messages';
 import type { DisplayMode, FrameStateEntry, PageState } from '../shared/types';
 import { normalizeSettings } from '../storage/settings';
@@ -401,13 +401,13 @@ async function main(): Promise<void> {
   });
   $<HTMLButtonElement>('btn-toggle-subtitles').addEventListener('click', () => {
     if (activeTabId === null) return;
-    void sendTabCommand(activeTabId, { type: 'wt:toggle-subtitles' })
+    void sendTabCommand(activeTabId, { type: 'wt:toggle-subtitles' }, { frameId: MEDIA_COMMAND_FRAME_ID })
       .then(() => setTimeout(() => void refresh(), 250))
       .catch(() => undefined);
   });
   $<HTMLButtonElement>('btn-transcribe').addEventListener('click', () => {
     if (activeTabId === null) return;
-    void sendTabCommand(activeTabId, { type: 'wt:transcribe-media' })
+    void sendTabCommand(activeTabId, { type: 'wt:transcribe-media' }, { frameId: MEDIA_COMMAND_FRAME_ID })
       .then(() => setTimeout(() => void refresh(), 400))
       .catch(() => undefined);
   });

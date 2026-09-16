@@ -6,6 +6,7 @@ import { providerSupportsAsr, providerSupportsAsrStreaming } from '../providers/
 import { segmentTranscript } from './segment';
 import type { AsrSegment } from './segment';
 
+/** Test / capability helper. Production probes via providerSupportsAsr (M-88). */
 export function asrAvailable(provider: TranslationProvider | null | undefined): boolean {
   return !!provider && providerSupportsAsr(provider);
 }

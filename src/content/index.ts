@@ -29,6 +29,7 @@ import {
   captureMediaWindow,
   isAbortError,
   rejectWholeFileFallback,
+  resolveCaptureDuration,
   settleTabResponse,
 } from './media';
 import { bytesToBase64 } from '../shared/binaryChunk';
@@ -143,6 +144,7 @@ function pageMatchesTargetLanguage(): boolean {
   return base === pageLanguage.toLowerCase();
 }
 
+/** force is only sent by the popup / tests — there is no page-script sender (M-88). */
 async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; skipped?: string; error?: string }> {
   if (!contentSettings?.asrEnabled) return { ok: false, error: '语音转写已关闭' };
   if (!contentSettings.asrSupported) return { ok: false, error: '当前翻译服务不支持转写' };
@@ -159,17 +161,18 @@ async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; ski
   if (!media) return { ok: false, error: '没有可转写的无字幕媒体' };
   subtitleManager.pinAsrTarget(media);
   const maxSeconds = contentSettings.asrMaxSeconds ?? 90;
-  const remaining =
-    Number.isFinite(media.duration) && media.duration > 0
-      ? Math.max(0, media.duration - (media.currentTime || 0))
-      : maxSeconds;
-  let duration = Math.min(maxSeconds, remaining || maxSeconds);
-  if ((contentSettings.asrConfirmFull ?? true) && remaining > maxSeconds) {
-    const full = window.confirm(
-      `默认只转写 ${maxSeconds} 秒。整段约 ${Math.round(remaining)} 秒将上传到当前 Provider 或本地网关。确定转写整段，取消则只转写 ${maxSeconds} 秒。`,
-    );
-    if (full) duration = remaining;
-  }
+  const resolved = resolveCaptureDuration({
+    mediaDuration: media.duration,
+    currentTime: media.currentTime || 0,
+    maxSeconds,
+    confirmFull: contentSettings.asrConfirmFull ?? true,
+    confirmFullNow: (remaining) =>
+      window.confirm(
+        `默认只转写 ${maxSeconds} 秒。整段约 ${Math.round(remaining)} 秒将上传到当前 Provider 或本地网关。确定转写整段，取消则只转写 ${maxSeconds} 秒。`,
+      ),
+  });
+  if (resolved.ended || resolved.duration <= 0) return { ok: false, error: '媒体已播放完毕' };
+  const duration = resolved.duration;
   const { requestId, signal } = asrSession.start();
   const onHide = (): void => {
     asrSession.abort();

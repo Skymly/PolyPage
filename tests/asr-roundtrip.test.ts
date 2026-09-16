@@ -77,7 +77,10 @@ describe('AsrRoundTrip', () => {
     });
     const res = await trip.transcribeAndTranslate(input);
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.cues[0]).toMatchObject({ text: 'Hi.', translation: '' });
+    if (res.ok) {
+      expect(res.cues[0].text).toBe('Hi.');
+      expect(res.cues[0].translation).toBeUndefined();
+    }
   });
 
   it('does not failover a transcribe network error', async () => {

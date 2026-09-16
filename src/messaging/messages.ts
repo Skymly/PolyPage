@@ -162,7 +162,7 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
 export type AsrResponse =
   | {
       ok: true;
-      cues: Array<{ start: number; end: number; text: string; translation: string }>;
+      cues: Array<{ start: number; end: number; text: string; translation?: string }>;
     }
   | { ok: false; kind: string; error: string };
 

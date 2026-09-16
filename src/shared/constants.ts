@@ -65,6 +65,16 @@ export const SKIP_TAGS = new Set([
   'AUDIO',
   'TEMPLATE',
   'OPTION',
+  'MATH',
+]);
+
+/** Formula hosts that are not SKIP_TAGS but must not be sent to translation. */
+export const SKIP_MATH_CLASSES = new Set([
+  'katex',
+  'katex-display',
+  'MathJax',
+  'MathJax_Display',
+  'mjx-container',
 ]);
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a professional translation engine.

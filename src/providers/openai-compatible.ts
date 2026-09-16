@@ -71,6 +71,9 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     signal: AbortSignal,
   ): Promise<string> {
     const { config } = this;
+    if (config.supportsStreaming === false) {
+      throw new ProviderError('config', '当前翻译服务未开启流式翻译');
+    }
     if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
       throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
     }
@@ -194,6 +197,9 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     signal: AbortSignal,
   ): Promise<string> {
     const { config } = this;
+    if (config.supportsVision !== true) {
+      throw new ProviderError('config', '当前翻译服务未开启视觉翻译');
+    }
     if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
       throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
     }
@@ -246,6 +252,9 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     signal: AbortSignal,
   ): Promise<{ text: string; segments?: Array<{ start: number; end: number; text: string }> }> {
     const { config } = this;
+    if (config.supportsAsr !== true) {
+      throw new ProviderError('config', '当前翻译服务未开启转写');
+    }
     if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
       throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
     }

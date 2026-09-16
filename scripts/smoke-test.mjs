@@ -811,6 +811,9 @@ function providerOpenAi(id, name, baseUrl) {
     maxTokens: 4096,
     headers: {},
     enabled: true,
+    supportsVision: true,
+    supportsAsr: true,
+    supportsStreaming: true,
   };
 }
 

@@ -376,6 +376,11 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
     provider.backend = str(r.backend);
     provider.fallbackProviderId = str(r.fallbackProviderId);
   }
+  if (type === 'openai-compatible') {
+    provider.supportsVision = r.supportsVision === true;
+    provider.supportsAsr = r.supportsAsr === true;
+    provider.supportsStreaming = r.supportsStreaming !== false;
+  }
   return provider;
 }
 

@@ -67,6 +67,7 @@ describe('AsrRoundTrip waits for onPartial (M-50)', () => {
       apiKey: 'k',
       sourceLanguage: 'English',
       targetLanguage: '简体中文',
+      supportsAsr: true,
     };
   }
 

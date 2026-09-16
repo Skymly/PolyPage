@@ -22,6 +22,11 @@ import {
 } from './subtitleStyle';
 import type { SubtitleStyleConfig } from './subtitleStyle';
 
+/** Mount the self-drawn layer inside native fullscreen when possible (M-32). */
+export function subtitleLayerParent(): Element {
+  return document.fullscreenElement ?? document.documentElement;
+}
+
 const SUB_CSS = `
 :host { all: initial; }
 .wt-sub-box {
@@ -160,8 +165,23 @@ class VideoSubtitleController {
     const box = document.createElement('div');
     box.className = 'wt-sub-box';
     shadow.append(style, box);
-    document.documentElement.appendChild(host);
+    subtitleLayerParent().appendChild(host);
     this.cueHost = { host, box };
+  }
+
+  syncLayerParent(): void {
+    if (!this.cueHost) return;
+    const parent = subtitleLayerParent();
+    if (this.cueHost.host.parentElement !== parent) parent.appendChild(this.cueHost.host);
+  }
+
+  /** PiP cannot show our overlay; restore native tracks while the video is in PiP. */
+  setPictureInPicture(active: boolean): void {
+    if (this.savedModes.length === 0) return;
+    for (const { track, mode } of this.savedModes) {
+      track.mode = active ? (mode === 'hidden' || mode === 'disabled' ? 'showing' : mode) : 'hidden';
+    }
+    if (this.cueHost) this.cueHost.host.style.display = active ? 'none' : '';
   }
 
   /** Position the fixed layer over the video's bottom area. */
@@ -289,6 +309,7 @@ export class SubtitleManager {
   private replaced = new Map<Element, string>();
   private selectors: string[] = [];
   private wired = false;
+  private pipWired = new Set<HTMLVideoElement>();
 
   configure(style: SubtitleStyleConfig): void {
     this.style = { ...style };
@@ -314,6 +335,23 @@ export class SubtitleManager {
       },
       true,
     );
+    document.addEventListener('fullscreenchange', () => this.syncPresentation());
+  }
+
+  syncPresentation(): void {
+    this.wireInteraction();
+    for (const controller of this.controllers.values()) {
+      controller.syncLayerParent();
+    }
+    for (const video of this.videos()) {
+      const pip = document.pictureInPictureElement === video;
+      this.controllerFor(video).setPictureInPicture(pip);
+      if (!this.pipWired.has(video)) {
+        this.pipWired.add(video);
+        video.addEventListener('enterpictureinpicture', () => this.syncPresentation());
+        video.addEventListener('leavepictureinpicture', () => this.syncPresentation());
+      }
+    }
   }
 
   private videos(): HTMLVideoElement[] {
@@ -348,6 +386,7 @@ export class SubtitleManager {
     const controller = this.controllerFor(media);
     controller.setStyles(this.style);
     controller.setMemoryCues(cues);
+    this.syncPresentation();
   }
 
   pinAsrTarget(media: HTMLMediaElement): void {
@@ -404,6 +443,7 @@ export class SubtitleManager {
     } else {
       controller.setStyles(this.style);
       controller.takeover();
+      this.syncPresentation();
     }
     return this.state();
   }

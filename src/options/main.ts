@@ -25,6 +25,7 @@ import type {
 import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
 import { normalizeSettings, validateImportedSettings } from '../storage/settings';
 import { minimaxHostHint } from '../shared/sanitize';
+import { renderErrorLogEntry, renderFeedbackLogHead } from './logDom';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -263,8 +264,11 @@ async function renderFeedbackLog(): Promise<void> {
         await sendRuntime({ type: 'delete-feedback-entry', ts: entry.ts });
         void renderFeedbackLog();
       });
-      const head = document.createElement('div');
-      head.innerHTML = `<span class="log-time">${time}</span> <span class="log-provider">[${entry.providerName ?? '?'} / ${entry.where}]</span>`;
+      const head = renderFeedbackLogHead({
+        time,
+        providerName: entry.providerName,
+        where: entry.where,
+      });
       head.appendChild(del);
       const body = document.createElement('div');
       body.textContent = `原文：${entry.source}\n译文：${entry.translation}\n页面：${entry.pageUrl}`;
@@ -1197,16 +1201,18 @@ async function refreshErrorLog(): Promise<void> {
       return;
     }
     for (const entry of filtered) {
-      const row = document.createElement('div');
-      row.className = 'log-entry';
       const time = new Date(entry.ts).toLocaleString();
       const provider = entry.providerId
         ? (draft?.providers.find((p) => p.id === entry.providerId)?.name ?? entry.providerId)
         : '';
-      row.innerHTML = `<span class="log-meta">${time}</span><span class="log-kind">${entry.kind}</span>${
-        provider ? `<span class="log-provider">[${provider}]</span>` : ''
-      }<span>${entry.message}</span>`;
-      box.appendChild(row);
+      box.appendChild(
+        renderErrorLogEntry({
+          time,
+          kind: entry.kind,
+          provider: provider || undefined,
+          message: entry.message,
+        }),
+      );
     }
   } catch {
     box.textContent = '无法读取错误日志';

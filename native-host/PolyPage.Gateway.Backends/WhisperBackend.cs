@@ -99,24 +99,10 @@ public sealed class WhisperBackend : IGatewayBackend
         try
         {
             var command = _config.Command!.Replace("{input}", tmp).Replace("{model}", _config.Model);
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = command.Split(' ', 2)[0],
-                Arguments = command.Contains(' ') ? command[(command.IndexOf(' ') + 1)..] : "",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            using var proc = System.Diagnostics.Process.Start(psi)
-                ?? throw new GatewayBackendException(RpcCodes.Config, "无法启动 whisper.cpp 命令");
-            var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
-            await proc.WaitForExitAsync(ct);
-            if (proc.ExitCode != 0)
-            {
-                var err = await proc.StandardError.ReadToEndAsync(ct);
-                throw new GatewayBackendException(RpcCodes.Server, $"whisper.cpp 退出码 {proc.ExitCode}: {err}");
-            }
+            var psi = WhisperCli.CreateStartInfo(command);
+            var (exit, stdout, stderr) = await WhisperCli.RunAsync(psi, _config.TimeoutMs, ct);
+            if (exit != 0)
+                throw new GatewayBackendException(RpcCodes.Server, $"whisper.cpp 退出码 {exit}: {stderr}");
             try
             {
                 return ParseVerboseJson(stdout);

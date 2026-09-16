@@ -82,6 +82,11 @@ public sealed class GatewayConfig
         {
             foreach (var property in obj.ToList())
             {
+                if (property.Key.Equals("headers", StringComparison.OrdinalIgnoreCase) && property.Value is JsonObject headers)
+                {
+                    TransformHeaderMap(headers, encrypt: true);
+                    continue;
+                }
                 if (property.Value is JsonValue value && value.TryGetValue(out string? s) && s is not null)
                 {
                     if (SensitiveNames.Contains(property.Key) && !s.StartsWith("$enc:"))
@@ -110,6 +115,11 @@ public sealed class GatewayConfig
         {
             foreach (var property in obj.ToList())
             {
+                if (property.Key.Equals("headers", StringComparison.OrdinalIgnoreCase) && property.Value is JsonObject headers)
+                {
+                    TransformHeaderMap(headers, encrypt: false);
+                    continue;
+                }
                 if (property.Value is JsonValue value && value.TryGetValue(out string? s) && s is not null)
                 {
                     if (SensitiveNames.Contains(property.Key) && s.StartsWith("$enc:"))
@@ -128,6 +138,24 @@ public sealed class GatewayConfig
             foreach (var item in array)
             {
                 if (item is not null) DecryptSecrets(item);
+            }
+        }
+    }
+
+    private static void TransformHeaderMap(JsonObject headers, bool encrypt)
+    {
+        foreach (var property in headers.ToList())
+        {
+            if (property.Value is not JsonValue value || !value.TryGetValue(out string? s) || s is null)
+                continue;
+            if (encrypt)
+            {
+                if (!s.StartsWith("$enc:"))
+                    headers[property.Key] = "$enc:" + SecretStore.Encrypt(s);
+            }
+            else if (s.StartsWith("$enc:"))
+            {
+                headers[property.Key] = SecretStore.Decrypt(s[5..]);
             }
         }
     }

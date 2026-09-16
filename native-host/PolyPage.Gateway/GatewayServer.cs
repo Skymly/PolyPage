@@ -93,11 +93,18 @@ public sealed class GatewayServer
                 lock (_pending) _pending[requestId] = requestCts;
             }
 
-            // One task per request so streaming notifications and cancels
-            // interleave freely; writes stay serialized. Tracked so RunAsync
-            // can drain before returning (keeps contract tests deterministic).
+            // binary.chunk mutates in-memory transfers; run it on the reader
+            // loop so a following transcribe/translate.image in the same stdin
+            // burst cannot race past an incomplete assemble (M-70/M-72 CI).
             handlers.RemoveAll(t => t.IsCompleted);
-            handlers.Add(Task.Run(() => HandleAsync(output, request, requestId, requestCts, ct), CancellationToken.None));
+            if (request.Method == "binary.chunk")
+            {
+                await HandleAsync(output, request, requestId, requestCts, ct);
+            }
+            else
+            {
+                handlers.Add(Task.Run(() => HandleAsync(output, request, requestId, requestCts, ct), CancellationToken.None));
+            }
         }
         try
         {

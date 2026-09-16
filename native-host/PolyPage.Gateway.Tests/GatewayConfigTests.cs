@@ -4,6 +4,10 @@ using Xunit;
 namespace PolyPage.Gateway.Tests;
 
 /// <summary>M-72: DPAPI covers HttpBackend headers values, not just named secret keys.</summary>
+[CollectionDefinition("serial-gateway-config", DisableParallelization = true)]
+public class SerialGatewayConfigCollection { }
+
+[Collection("serial-gateway-config")]
 public class GatewayConfigTests : IDisposable
 {
     private readonly string _path = Path.Combine(Path.GetTempPath(), "polypage-gw-cfg-" + Guid.NewGuid().ToString("N") + ".json");

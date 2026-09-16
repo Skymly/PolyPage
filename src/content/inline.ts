@@ -8,7 +8,7 @@
  * is preserved, and the whole structure is restorable through the entry's
  * saved originalNodes.
  */
-import { INLINE_DST_CLASS, INLINE_SRC_CLASS } from '../shared/constants';
+import { BILINGUAL_CLASS, INLINE_DST_CLASS, INLINE_SRC_CLASS, NAV_TRANSLATION_CLASS } from '../shared/constants';
 
 export interface InlineSegment {
   /** Translation task key (entryId:sN). */
@@ -44,8 +44,15 @@ function collectTextNodes(root: Node, out: Text[]): void {
     } else if (child.nodeType === Node.ELEMENT_NODE) {
       const el = child as Element;
       if (SKIP_INLINE_SUBTREE.has(el.tagName)) continue;
-      // Skip our own rendered spans on rescans.
-      if (el.classList?.contains(INLINE_SRC_CLASS) || el.classList?.contains(INLINE_DST_CLASS)) continue;
+      // Skip our own rendered spans and bilingual/nav chrome on rescans.
+      if (
+        el.classList?.contains(INLINE_SRC_CLASS) ||
+        el.classList?.contains(INLINE_DST_CLASS) ||
+        el.classList?.contains(BILINGUAL_CLASS) ||
+        el.classList?.contains(NAV_TRANSLATION_CLASS)
+      ) {
+        continue;
+      }
       collectTextNodes(el, out);
     }
   }

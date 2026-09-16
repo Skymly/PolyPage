@@ -1,0 +1,101 @@
+/**
+ * M-18: openai-compatible translateTexts / translateStream against a mock HTTP API.
+ */
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import '../src/providers/openai-compatible';
+import { createProvider } from '../src/providers/provider';
+import type { ProviderConfig } from '../src/shared/types';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function config(extra: Partial<ProviderConfig> = {}): ProviderConfig {
+  return {
+    id: 'oa',
+    name: 'OpenAI',
+    type: 'openai-compatible',
+    baseUrl: 'http://127.0.0.1:9/v1',
+    apiKey: 'test-key',
+    model: 'mock-model',
+    sourceLanguage: 'English',
+    targetLanguage: '简体中文',
+    timeoutMs: 5000,
+    maxBatchItems: 50,
+    maxBatchChars: 20000,
+    systemPrompt: '',
+    userPromptTemplate: '',
+    temperature: 0.2,
+    maxTokens: 4096,
+    headers: {},
+    enabled: true,
+    ...extra,
+  };
+}
+
+const ctx = { sourceLanguage: 'English', targetLanguage: '简体中文' };
+
+function chatJson(content: string): Response {
+  return new Response(
+    JSON.stringify({ choices: [{ message: { content } }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+}
+
+function sseBody(parts: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const part of parts) controller.enqueue(encoder.encode(part));
+      controller.close();
+    },
+  });
+}
+
+describe('openai-compatible translateTexts', () => {
+  it('posts chat/completions and returns the assistant content', async () => {
+    const captured: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        captured.push({
+          url: typeof input === 'string' ? input : input.toString(),
+          body: JSON.parse(String(init?.body)),
+        });
+        return chatJson('你好，世界');
+      }),
+    );
+    const provider = createProvider(config());
+    const out = await provider.translateTexts(['Hello, world!'], ctx, new AbortController().signal);
+    expect(captured[0].url).toBe('http://127.0.0.1:9/v1/chat/completions');
+    expect(captured[0].body.model).toBe('mock-model');
+    expect(captured[0].body.stream).toBe(false);
+    expect(out).toEqual(['你好，世界']);
+  });
+});
+
+describe('openai-compatible translateStream', () => {
+  it('concatenates SSE deltas until [DONE]', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = sseBody([
+          'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":"好"}}]}\n\n',
+          'data: [DONE]\n\n',
+        ]);
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }),
+    );
+    const provider = createProvider(config());
+    const deltas: string[] = [];
+    const full = await provider.translateStream!(
+      'Hello',
+      ctx,
+      (d) => deltas.push(d),
+      new AbortController().signal,
+    );
+    expect(deltas.join('')).toBe('你好');
+    expect(full).toBe('你好');
+  });
+});

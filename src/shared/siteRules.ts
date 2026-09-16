@@ -146,3 +146,17 @@ export function normalizeSiteRule(raw: unknown, fallbackId: string): SiteRule | 
   if (subs && subs.length > 0) rule.subtitleSelectors = subs;
   return rule;
 }
+
+/** Prefer the readable top host; otherwise the tab URL host from the SW (M-51). */
+export function resolveBlacklistHost(topHost: string, tabHost: string): string {
+  return topHost || tabHost || '';
+}
+
+export function hostnameFromUrl(url?: string): string {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}

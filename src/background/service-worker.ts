@@ -23,7 +23,8 @@
  *  - language detection helper + auto source-language fill-in (pillar H);
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
-import { sendTabCommand, sendViewerResume } from '../messaging/messages';
+import { MEDIA_COMMAND_FRAME_ID, sendTabCommand, sendViewerResume } from '../messaging/messages';
+import { hostnameFromUrl } from '../shared/siteRules';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
 import { computeOcrAvailable, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
@@ -389,7 +390,11 @@ async function handleAsrStart(
         tabId !== undefined
           ? async (cues) => {
               try {
-                await sendTabCommand(tabId, { type: 'wt:asr-partial', cues });
+                await sendTabCommand(
+                  tabId,
+                  { type: 'wt:asr-partial', cues },
+                  { frameId: MEDIA_COMMAND_FRAME_ID },
+                );
               } catch {
                 /* tab gone or no receiver */
               }
@@ -644,7 +649,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         await sendTabCommand(tab.id, { type: 'wt:translate-image', url: info.srcUrl });
       }
     } else if (info.menuItemId === MENU_TRANSCRIBE_MEDIA) {
-      await sendTabCommand(tab.id, { type: 'wt:transcribe-media' });
+      await sendTabCommand(tab.id, { type: 'wt:transcribe-media' }, { frameId: MEDIA_COMMAND_FRAME_ID });
     } else if (info.menuItemId === MENU_OPEN_PDF) {
       const url =
         typeof info.linkUrl === 'string' && info.linkUrl !== ''
@@ -761,6 +766,7 @@ chrome.runtime.onMessage.addListener(
               imageOverlayEnabled: s.imageOverlay.enabled,
               asrStreaming: s.asr.streaming,
               streamingSupported: activeProviderCapabilities(s).streaming,
+              tabHostname: hostnameFromUrl(sender.tab?.url),
             };
             sendResponse(cs);
             break;

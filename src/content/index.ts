@@ -19,7 +19,7 @@ import { detectLanguage } from '../shared/languageDetect';
 import { resolveLanguageCode } from '../providers/langCodes';
 import type { ContentSettings, EffectiveRule, PageState } from '../shared/types';
 import { DomObserver } from './observer';
-import { effectiveRuleForHost, hostBlacklisted, topLevelHostname } from './rules';
+import { effectiveRuleForHost, hostBlacklisted, resolveBlacklistHost, topLevelHostname } from './rules';
 import { isInsertedOwnElement } from './scanner';
 import { SelectionTranslator } from './selection';
 import { PageTranslator } from './translator';
@@ -328,7 +328,7 @@ async function init(): Promise<void> {
 
   // Blacklist applies by top-level domain; frames follow the top page
   // (spec 2.0 §6.2 item 7).
-  const topHost = topLevelHostname();
+  const topHost = resolveBlacklistHost(topLevelHostname(), contentSettings.tabHostname ?? '');
   const blacklisted = hostBlacklisted(topHost, contentSettings.blacklist);
   translator.blacklisted = blacklisted;
   selectionTranslator.setMode(contentSettings.selectionTranslate);

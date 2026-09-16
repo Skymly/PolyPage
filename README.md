@@ -187,7 +187,7 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 
 - PDF 双栏 / 表格聚类仍为启发式，不承诺完美版面；
 - ASR 仅当后端声明 `transcribeStream` 且设置开启时边转写边出 cue；否则一次转写结束后再出。关闭即丢内存 cue，不导出 SRT/VTT；
-- DRM / 无法 `captureStream` 且无法同源 fetch 的媒体入口置灰；不申请 tabCapture 或麦克风；
+- DRM / 无法 `captureStream` 时报错并拒绝下载整段文件；不按 DRM 预先置灰入口，也不申请 tabCapture 或麦克风；
 - `subtitleSelectors` 为规则驱动，站点改版即失效（内置 YouTube 规则随版本更新）；
 - tesseract 默认只打包 `eng` + `chi_sim`；附加语言包可在 Options 下载；
 - 「译文模式」段落整体替换为纯文本（双语/段内模式保留标记结构）；

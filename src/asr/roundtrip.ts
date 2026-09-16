@@ -89,7 +89,7 @@ export class AsrRoundTrip {
           start: c.start,
           end: c.end,
           text: c.text,
-          translation: translations[i] ?? '',
+          ...(translations ? { translation: translations[i] ?? '' } : {}),
         })),
       };
     } catch (e) {
@@ -99,13 +99,13 @@ export class AsrRoundTrip {
     }
   }
 
-  private async translateCueTexts(texts: string[]): Promise<string[]> {
+  private async translateCueTexts(texts: string[]): Promise<string[] | null> {
     if (texts.length === 0) return [];
     try {
       const out = await this.deps.translateTexts(texts);
       return texts.map((_, i) => out[i] ?? '');
     } catch {
-      return texts.map(() => '');
+      return null;
     }
   }
 }

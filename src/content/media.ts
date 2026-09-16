@@ -30,6 +30,8 @@ const SUB_CSS = `
   font-family: system-ui, -apple-system, sans-serif;
   text-align: center; max-width: 86vw;
 }
+.wt-sub-pos-top { align-items: center; }
+.wt-sub-pos-bottom { align-items: center; }
 .wt-sub-row { padding: 2px 10px; border-radius: 4px; background: rgba(0,0,0,.62); color: #fff; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .wt-sub-src { font-size: .82em; color: #d8dbe4; }
 .wt-sub-dst { font-size: 1em; }
@@ -54,6 +56,7 @@ class VideoSubtitleController {
   private lastRendered: string | null = null;
   private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
   private memoryCues: CueLike[] = [];
+  private fetchEpoch = 0;
 
   constructor(private readonly media: HTMLMediaElement) {}
 
@@ -122,6 +125,7 @@ class VideoSubtitleController {
   }
 
   restore(): void {
+    this.fetchEpoch += 1;
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
@@ -215,14 +219,17 @@ class VideoSubtitleController {
   };
 
   private async fetchTranslation(text: string): Promise<void> {
+    const started = this.fetchEpoch;
     try {
       const res = await sendRuntime({ type: 'translate-cue', text, domain: location.hostname });
+      if (!shouldCommitCueFetch(started, this.fetchEpoch, this.active)) return;
       if (res?.ok && res.translated !== undefined) {
         this.scheduler.resolve(text, res.translated);
       } else {
         this.scheduler.resolve(text, null);
       }
     } catch {
+      if (!shouldCommitCueFetch(started, this.fetchEpoch, this.active)) return;
       this.scheduler.resolve(text, null);
     }
     if (this.active) {
@@ -582,6 +589,35 @@ export class AsrSession {
   }
 }
 
+/** Hard cap after the user confirms a full-file capture (M-88). */
+export const ASR_FULL_CONFIRM_CAP_SECONDS = 30 * 60;
+
+export function resolveCaptureDuration(input: {
+  mediaDuration: number;
+  currentTime: number;
+  maxSeconds: number;
+  confirmFull: boolean;
+  confirmFullNow: (remaining: number) => boolean;
+  fullCapSeconds?: number;
+}): { duration: number; ended?: boolean } {
+  const maxSeconds = Math.max(1, input.maxSeconds);
+  const cap = input.fullCapSeconds ?? ASR_FULL_CONFIRM_CAP_SECONDS;
+  const known = Number.isFinite(input.mediaDuration) && input.mediaDuration > 0;
+  if (!known) return { duration: maxSeconds };
+  const remaining = Math.max(0, input.mediaDuration - (input.currentTime || 0));
+  if (remaining === 0) return { duration: 0, ended: true };
+  let duration = Math.min(maxSeconds, remaining);
+  if (input.confirmFull && remaining > maxSeconds && input.confirmFullNow(remaining)) {
+    duration = Math.min(remaining, cap);
+  }
+  return { duration };
+}
+
+/** Drop translate-cue results that arrive after restore (M-88). */
+export function shouldCommitCueFetch(startedEpoch: number, currentEpoch: number, active: boolean): boolean {
+  return active && startedEpoch === currentEpoch;
+}
+
 export async function captureMediaWindow(
   media: HTMLMediaElement,
   maxSeconds: number,
@@ -589,9 +625,17 @@ export async function captureMediaWindow(
 ): Promise<{ mime: string; bytes: Uint8Array; start: number; duration: number }> {
   if (signal?.aborted) throw abortError();
   const start = media.currentTime || 0;
-  const remaining =
-    Number.isFinite(media.duration) && media.duration > 0 ? Math.max(0, media.duration - start) : maxSeconds;
-  const duration = Math.min(maxSeconds, remaining || maxSeconds);
+  const resolved = resolveCaptureDuration({
+    mediaDuration: media.duration,
+    currentTime: start,
+    maxSeconds,
+    confirmFull: false,
+    confirmFullNow: () => false,
+  });
+  if (resolved.ended || resolved.duration <= 0) {
+    throw new Error('媒体已播放完毕');
+  }
+  const duration = resolved.duration;
   const streamFn = (
     media as HTMLMediaElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream }
   ).captureStream?.bind(media) ??
@@ -599,50 +643,56 @@ export async function captureMediaWindow(
   if (!streamFn) {
     throw new Error('当前媒体无法 captureStream（可能受 DRM 保护或浏览器不支持）');
   }
-  let stream: MediaStream;
-  try {
-    stream = streamFn();
-  } catch (e) {
-    throw new Error(e instanceof Error ? e.message : 'captureStream 失败');
-  }
-  const audioTracks = stream.getAudioTracks();
-  if (audioTracks.length === 0) throw new Error('媒体没有可采集的音轨');
-  const audioOnly = new MediaStream(audioTracks);
-  const mime = pickRecorderMime();
-  const recorder = mime ? new MediaRecorder(audioOnly, { mimeType: mime }) : new MediaRecorder(audioOnly);
-  const chunks: Blob[] = [];
-  recorder.ondataavailable = (ev) => {
-    if (ev.data && ev.data.size > 0) chunks.push(ev.data);
-  };
-  const stopped = new Promise<void>((resolve, reject) => {
-    recorder.onstop = () => resolve();
-    recorder.onerror = () => reject(new Error('MediaRecorder 失败'));
-  });
-  recorder.start(250);
-  if (media.paused) {
-    try {
-      await media.play();
-    } catch {
-      /* user gesture may be required; keep recording silence */
-    }
-  }
-  const stopTracks = (): void => {
-    if (recorder.state !== 'inactive') recorder.stop();
+  let audioTracks: MediaStreamTrack[] = [];
+  const stopTracks = (recorder?: MediaRecorder): void => {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
     audioTracks.forEach((t) => t.stop());
   };
   try {
-    await delay(Math.max(200, duration * 1000), signal);
+    let stream: MediaStream;
+    try {
+      stream = streamFn();
+    } catch (e) {
+      throw new Error(e instanceof Error ? e.message : 'captureStream 失败');
+    }
+    audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) throw new Error('媒体没有可采集的音轨');
+    const audioOnly = new MediaStream(audioTracks);
+    const mime = pickRecorderMime();
+    const recorder = mime ? new MediaRecorder(audioOnly, { mimeType: mime }) : new MediaRecorder(audioOnly);
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+    };
+    const stopped = new Promise<void>((resolve, reject) => {
+      recorder.onstop = () => resolve();
+      recorder.onerror = () => reject(new Error('MediaRecorder 失败'));
+    });
+    recorder.start(250);
+    if (media.paused) {
+      try {
+        await media.play();
+      } catch {
+        /* user gesture may be required; keep recording silence */
+      }
+    }
+    try {
+      await delay(Math.max(200, duration * 1000), signal);
+    } catch (e) {
+      stopTracks(recorder);
+      await stopped.catch(() => undefined);
+      throw e;
+    }
+    if (recorder.state !== 'inactive') recorder.stop();
+    await stopped;
+    audioTracks.forEach((t) => t.stop());
+    const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return { mime: blob.type || 'audio/webm', bytes, start, duration };
   } catch (e) {
     stopTracks();
-    await stopped.catch(() => undefined);
     throw e;
   }
-  if (recorder.state !== 'inactive') recorder.stop();
-  await stopped;
-  audioTracks.forEach((t) => t.stop());
-  const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  return { mime: blob.type || 'audio/webm', bytes, start, duration };
 }
 
 function pickRecorderMime(): string {

@@ -59,4 +59,40 @@ describe('scanTranslatableNodes nav chrome', () => {
     const texts = scanTranslatableNodes(document.body, 6).map((el) => sourceTextOf(el));
     expect(texts).toEqual(['Visible paragraph text here.']);
   });
+
+  it('does not treat a nested parent li as one blob of submenu text (M-29)', () => {
+    mount(`
+      <ul>
+        <li id="parent">Parent menu
+          <ul>
+            <li id="child-a">First submenu item here</li>
+            <li id="child-b">Second submenu item here</li>
+          </ul>
+        </li>
+      </ul>
+    `);
+    const found = scanTranslatableNodes(document.body, 8);
+    const ids = found.map((el) => el.id);
+    expect(ids).toContain('child-a');
+    expect(ids).toContain('child-b');
+    expect(ids).not.toContain('parent');
+    expect(found.some((el) => sourceTextOf(el).includes('First submenu') && sourceTextOf(el).includes('Second submenu'))).toBe(
+      false,
+    );
+  });
+
+  it('omits SCRIPT and STYLE descendants from source text (M-30)', () => {
+    mount(
+      `<div id="host"><script>const payload = "this is a long script string that should never be translated at all";</script></div>`,
+    );
+    const host = document.getElementById('host') as HTMLElement;
+    expect(sourceTextOf(host)).toBe('');
+    expect(scanTranslatableNodes(document.body, 8).map((el) => el.id)).not.toContain('host');
+  });
+
+  it('keeps visible paragraph text when a SCRIPT sibling is nested (M-30)', () => {
+    mount(`<p id="p1">Visible paragraph text here.<script>alert("ignore me please");</script></p>`);
+    const p = document.getElementById('p1') as HTMLElement;
+    expect(sourceTextOf(p)).toBe('Visible paragraph text here.');
+  });
 });

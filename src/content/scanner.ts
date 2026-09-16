@@ -12,7 +12,7 @@
  *
  * Rules:
  *  - candidate tags: p, h1-h6, li, blockquote, figcaption, td, th,
- *    article, section, div (div/article/section only when they hold no
+ *    article, section, div, li (div/article/section/li only when they hold no
  *    translatable descendant — the most specific element wins);
  *  - skip tags and their subtrees: script, style, code, pre, form controls,
  *    media, etc. (buttons stay skipped so interactive chrome is not rewritten);
@@ -132,11 +132,13 @@ export function isInsertedOwnElement(el: Element): boolean {
   return isTranslationTextChrome(el) || el.classList.contains(INLINE_SRC_CLASS);
 }
 
-/** Original label text, ignoring inserted translation chrome. */
+/** Original label text, ignoring inserted translation chrome and skip-tag subtrees. */
 export function sourceTextOf(el: HTMLElement): string {
   const parts: string[] = [];
   const walk = (node: Node): void => {
-    if (node instanceof Element && isTranslationTextChrome(node)) return;
+    if (node instanceof Element) {
+      if (isTranslationTextChrome(node) || SKIP_TAGS.has(node.tagName)) return;
+    }
     if (node.nodeType === Node.TEXT_NODE) {
       parts.push(node.textContent ?? '');
       return;
@@ -158,7 +160,7 @@ function hasCandidateDescendantWithText(el: Element): boolean {
   return false;
 }
 
-const CONTAINER_TAGS = new Set(['DIV', 'ARTICLE', 'SECTION']);
+const CONTAINER_TAGS = new Set(['DIV', 'ARTICLE', 'SECTION', 'LI']);
 
 export interface ScanOptions {
   minTextLength: number;

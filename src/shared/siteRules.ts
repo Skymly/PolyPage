@@ -160,3 +160,13 @@ export function hostnameFromUrl(url?: string): string {
     return '';
   }
 }
+
+/** Built-in rules stay in the list as disabled; user rules are removed (M-64). */
+export function disableOrRemoveSiteRule(rules: SiteRule[], id: string): SiteRule[] {
+  const target = rules.find((r) => r.id === id);
+  if (!target) return rules;
+  if (target.id.startsWith('builtin-')) {
+    return rules.map((r) => (r.id === id ? { ...r, enabled: false } : r));
+  }
+  return rules.filter((r) => r.id !== id);
+}

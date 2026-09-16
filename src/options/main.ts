@@ -11,7 +11,7 @@ import { sendRuntime } from '../messaging/messages';
 import { DEFAULT_CUSTOM_HTTP_BODY, DEFAULT_NATIVE_HOST_NAME, defaultProvider } from '../shared/constants';
 import { formatPackMegabytes } from '../ocr/packs';
 import type { PdfLayoutPreset } from '../shared/types';
-import { normalizeSiteRule } from '../shared/siteRules';
+import { disableOrRemoveSiteRule, normalizeSiteRule } from '../shared/siteRules';
 import type {
   DisplayMode,
   GlossaryEntry,
@@ -869,7 +869,7 @@ function renderRules(): void {
     del.textContent = '✕';
     del.addEventListener('click', () => {
       if (!draft) return;
-      draft.siteRules = draft.siteRules.filter((r) => r.id !== rule.id);
+      draft.siteRules = disableOrRemoveSiteRule(draft.siteRules, rule.id);
       markDirty();
       renderRules();
     });

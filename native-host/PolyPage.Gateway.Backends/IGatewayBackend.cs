@@ -88,4 +88,5 @@ public static class RpcCodes
     public const int Server = -32005;
     public const int InvalidResponse = -32006;
     public const int Config = -32007;
+    public const int Aborted = -32008;
 }

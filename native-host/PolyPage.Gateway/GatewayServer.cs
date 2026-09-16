@@ -126,7 +126,7 @@ public sealed class GatewayServer
             if (!request.IsNotification)
             {
                 await WriteAsync(output,
-                    JsonRpc.Fail(request.Id, RpcCodes.Timeout, "请求已取消"), ct);
+                    JsonRpc.Fail(request.Id, RpcCodes.Aborted, "请求已取消"), ct);
             }
         }
         catch (GatewayBackendException e)

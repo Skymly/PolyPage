@@ -221,3 +221,32 @@ describe('setMode inline restores first (M-13)', () => {
     expect(li.querySelector(`.${INLINE_DST_CLASS}`)?.textContent).toBe(TRANSLATED);
   });
 });
+
+describe('saveOriginal skips inserted chrome (M-14)', () => {
+  it('li bilingual → translated → restore does not write the block back', async () => {
+    document.body.innerHTML = `<ul id="root"><li id="item">${ORIGINAL}</li></ul>`;
+    const root = document.getElementById('root') as HTMLElement;
+    const before = htmlWithoutWtId(root);
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('bilingual');
+    expect(document.getElementById('item')?.querySelector(`.${BILINGUAL_CLASS}`)).not.toBeNull();
+    await translator.setMode('translated');
+    expect(document.getElementById('item')?.textContent).toBe(TRANSLATED);
+    translator.restore();
+    expect(document.getElementById('item')?.querySelector(`.${BILINGUAL_CLASS}`)).toBeNull();
+    expect(document.getElementById('item')?.textContent).toBe(ORIGINAL);
+    expect(htmlWithoutWtId(root)).toBe(before);
+  });
+
+  it('td bilingual → translated → restore does not write the block back', async () => {
+    document.body.innerHTML = `<table><tbody><tr><td id="cell">${ORIGINAL}</td></tr></tbody></table>`;
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('bilingual');
+    const td = document.getElementById('cell') as HTMLElement;
+    expect(td.querySelector(`.${BILINGUAL_CLASS}`)).not.toBeNull();
+    await translator.setMode('translated');
+    translator.restore();
+    expect(td.querySelector(`.${BILINGUAL_CLASS}`)).toBeNull();
+    expect(td.textContent).toBe(ORIGINAL);
+  });
+});

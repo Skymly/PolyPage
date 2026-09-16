@@ -23,7 +23,7 @@ import {
 import type { DisplayMode } from '../shared/types';
 import contentCss from '../styles/content.css?raw';
 import type { NodeEntry } from './nodeEntry';
-import { isMenuChrome } from './scanner';
+import { isInsertedOwnElement, isMenuChrome } from './scanner';
 
 /** Elements where inserting a sibling block would produce invalid HTML
  *  (table rows, lists); for those the translation block goes inside. */
@@ -46,7 +46,9 @@ export function ensureStylesFor(el: Element): void {
 
 export function saveOriginal(entry: NodeEntry): void {
   if (entry.originalNodes === null) {
-    entry.originalNodes = Array.from(entry.el.childNodes);
+    entry.originalNodes = Array.from(entry.el.childNodes).filter(
+      (node) => !(node instanceof Element) || !isInsertedOwnElement(node),
+    );
   }
 }
 

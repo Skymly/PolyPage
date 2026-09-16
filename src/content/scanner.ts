@@ -60,6 +60,7 @@ function isSkippedSubtreeRoot(el: Element): boolean {
   if (SKIP_TAGS.has(el.tagName)) return true;
   if (el instanceof HTMLElement && el.isContentEditable) return true;
   if (el.classList?.contains(BILINGUAL_CLASS)) return true;
+  if (el.classList?.contains('wt-ocr-overlay-host')) return true;
   if (el.getAttribute('aria-hidden') === 'true') return true;
   if (SKIP_MATH_CLASSES.has(el.tagName.toLowerCase())) return true;
   for (const cls of SKIP_MATH_CLASSES) {

@@ -119,4 +119,14 @@ describe('scanTranslatableNodes nav chrome', () => {
     const p = document.getElementById('p1') as HTMLElement;
     expect(sourceTextOf(p)).toBe('Visible paragraph text here.');
   });
+
+  it('does not treat OCR overlay hosts as translation candidates (M-49)', () => {
+    mount(
+      `<div class="wt-ocr-overlay-host"><div>旧译文盖在新图上的覆盖层文字足够长</div></div>
+       <p id="prose">Open source software has changed the world of publishing.</p>`,
+    );
+    const found = scanTranslatableNodes(document.body, 8);
+    expect(found.some((el) => el.classList.contains('wt-ocr-overlay-host'))).toBe(false);
+    expect(found.map((el) => el.id)).toContain('prose');
+  });
 });

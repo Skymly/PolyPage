@@ -9,8 +9,9 @@
  */
 import type { OcrSegment } from '../shared/types';
 
+export const OCR_OVERLAY_HOST_CLASS = 'wt-ocr-overlay-host';
 const OVERLAY_ATTR = 'data-wt-overlay-for';
-const HOST_CLASS = 'wt-ocr-overlay-host';
+const HOST_CLASS = OCR_OVERLAY_HOST_CLASS;
 
 export interface OverlayBox {
   text: string;
@@ -25,13 +26,10 @@ interface LiveOverlay {
   host: HTMLElement;
 }
 
-const live = new Map<string, LiveOverlay>();
+const liveByImg = new WeakMap<HTMLImageElement, LiveOverlay>();
+const live = new Set<LiveOverlay>();
 let raf = 0;
 let listening = false;
-
-function overlayKey(img: HTMLImageElement): string {
-  return img.currentSrc || img.src || String(img.naturalWidth) + 'x' + String(img.naturalHeight);
-}
 
 function allOverlays(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>('.' + HOST_CLASS)];
@@ -66,10 +64,9 @@ export function scheduleRelayout(): void {
 
 /** Recompute every live overlay from the image's current box. */
 export function relayoutAll(): void {
-  for (const [key, entry] of [...live.entries()]) {
+  for (const entry of [...live]) {
     if (!entry.img.isConnected || !entry.host.isConnected) {
-      entry.host.remove();
-      live.delete(key);
+      forgetOverlay(entry);
       continue;
     }
     layoutHost(entry.host, entry.img, entry.segments);
@@ -116,23 +113,21 @@ function layoutHost(host: HTMLElement, img: HTMLImageElement, segments: OverlayB
   });
 }
 
+function forgetOverlay(entry: LiveOverlay): void {
+  entry.host.remove();
+  live.delete(entry);
+  liveByImg.delete(entry.img);
+}
+
 export function removeImageOverlay(img?: HTMLImageElement): void {
   if (!img) {
-    for (const entry of live.values()) entry.host.remove();
-    live.clear();
+    for (const entry of [...live]) forgetOverlay(entry);
     for (const el of allOverlays()) el.remove();
     stopListening();
     return;
   }
-  const key = overlayKey(img);
-  const entry = live.get(key);
-  if (entry) {
-    entry.host.remove();
-    live.delete(key);
-  }
-  for (const el of allOverlays()) {
-    if (el.getAttribute(OVERLAY_ATTR) === key) el.remove();
-  }
+  const entry = liveByImg.get(img);
+  if (entry) forgetOverlay(entry);
   if (live.size === 0) stopListening();
 }
 
@@ -150,7 +145,7 @@ export function applyImageOverlay(img: HTMLImageElement, segments: OverlayBox[] 
   if (rect.width < 8 || rect.height < 8) return;
   const host = document.createElement('div');
   host.className = HOST_CLASS;
-  host.setAttribute(OVERLAY_ATTR, overlayKey(img));
+  host.setAttribute(OVERLAY_ATTR, img.currentSrc || img.src || '');
   host.style.cssText = [
     'position:fixed',
     'left:' + Math.round(rect.left) + 'px',
@@ -179,7 +174,9 @@ export function applyImageOverlay(img: HTMLImageElement, segments: OverlayBox[] 
     host.appendChild(block);
   });
   document.documentElement.appendChild(host);
-  live.set(overlayKey(img), { img, segments: usable, host });
+  const entry: LiveOverlay = { img, segments: usable, host };
+  liveByImg.set(img, entry);
+  live.add(entry);
   layoutHost(host, img, usable);
   ensureListening();
 }

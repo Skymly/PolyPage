@@ -60,4 +60,18 @@ describe('image overlay relayout', () => {
     expect(document.querySelectorAll('.wt-ocr-overlay-host').length).toBe(0);
     img.remove();
   });
+
+  it('replaces the overlay when the same img element changes src (M-49)', () => {
+    const img = document.createElement('img');
+    img.src = 'https://example.com/old.png';
+    document.body.appendChild(img);
+    mockRect(img, { left: 0, top: 0, width: 120, height: 80 });
+    applyImageOverlay(img, [{ text: 'OLD', translation: '旧译文' }]);
+    img.src = 'https://example.com/new.png';
+    applyImageOverlay(img, [{ text: 'NEW', translation: '新译文' }]);
+    const hosts = document.querySelectorAll('.wt-ocr-overlay-host');
+    expect(hosts.length).toBe(1);
+    expect(hosts[0].textContent).toBe('新译文');
+    img.remove();
+  });
 });

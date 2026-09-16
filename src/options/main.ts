@@ -23,7 +23,7 @@ import type {
   SiteRule,
 } from '../shared/types';
 import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
-import { normalizeSettings, validateImportedSettings } from '../storage/settings';
+import { normalizeSettings, redactSettings, validateImportedSettings } from '../storage/settings';
 import { feedbackToCsv, feedbackToJson } from '../storage/feedback';
 import { minimaxHostHint } from '../shared/sanitize';
 import { renderErrorLogEntry, renderFeedbackLogHead } from './logDom';
@@ -1211,7 +1211,12 @@ function exportSettings(): void {
   if (!draft) return;
   collectGeneral();
   collectEditor();
-  const payload = { app: 'polypage-web-translator', version: 5, exportedAt: new Date().toISOString(), settings: draft };
+  const payload = {
+    app: 'polypage-web-translator',
+    version: draft.schemaVersion,
+    exportedAt: new Date().toISOString(),
+    settings: redactSettings(draft),
+  };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

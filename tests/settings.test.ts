@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../src/shared/constants';
-import { normalizeProvider, normalizeSettings, validateImportedSettings } from '../src/storage/settings';
+import { normalizeProvider, normalizeSettings, redactSettings, validateImportedSettings } from '../src/storage/settings';
 
 describe('normalizeSettings', () => {
   it('returns defaults for garbage input', () => {
@@ -68,5 +68,27 @@ describe('validateImportedSettings', () => {
   it('rejects non-objects', () => {
     expect(validateImportedSettings('hello')).toBeNull();
     expect(validateImportedSettings(null)).toBeNull();
+  });
+});
+
+describe('redactSettings (M-53)', () => {
+  it('clears apiKey and headers without mutating the original', () => {
+    const s = normalizeSettings({
+      providers: [
+        {
+          id: 'a',
+          type: 'openai-compatible',
+          baseUrl: 'http://x',
+          name: 'A',
+          apiKey: 'secret',
+          headers: { Authorization: 'Bearer x' },
+        },
+      ],
+    });
+    const redacted = redactSettings(s);
+    expect(redacted.providers[0].apiKey).toBe('');
+    expect(redacted.providers[0].headers).toEqual({});
+    expect(s.providers[0].apiKey).toBe('secret');
+    expect(s.providers[0].headers).toEqual({ Authorization: 'Bearer x' });
   });
 });

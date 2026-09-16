@@ -11,7 +11,6 @@
  * zero API calls (spec 3.0 §11 M5 exit criteria).
  */
 import { sendRuntime, VIEWER_RESUME_TYPE } from '../messaging/messages';
-import { loadSettings } from '../storage/settings';
 import { PDF_FETCH_TIMEOUT_MS, PDF_MAX_BYTES, PDF_PARAGRAPH_BUDGET } from '../shared/constants';
 import type { PdfViewerMode } from '../shared/types';
 import { openPdfDocument } from './pdf/loader';
@@ -203,7 +202,7 @@ async function main(): Promise<void> {
   titleEl.textContent = fileName;
   titleEl.title = url;
 
-  const settings = await loadSettings();
+  const settings = await sendRuntime({ type: 'get-viewer-settings' });
   maxConcurrentPages = settings.pdfViewer.maxConcurrentPages;
   skipHeadersFooters = settings.pdfViewer.skipHeadersFooters;
   scannedPageOcr = settings.pdfViewer.scannedPageOcr;

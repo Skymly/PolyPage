@@ -84,6 +84,7 @@ import type {
   PageState,
   ProviderConfig,
   ProviderStats,
+  SelectionTranslateMode,
   Settings,
   SettingsSummary,
   TranslateResults,
@@ -857,6 +858,41 @@ chrome.runtime.onMessage.addListener(
             settingsCache = normalized;
             setupContextMenus(normalized);
             sendResponse({ ok: true });
+            break;
+          }
+          case 'set-selection-translate': {
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
+            const current = await getSettings(true);
+            const selectionTranslate: SelectionTranslateMode = message.enabled ? 'always' : 'off';
+            const next = { ...current, selectionTranslate };
+            await saveSettings(next);
+            settingsCache = next;
+            setupContextMenus(next);
+            sendResponse({ ok: true });
+            break;
+          }
+          case 'get-viewer-settings': {
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
+            const s = await getSettings();
+            sendResponse({
+              pdfViewer: {
+                defaultMode: s.pdfViewer.defaultMode,
+                skipHeadersFooters: s.pdfViewer.skipHeadersFooters,
+                maxConcurrentPages: s.pdfViewer.maxConcurrentPages,
+                scannedPageOcr: s.pdfViewer.scannedPageOcr,
+                layoutPreset: s.pdfViewer.layoutPreset,
+              },
+              imageTranslate: {
+                maxEdgePx: s.imageTranslate.maxEdgePx,
+                engine: s.imageTranslate.engine,
+              },
+            });
             break;
           }
           case 'test-provider':

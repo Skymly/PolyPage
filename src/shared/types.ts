@@ -409,6 +409,21 @@ export interface SettingsSummary {
   asrEnabled: boolean;
 }
 
+/** PDF reader projection — no API keys (M-53). */
+export interface ViewerSettings {
+  pdfViewer: {
+    defaultMode: PdfViewerMode;
+    skipHeadersFooters: boolean;
+    maxConcurrentPages: number;
+    scannedPageOcr: boolean;
+    layoutPreset?: PdfLayoutPreset;
+  };
+  imageTranslate: {
+    maxEdgePx: number;
+    engine: OcrEngineId;
+  };
+}
+
 /** Subset of settings the content script is allowed to see (no API keys). */
 export interface ContentSettings {
   defaultDisplayMode: DisplayMode;

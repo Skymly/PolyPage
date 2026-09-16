@@ -9,7 +9,6 @@
 import { MEDIA_COMMAND_FRAME_ID, sendRuntime, sendTabCommand } from '../messaging/messages';
 import type { ExportEntry } from '../messaging/messages';
 import type { DisplayMode, FrameStateEntry, PageState } from '../shared/types';
-import { normalizeSettings } from '../storage/settings';
 
 const MODE_META: Record<DisplayMode, { name: string; desc: string }> = {
   original: { name: '原文', desc: '显示原始内容' },
@@ -241,10 +240,7 @@ async function loadSummary(): Promise<void> {
 
 async function toggleSelectionTranslate(enabled: boolean): Promise<void> {
   try {
-    const { settings } = await sendRuntime({ type: 'get-full-settings' });
-    const draft = normalizeSettings(settings);
-    draft.selectionTranslate = enabled ? 'always' : 'off';
-    await sendRuntime({ type: 'save-settings', settings: draft });
+    await sendRuntime({ type: 'set-selection-translate', enabled });
   } catch {
     /* background unavailable */
   }
@@ -391,10 +387,11 @@ async function detectPdfTab(): Promise<void> {
 /* ---------------------------------- main ------------------------------------- */
 
 async function main(): Promise<void> {
+  await loadSummary();
   buildModeList();
   await resolveActiveTab();
   await detectPdfTab();
-  await Promise.all([refresh(), loadSummary()]);
+  await refresh();
 
   $<HTMLButtonElement>('btn-open-pdf').addEventListener('click', () => {
     void sendRuntime({ type: 'pdf-open', url: activeTabUrl }).catch(() => undefined);

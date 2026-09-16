@@ -397,3 +397,15 @@ export function validateImportedSettings(raw: unknown): Settings | null {
   if (!usable) return null;
   return normalized;
 }
+
+/** Drop secrets from a settings snapshot for JSON export (M-53). */
+export function redactSettings(settings: Settings): Settings {
+  return {
+    ...settings,
+    providers: settings.providers.map((p) => ({
+      ...p,
+      apiKey: '',
+      headers: {},
+    })),
+  };
+}

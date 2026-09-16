@@ -13,7 +13,7 @@ PolyPage **不运营账号、不同步云端配置、不把页面内容发到开
 1. **网页文本、选区、字幕 cue、PDF 段落、图片字节、无字幕媒体的音轨窗口**  
    仅在用户触发翻译 / OCR / 转写后，发往当前启用的 Provider（OpenAI 兼容端点、DeepL、Azure、Google、或本机网关）。
 2. **设置与缓存**  
-   存在浏览器 `chrome.storage`（本机）。API Key 只出现在后台与本机网关，内容脚本与 Popup 不持有密钥。
+   存在浏览器 `chrome.storage`（本机）。API Key 明文存在扩展后台存储，不出现在内容脚本、Popup 或 PDF 阅读器。Options 导出 JSON 默认抹掉 `apiKey` 与自定义 `headers`。
 3. **可选本机网关**  
    若用户安装 Native Messaging 网关，音频 / 图片经本机进程转发到用户配置的后端（Ollama、whisper.cpp、HTTP Whisper 等）。网关不内嵌、不分发模型权重。
 

@@ -50,6 +50,7 @@ import type {
   SettingsSummary,
   TranslateResults,
   TranslationItem,
+  ViewerSettings,
 } from '../shared/types';
 
 export const PROTOCOL_VERSION = 6;
@@ -65,6 +66,8 @@ export type RuntimeMessage =
   | { type: 'get-settings-summary'; v?: number }
   | { type: 'get-full-settings'; v?: number }
   | { type: 'save-settings'; v?: number; settings: unknown }
+  | { type: 'set-selection-translate'; v?: number; enabled: boolean }
+  | { type: 'get-viewer-settings'; v?: number }
   | { type: 'test-provider'; v?: number; provider: ProviderConfig }
   | { type: 'get-cache-stats'; v?: number }
   | { type: 'clear-cache'; v?: number }
@@ -129,6 +132,8 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'get-settings-summary' } ? SettingsSummary :
   M extends { type: 'get-full-settings' } ? { settings: unknown } :
   M extends { type: 'save-settings' } ? { ok: boolean; error?: string } :
+  M extends { type: 'set-selection-translate' } ? { ok: boolean; error?: string } :
+  M extends { type: 'get-viewer-settings' } ? ViewerSettings :
   M extends { type: 'test-provider' } ? { ok: boolean; result?: string; latencyMs?: number; error?: string } :
   M extends { type: 'get-cache-stats' } ? { entries: number } :
   M extends { type: 'clear-cache' } ? { ok: true } :

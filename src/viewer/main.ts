@@ -10,7 +10,7 @@
  * that participates in cache keys, so reopening a translated document costs
  * zero API calls (spec 3.0 §11 M5 exit criteria).
  */
-import { sendRuntime } from '../messaging/messages';
+import { sendRuntime, VIEWER_RESUME_TYPE } from '../messaging/messages';
 import { loadSettings } from '../storage/settings';
 import { PDF_PARAGRAPH_BUDGET } from '../shared/constants';
 import type { PdfViewerMode } from '../shared/types';
@@ -24,6 +24,7 @@ import {
 } from './pdf/segment';
 import type { PdfLine, TextItemLike } from './pdf/segment';
 import { chooseFingerprint, pdfScopedCacheText } from './pdf/fingerprint';
+import { matchPdfResumeTasks, pdfParagraphKey } from './resume';
 import {
   SCANNED_PAGE_OCR_BUDGET,
   canvasToOcrDataUrl,
@@ -90,6 +91,8 @@ let ocrEngineId = 'llm-vision';
 let scannedOcrCount = 0;
 let activeCount = 0;
 const waiters: (() => void)[] = [];
+/** Set after chrome.tabs.getCurrent so resume broadcasts can filter this tab. */
+let viewerTabId: number | undefined;
 
 async function acquirePageSlot(): Promise<void> {
   if (activeCount < maxConcurrentPages) {
@@ -155,6 +158,11 @@ async function main(): Promise<void> {
     fatal('缺少 src 参数：请从 Popup 或右键菜单「用 PolyPage 打开」进入阅读器。');
     return;
   }
+  try {
+    viewerTabId = (await chrome.tabs.getCurrent())?.id;
+  } catch {
+    viewerTabId = undefined;
+  }
   let fileName = decodeURIComponent(url.split('/').pop() ?? 'document.pdf');
   try {
     fileName = fileName.split('?')[0] || 'document.pdf';
@@ -208,6 +216,13 @@ async function main(): Promise<void> {
   }
   docEl.setAttribute('aria-busy', 'false');
   updateProgress();
+
+  try {
+    const pending = await sendRuntime({ type: 'get-inflight', tabId: viewerTabId });
+    if (pending.tasks.length > 0) void resumePdfInflight(pending.tasks);
+  } catch {
+    /* resume is best-effort */
+  }
 
   window.addEventListener('pagehide', () => {
     void doc.destroy().catch(() => undefined);
@@ -368,14 +383,22 @@ async function translatePage(page: PageState): Promise<void> {
 
   for (let i = 0; i < todo.length; i += CHUNK) {
     const chunk = todo.slice(i, i + CHUNK);
-    const items = chunk.map((para, j) => ({
-      key: `p${page.index}-${i + j}`,
-      text: pdfScopedCacheText(fingerprint, page.index, page.paragraphs.indexOf(para), para.text),
-    }));
+    const items = chunk.map((para) => {
+      const paraIndex = page.paragraphs.indexOf(para);
+      return {
+        key: pdfParagraphKey(page.index, paraIndex),
+        text: pdfScopedCacheText(fingerprint, page.index, paraIndex, para.text),
+      };
+    });
     try {
-      const res = await sendRuntime({ type: 'translate', items, domain: 'pdf-viewer' });
-      chunk.forEach((para, j) => {
-        const key = `p${page.index}-${i + j}`;
+      const res = await sendRuntime({
+        type: 'translate',
+        items,
+        domain: 'pdf-viewer',
+        tabId: viewerTabId,
+      });
+      chunk.forEach((para) => {
+        const key = pdfParagraphKey(page.index, page.paragraphs.indexOf(para));
         const translated = res.results[key];
         if (translated !== undefined) {
           para.status = 'done';
@@ -391,11 +414,66 @@ async function translatePage(page: PageState): Promise<void> {
         para.status = 'error';
         para.error = message;
       }
+      if (/channel closed|Receiving end does not exist|message port closed/i.test(message)) {
+        scheduleInflightPull();
+      }
     }
     renderPageParas(page);
     updateProgress();
   }
 }
+
+async function resumePdfInflight(tasks: Array<{ key: string; textHash: string }>): Promise<boolean> {
+  if (tasks.length === 0 || pages.length === 0 || fingerprint === '') return false;
+  const hits = matchPdfResumeTasks(pages, tasks, fingerprint);
+  if (hits.length === 0) return false;
+  const pageSet = new Set<PageState>();
+  for (const hit of hits) {
+    hit.para.status = 'idle';
+    hit.para.error = null;
+    pageSet.add(hit.page as PageState);
+  }
+  for (const page of pageSet) {
+    page.workStarted = true;
+    void translatePage(page);
+  }
+  return true;
+}
+
+let inflightPullScheduled = false;
+function scheduleInflightPull(): void {
+  if (inflightPullScheduled) return;
+  inflightPullScheduled = true;
+  void (async () => {
+    try {
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const pending = await sendRuntime({ type: 'get-inflight', tabId: viewerTabId });
+          if (pending.tasks.length > 0) {
+            await resumePdfInflight(pending.tasks);
+            return;
+          }
+        } catch {
+          /* SW still down */
+        }
+      }
+    } finally {
+      inflightPullScheduled = false;
+    }
+  })();
+}
+
+chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  if (!message || typeof message !== 'object') return;
+  const msg = message as { type?: string; tabId?: number; tasks?: Array<{ key: string; textHash: string }> };
+  if (msg.type !== VIEWER_RESUME_TYPE) return;
+  if (viewerTabId !== undefined && msg.tabId !== undefined && viewerTabId !== msg.tabId) {
+    return;
+  }
+  void resumePdfInflight(msg.tasks ?? []).then((accepted) => sendResponse({ ok: accepted }));
+  return true;
+});
 
 /* --------------------------------- rendering ---------------------------------- */
 

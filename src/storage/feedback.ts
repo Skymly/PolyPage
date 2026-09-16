@@ -40,12 +40,13 @@ export async function clearFeedbackLog(): Promise<void> {
   await chrome.storage.local.remove(FEEDBACK_LOG_KEY);
 }
 
-/** CSV escaping: quote fields, double embedded quotes. */
+/** CSV escaping: quote fields, double embedded quotes, neutralize formula prefixes (M-39). */
 export function csvEscape(value: string): string {
-  if (/[",\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
+  const guarded = /^[=+\-@\t]/.test(value) ? `'${value}` : value;
+  if (guarded !== value || /[",\r\n]/.test(guarded)) {
+    return `"${guarded.replace(/"/g, '""')}"`;
   }
-  return value;
+  return guarded;
 }
 
 export function feedbackToCsv(entries: FeedbackEntry[]): string {

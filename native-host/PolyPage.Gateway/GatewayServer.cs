@@ -173,6 +173,8 @@ public sealed class GatewayServer
                 var streaming = _backends.Values.Any(b => b.Capabilities.SupportsStreaming);
                 var vision = _backends.Values.Any(b => b.Capabilities.SupportsVision);
                 var asr = _backends.Values.Any(b => b.Capabilities.SupportsAsr);
+                _backends.TryGetValue(_defaultBackendId, out var defaultBackend);
+                var batchCaps = defaultBackend?.Capabilities;
                 return JsonRpc.Ok(request.Id, new
                 {
                     name = Name,
@@ -183,8 +185,8 @@ public sealed class GatewayServer
                     supportsVision = vision,
                     supportsAsr = asr,
                     maxBinaryBytes = _maxBinaryBytes,
-                    maxBatchItems = 50,
-                    maxBatchChars = 20000,
+                    maxBatchItems = batchCaps?.MaxBatchItems ?? 50,
+                    maxBatchChars = batchCaps?.MaxBatchChars ?? 20000,
                 });
             }
 

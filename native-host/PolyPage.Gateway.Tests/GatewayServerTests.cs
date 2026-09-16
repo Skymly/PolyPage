@@ -130,6 +130,20 @@ public class GatewayServerTests
         Assert.False(result.GetProperty("supportsVision").GetBoolean());
         Assert.False(result.GetProperty("supportsAsr").GetBoolean());
         Assert.Equal(GatewayServer.DefaultMaxBinaryBytes, result.GetProperty("maxBinaryBytes").GetInt32());
+        Assert.Equal(10, result.GetProperty("maxBatchItems").GetInt32());
+        Assert.Equal(6000, result.GetProperty("maxBatchChars").GetInt32());
+    }
+
+    [Fact]
+    public async Task CapabilitiesBatchLimitsFollowDefaultBackendNotAHardcoded50()
+    {
+        var small = new FakeBackend { Id = "small", Capabilities = new(true, 10, 6000) };
+        var large = new FakeBackend { Id = "large", Capabilities = new(false, 50, 20000) };
+        var responses = await Pipe.RunAsync(new[] { Pipe.Request(1, "capabilities") }, small, large);
+        var result = responses.Single().GetProperty("result");
+        Assert.Equal(10, result.GetProperty("maxBatchItems").GetInt32());
+        Assert.Equal(6000, result.GetProperty("maxBatchChars").GetInt32());
+        Assert.True(result.GetProperty("supportsStreaming").GetBoolean());
     }
 
     [Fact]

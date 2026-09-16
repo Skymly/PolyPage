@@ -23,8 +23,8 @@ export function segmentTranscript(
   const origin = Number.isFinite(windowStart) ? windowStart : 0;
   const fromBackend = (input.segments ?? [])
     .map((s) => ({
-      start: typeof s.start === 'number' ? s.start : origin,
-      end: typeof s.end === 'number' ? s.end : origin + duration,
+      start: origin + (typeof s.start === 'number' ? s.start : 0),
+      end: origin + (typeof s.end === 'number' ? s.end : duration),
       text: (s.text ?? '').trim(),
     }))
     .filter((s) => s.text.length > 0);

@@ -25,6 +25,7 @@ import {
 import type { PdfLine, TextItemLike } from './pdf/segment';
 import { chooseFingerprint, pdfCacheScope } from './pdf/fingerprint';
 import { matchPdfResumeTasks, pdfParagraphKey } from './resume';
+import { keepExistingParas } from './parasDom';
 import {
   SCANNED_PAGE_OCR_BUDGET,
   canvasToOcrDataUrl,
@@ -493,7 +494,10 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 /* --------------------------------- rendering ---------------------------------- */
 
 function ensureParasDom(page: PageState): void {
-  if (page.container.querySelector('.paras')) return;
+  const existing = page.container.querySelector('.paras');
+  if (keepExistingParas(existing, page.scanned, page.paragraphs)) return;
+  existing?.remove();
+  for (const para of page.paragraphs) para.el = null;
   const paras = document.createElement('div');
   paras.className = 'paras';
   page.container.appendChild(paras);
@@ -594,6 +598,8 @@ async function recognizeScannedPage(
     }));
     page.scanned = false;
     hint.remove();
+    page.container.querySelector('.paras')?.remove();
+    for (const para of page.paragraphs) para.el = null;
     ensureParasDom(page);
     renderPageParas(page);
     updateProgress();

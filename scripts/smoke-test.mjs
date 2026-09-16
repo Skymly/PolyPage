@@ -2150,6 +2150,26 @@ try {
   check('scanned page shows explicit no-text-layer hint', scannedHint.includes('没有文本层'), JSON.stringify(scannedHint));
   const ocrPageBtn = await viewer.eval(`document.querySelector('.ocr-page-btn')?.textContent ?? ''`);
   check('scanned page offers 识别本页', ocrPageBtn.includes('识别本页'), JSON.stringify(ocrPageBtn));
+  const visionBeforeScan = mock.visionCount();
+  await viewer.eval(`document.querySelector('.ocr-page-btn')?.click()`);
+  let scannedDst = [];
+  for (let i = 0; i < 40; i++) {
+    scannedDst = await viewer.eval(
+      `[...document.querySelectorAll('.para .dst')].map((d) => d.textContent ?? '')`,
+    );
+    if (scannedDst.some((t) => t.includes('你好'))) break;
+    await sleep(250);
+  }
+  check(
+    'scanned-page OCR click renders translations without mode switch',
+    scannedDst.some((t) => t.includes('你好')),
+    JSON.stringify(scannedDst),
+  );
+  check(
+    'scanned-page OCR called the vision endpoint',
+    mock.visionCount() === visionBeforeScan + 1,
+    `vision=${mock.visionCount()} before=${visionBeforeScan}`,
+  );
   const pdfProgress = await viewer.eval(`document.getElementById('progress')?.textContent ?? ''`);
   check('reader toolbar reports translated/total progress', pdfProgress.includes('已译'), JSON.stringify(pdfProgress));
   const canvases = await viewer.eval(`document.querySelectorAll('.page canvas').length`);

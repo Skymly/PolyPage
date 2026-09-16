@@ -15,7 +15,11 @@ export interface ProviderCapabilities {
   vision: boolean;
   asr: boolean;
   streaming: boolean;
+  /** Native-host only: why vision/ASR/streaming are off. */
+  gatewayProbe?: GatewayProbe;
 }
+
+export type GatewayProbe = 'unprobed' | 'missing' | 'stale-protocol' | 'ok';
 
 const NONE: ProviderCapabilities = { vision: false, asr: false, streaming: false };
 
@@ -23,15 +27,18 @@ export function providerCapabilities(
   provider: ProviderConfig | undefined,
   instance: TranslationProvider | null | undefined,
   gateway: GatewayCapabilities | null | undefined,
+  probed = true,
 ): ProviderCapabilities {
   if (!provider || !isProviderConfigured(provider)) return NONE;
   if (provider.type === 'native-host') {
-    const protocol = gateway?.protocol ?? 1;
-    if (protocol < 2) return NONE;
+    if (!probed) return { ...NONE, gatewayProbe: 'unprobed' };
+    if (!gateway) return { ...NONE, gatewayProbe: 'missing' };
+    if ((gateway.protocol ?? 1) < 2) return { ...NONE, gatewayProbe: 'stale-protocol' };
     return {
-      vision: gateway?.supportsVision === true,
-      asr: gateway?.supportsAsr === true,
-      streaming: gateway?.supportsStreaming === true,
+      vision: gateway.supportsVision === true,
+      asr: gateway.supportsAsr === true,
+      streaming: gateway.supportsStreaming === true,
+      gatewayProbe: 'ok',
     };
   }
   return {

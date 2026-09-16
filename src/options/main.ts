@@ -988,9 +988,20 @@ async function checkHostStatus(): Promise<void> {
     const compat = document.getElementById('compat-status');
     if (res.installed) {
       const proto = typeof res.protocol === 'number' ? ` protocol ${res.protocol}` : '';
-      statusEl.textContent = `✓ 网关已连接${res.version ? `（版本 ${res.version}${proto}）` : proto}`;
-      statusEl.classList.add('ok');
-      if (compat) compat.textContent = res.browser === 'firefox' ? 'Firefox：connectNative ping 成功。' : 'Chromium：connectNative ping 成功。';
+      if (res.probe === 'stale-protocol') {
+        statusEl.textContent = `✓ 网关已连接${res.version ? `（版本 ${res.version}${proto}）` : proto}，协议过旧：视觉/转写/流式不可用`;
+        statusEl.classList.add('bad');
+      } else {
+        statusEl.textContent = `✓ 网关已连接${res.version ? `（版本 ${res.version}${proto}）` : proto}`;
+        statusEl.classList.add('ok');
+      }
+      if (compat) {
+        if (res.probe === 'stale-protocol') {
+          compat.textContent = '网关协议过旧（需要 protocol ≥ 2），视觉/转写/流式不可用。未探测与协议过旧不是同一件事。';
+        } else {
+          compat.textContent = res.browser === 'firefox' ? 'Firefox：connectNative ping 成功。' : 'Chromium：connectNative ping 成功。';
+        }
+      }
     } else {
       statusEl.textContent = `✗ 未检测到网关：${res.reason ?? res.error ?? '未知错误'}`;
       statusEl.classList.add('bad');

@@ -52,7 +52,7 @@ dotnet publish native-host/PolyPage.Gateway -c Release -r win-x64
 # 查询安装状态
 .\PolyPage.Gateway.exe --status
 
-# 卸载（移除注册表项与文件；保留 gateway.json 配置与日志）
+# 卸载（移除注册表项、网关 exe、manifest；默认 host 同时删除 gateway.json，保留日志）
 .\PolyPage.Gateway.exe --uninstall
 ```
 
@@ -62,7 +62,7 @@ dotnet publish native-host/PolyPage.Gateway -c Release -r win-x64
 2. 生成 host manifest（`%LocalAppData%\PolyPage\com.skymly.polypage.gateway.json`）；
 3. 写入 HKCU 注册表（Chrome + Edge 的 `NativeMessagingHosts`）。
 
-重复执行 `--install --allow ...` 会向 `allowed_origins` 追加新来源。
+重复执行 `--install --allow ...` 会**替换**（不是追加）`allowed_origins`。origin 必须是 `chrome-extension://<id>/`。
 
 ## 配置（`%LocalAppData%\PolyPage\gateway.json`）
 

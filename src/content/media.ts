@@ -55,14 +55,15 @@ class VideoSubtitleController {
   private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
   private memoryCues: CueLike[] = [];
 
-  constructor(private readonly video: HTMLVideoElement) {}
+  constructor(private readonly media: HTMLMediaElement) {}
 
   get hasTracks(): boolean {
     return this.subtitleTracks().length > 0;
   }
 
   private subtitleTracks(): TextTrack[] {
-    return Array.from(this.video.textTracks ?? []).filter(
+    if (!(this.media instanceof HTMLVideoElement)) return [];
+    return Array.from(this.media.textTracks ?? []).filter(
       (t) => t.kind === 'subtitles' || t.kind === 'captions',
     );
   }
@@ -154,18 +155,24 @@ class VideoSubtitleController {
   /** Position the fixed layer over the video's bottom area. */
   private positionLayer(): void {
     if (!this.cueHost) return;
-    const rect = this.video.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) {
-      this.cueHost.box.style.display = 'none';
-      return;
-    }
+    const rect = this.media.getBoundingClientRect();
     this.cueHost.box.style.display = '';
-    const baseFont = Math.max(13, Math.min(24, rect.height * 0.045));
-    this.cueHost.box.style.fontSize = `${((baseFont * this.style.fontSizePct) / 100).toFixed(1)}px`;
-    this.cueHost.box.style.left = `${Math.round(rect.left)}px`;
-    this.cueHost.box.style.width = `${Math.round(rect.width)}px`;
-    const ratio = cueVerticalRatio(this.style.position);
-    this.cueHost.box.style.top = `${Math.round(rect.top + rect.height * ratio)}px`;
+    this.cueHost.box.style.bottom = '';
+    if (rect.width < 8 && rect.height < 8) {
+      this.cueHost.box.style.left = '8%';
+      this.cueHost.box.style.width = '84%';
+      this.cueHost.box.style.top = '';
+      this.cueHost.box.style.bottom = '8%';
+      this.cueHost.box.style.fontSize = `${((16 * this.style.fontSizePct) / 100).toFixed(1)}px`;
+    } else {
+      const height = Math.max(rect.height, 40);
+      const baseFont = Math.max(13, Math.min(24, height * 0.045));
+      this.cueHost.box.style.fontSize = `${((baseFont * this.style.fontSizePct) / 100).toFixed(1)}px`;
+      this.cueHost.box.style.left = `${Math.round(rect.left)}px`;
+      this.cueHost.box.style.width = `${Math.round(Math.max(rect.width, 160))}px`;
+      const ratio = cueVerticalRatio(this.style.position);
+      this.cueHost.box.style.top = `${Math.round(rect.top + height * ratio)}px`;
+    }
     this.cueHost.box.classList.remove('wt-sub-pos-top', 'wt-sub-pos-bottom');
     this.cueHost.box.classList.add(cuePositionClass(this.style.position));
   }
@@ -174,7 +181,7 @@ class VideoSubtitleController {
     if (!this.active) return;
     this.positionLayer();
     const cues = this.collectCues();
-    const time = this.video.currentTime;
+    const time = this.media.currentTime;
     const decision = this.scheduler.decide(cues, time);
     if (decision.kind === 'none') {
       // Keep last frame only while a fetch is in flight; otherwise clear.
@@ -255,7 +262,7 @@ class VideoSubtitleController {
 /* ------------------------------ manager + wiring ------------------------------ */
 
 export class SubtitleManager {
-  private controllers = new Map<HTMLVideoElement, VideoSubtitleController>();
+  private controllers = new Map<HTMLMediaElement, VideoSubtitleController>();
   private activeVideo: HTMLVideoElement | null = null;
   private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
   private selectorObserver: MutationObserver | null = null;
@@ -296,11 +303,11 @@ export class SubtitleManager {
     return Array.from(document.querySelectorAll('video'));
   }
 
-  private controllerFor(video: HTMLVideoElement): VideoSubtitleController {
-    let controller = this.controllers.get(video);
+  private controllerFor(media: HTMLMediaElement): VideoSubtitleController {
+    let controller = this.controllers.get(media);
     if (!controller) {
-      controller = new VideoSubtitleController(video);
-      this.controllers.set(video, controller);
+      controller = new VideoSubtitleController(media);
+      this.controllers.set(media, controller);
     }
     return controller;
   }
@@ -321,11 +328,9 @@ export class SubtitleManager {
   }
 
   applyMemoryCues(media: HTMLMediaElement, cues: CueLike[]): void {
-    if (media instanceof HTMLVideoElement) {
-      const controller = this.controllerFor(media);
-      controller.setStyles(this.style);
-      controller.setMemoryCues(cues);
-    }
+    const controller = this.controllerFor(media);
+    controller.setStyles(this.style);
+    controller.setMemoryCues(cues);
   }
 
   pickCaptionlessMedia(): HTMLMediaElement | null {

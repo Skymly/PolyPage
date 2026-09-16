@@ -31,6 +31,23 @@ export function computeOcrAvailable(
   return vision;
 }
 
+/** Context-menu projection (M-36). Must match hover `ocrAvailable`, not vision-only. */
+export function imageContextMenuState(
+  imageEnabled: boolean,
+  engine: 'tesseract-wasm' | 'llm-vision',
+  vision: boolean,
+  tessRuntime: boolean,
+): { create: false } | { create: true; enabled: boolean; title: string } {
+  if (!imageEnabled) return { create: false };
+  const enabled = computeOcrAvailable(true, engine, vision, tessRuntime);
+  const title = enabled
+    ? '翻译图片文字 (PolyPage)'
+    : engine === 'tesseract-wasm'
+      ? '翻译图片文字（当前环境无法运行本地识别）'
+      : '翻译图片文字（当前服务不支持视觉）';
+  return { create: true, enabled, title };
+}
+
 /** Vendored tesseract.esm.min.js is a CJS wrap that only `export default`. */
 export function resolveCreateWorker(mod: unknown): (typeof import('tesseract.js'))['createWorker'] {
   const rec = mod && typeof mod === 'object' ? (mod as Record<string, unknown>) : {};

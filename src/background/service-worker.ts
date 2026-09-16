@@ -27,7 +27,7 @@ import { MEDIA_COMMAND_FRAME_ID, sendTabCommand, sendViewerResume } from '../mes
 import { hostnameFromUrl } from '../shared/siteRules';
 import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
-import { computeOcrAvailable, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
+import { computeOcrAvailable, imageContextMenuState, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { AsrResponse, OcrResponse, RuntimeMessage, StreamPortInit, StreamPortMessage } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
 import { createProvider, toProviderError } from '../providers/provider';
@@ -635,13 +635,30 @@ function setupContextMenus(settings?: Settings): void {
     }
     const imageEnabled = settings?.imageTranslate.enabled ?? true;
     if (imageEnabled) {
-      const vision = settings ? activeProviderCapabilities(settings).vision : true;
-      chrome.contextMenus.create({
-        id: MENU_TRANSLATE_IMAGE,
-        title: vision ? '翻译图片文字 (PolyPage)' : '翻译图片文字（当前服务不支持视觉）',
-        contexts: ['image'],
-        enabled: vision,
-      });
+      if (!settings) {
+        chrome.contextMenus.create({
+          id: MENU_TRANSLATE_IMAGE,
+          title: '翻译图片文字 (PolyPage)',
+          contexts: ['image'],
+          enabled: true,
+        });
+      } else {
+        const vision = activeProviderCapabilities(settings).vision;
+        const menu = imageContextMenuState(
+          true,
+          settings.imageTranslate.engine,
+          vision,
+          tesseractRuntimeAvailable(),
+        );
+        if (menu.create) {
+          chrome.contextMenus.create({
+            id: MENU_TRANSLATE_IMAGE,
+            title: menu.title,
+            contexts: ['image'],
+            enabled: menu.enabled,
+          });
+        }
+      }
     }
     const asrEnabled = settings?.asr.enabled ?? true;
     const asr = settings ? activeProviderCapabilities(settings).asr : false;

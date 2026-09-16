@@ -196,8 +196,11 @@ describe('2.0 provider normalization', () => {
     expect(native?.fallbackProviderId).toBe('d1');
   });
 
-  it('still rejects unknown provider types (v1 behavior)', () => {
-    expect(normalizeProvider({ id: 'x', type: 'bogus' })).toBeNull();
+  it('keeps unknown provider types instead of dropping them (M-56)', () => {
+    const p = normalizeProvider({ id: 'x', type: 'bogus', apiKey: 'k' });
+    expect(p).not.toBeNull();
+    expect(p?.type).toBe('bogus');
+    expect(p?.apiKey).toBe('k');
   });
 });
 

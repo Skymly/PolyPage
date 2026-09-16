@@ -17,7 +17,7 @@ describe('normalizeSettings', () => {
         { id: 'b', type: 'bogus-type' },
       ],
     });
-    expect(s.providers.map((p) => p.id)).toEqual(['a']);
+    expect(s.providers.map((p) => p.id)).toEqual(['a', 'b']);
     expect(s.activeProviderId).toBe('a');
   });
 
@@ -28,13 +28,31 @@ describe('normalizeSettings', () => {
     expect(s.providers[0].timeoutMs).toBe(1000);
     expect(s.providers[0].maxBatchItems).toBe(100);
   });
+
+  it('does not replace a sole unknown-type provider with the default OpenAI (M-56)', () => {
+    const s = normalizeSettings({
+      providers: [{ id: 'legacy', type: 'future-llm', apiKey: 'keep-me', name: 'Future' }],
+    });
+    expect(s.providers).toHaveLength(1);
+    expect(s.providers[0].id).toBe('legacy');
+    expect(s.providers[0].type).toBe('future-llm');
+    expect(s.providers[0].apiKey).toBe('keep-me');
+    expect(s.activeProviderId).toBe('legacy');
+  });
 });
 
 describe('normalizeProvider', () => {
-  it('rejects invalid providers', () => {
+  it('rejects providers without an id', () => {
     expect(normalizeProvider(null)).toBeNull();
     expect(normalizeProvider({ id: '', type: 'openai-compatible' })).toBeNull();
-    expect(normalizeProvider({ id: 'x', type: 'nope' })).toBeNull();
+  });
+
+  it('keeps unknown types and their apiKey (M-56)', () => {
+    const p = normalizeProvider({ id: 'x', type: 'nope', apiKey: 'secret', name: 'Future' });
+    expect(p?.id).toBe('x');
+    expect(p?.type).toBe('nope');
+    expect(p?.apiKey).toBe('secret');
+    expect(p?.name).toBe('Future');
   });
 
   it('defaults openai-compatible extras: streaming on, vision/asr off (M-34)', () => {

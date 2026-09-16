@@ -32,6 +32,7 @@ import {
   SCHEMA_VERSION,
   SETTINGS_STORAGE_KEY,
   defaultSettings,
+  defaultProvider,
 } from '../shared/constants';
 import { DISPLAY_MODES } from '../shared/types';
 import type {
@@ -74,6 +75,10 @@ const PROVIDER_TYPES: ProviderType[] = [
   'google-translate',
   'native-host',
 ];
+
+export function isKnownProviderType(type: string): type is ProviderType {
+  return (PROVIDER_TYPES as string[]).includes(type);
+}
 
 /** Coerce arbitrary stored data (schema v1–v5) into a valid v6 Settings. */
 export function normalizeSettings(raw: unknown): Settings {
@@ -323,8 +328,7 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
   if (raw === null || typeof raw !== 'object') return null;
   const r = raw as Partial<ProviderConfig>;
   if (typeof r.id !== 'string' || r.id.trim() === '') return null;
-  if (!PROVIDER_TYPES.includes(r.type as ProviderType)) return null;
-  const type = r.type as ProviderType;
+  if (typeof r.type !== 'string' || r.type.trim() === '') return null;
   const num = (v: unknown, fallback: number, min: number, max: number) =>
     typeof v === 'number' && Number.isFinite(v) ? clamp(v, min, max) : fallback;
   const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
@@ -335,6 +339,21 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
       if (typeof k === 'string' && typeof v === 'string') headers[k] = v;
     }
   }
+
+  if (!isKnownProviderType(r.type)) {
+    return {
+      ...defaultProvider(),
+      id: r.id,
+      name: str(r.name, r.id),
+      type: r.type as ProviderType,
+      apiKey: str(r.apiKey),
+      baseUrl: str(r.baseUrl),
+      model: str(r.model),
+      headers,
+      enabled: r.enabled !== false,
+    };
+  }
+  const type = r.type;
 
   const provider: ProviderConfig = {
     id: r.id,

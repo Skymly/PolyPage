@@ -171,6 +171,40 @@ describe('OcrRoundTrip', () => {
     expect(translateCalls).toEqual([]);
   });
 
+  it('does not cache segments whose translation was stripped empty (M-33)', async () => {
+    const { trip, engineCalls } = make(settings(), {
+      engineSegments: [{ text: 'HELLO WORLD', translation: '<think>x</think>' }],
+    });
+    const first = await trip.recognize(input);
+    expect(first.ok).toBe(true);
+    if (first.ok) expect(first.segments[0].translation).toBe('');
+    expect(engineCalls.length).toBe(1);
+    const second = await trip.recognize(input);
+    expect(second.ok && second.cached).toBe(false);
+    expect(engineCalls.length).toBe(2);
+  });
+
+  it('re-sanitizes OCR cache hits (M-33)', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const { sha256Hex } = await import('../src/ocr/imagePrep');
+    const hash = await sha256Hex(bytes.buffer);
+    const cache = new MemoryOcrCache();
+    const key = buildOcrCacheKey({
+      providerId: 'a',
+      engineId: 'llm-vision',
+      sourceLanguage: 'English',
+      targetLanguage: '简体中文',
+      glossaryVersion: 0,
+      identity: `img|${hash}`,
+    });
+    await cache.put(key, [{ text: 'HELLO', translation: '<think>stale</think>' }]);
+    const { trip, engineCalls } = make(settings(), { cache });
+    const res = await trip.recognize(input);
+    expect(res.ok && res.cached).toBe(true);
+    if (res.ok) expect(res.segments[0].translation).toBe('');
+    expect(engineCalls.length).toBe(0);
+  });
+
   it('tesseract two-step uses translateTexts, vision does not', async () => {
     const tess = make(
       settings({ imageTranslate: { ...defaultSettings().imageTranslate, engine: 'tesseract-wasm', enabled: true } }),

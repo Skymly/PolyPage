@@ -52,6 +52,10 @@ function sanitizeSegmentTranslation(text: string, settings: Settings): string {
   return result.ok ? result.text : '';
 }
 
+function ocrSegmentsCacheable(segments: OcrSegment[]): boolean {
+  return segments.length > 0 && segments.every((s) => s.text.trim() === '' || s.translation.trim() !== '');
+}
+
 export class OcrRoundTrip {
   constructor(private readonly deps: OcrRoundTripDeps) {}
 
@@ -112,7 +116,15 @@ export class OcrRoundTrip {
           });
           const cached = await this.deps.cache.get(key);
           if (cached) {
-            return { ok: true, segments: cached, cached: true, engine: engineId };
+            return {
+              ok: true,
+              segments: cached.map((seg) => ({
+                ...seg,
+                translation: sanitizeSegmentTranslation(seg.translation || '', settings),
+              })),
+              cached: true,
+              engine: engineId,
+            };
           }
         } catch {
           /* fall through */
@@ -163,7 +175,7 @@ export class OcrRoundTrip {
         this.deps.recordStat?.(provider.id, true, Date.now() - started);
       }
 
-      if (settings.cacheEnabled && provider) {
+      if (settings.cacheEnabled && provider && ocrSegmentsCacheable(segments)) {
         try {
           const key = buildOcrCacheKey({
             providerId: provider.id,

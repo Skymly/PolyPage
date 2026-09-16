@@ -59,5 +59,5 @@ Your model. Your page. Nothing rewritten.
 ## 隐私 / 单一用途声明（CWS 问卷摘要）
 
 - 单一用途：用户触发的网页翻译与相关内容（PDF / 图片 / 字幕 / 语音转写）
-- 远程代码：无。tesseract WASM 与语言包均本地打包
+- 远程代码：无。tesseract WASM 与默认语言包（eng、chi_sim）本地打包；日/韩/法/德等附加 `.traineddata` 由用户在 Options 确认体积后从 tessdata_fast 下载（数据文件，非可执行代码）
 - 用户数据：不出售；只发往用户配置的端点

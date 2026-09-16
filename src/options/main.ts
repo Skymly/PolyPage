@@ -1099,14 +1099,14 @@ async function persist(): Promise<boolean> {
       toast(`保存失败：${res?.error ?? '未知错误'}`, true);
       return false;
     }
+    draft = res.settings ? normalizeSettings(res.settings) : normalized;
   } catch (e) {
     toast(`保存失败：${e instanceof Error ? e.message : String(e)}`, true);
     return false;
   }
-  draft = normalized;
-  selectedId = normalized.providers.some((p) => p.id === selectedId)
+  selectedId = draft.providers.some((p) => p.id === selectedId)
     ? selectedId
-    : normalized.activeProviderId;
+    : draft.activeProviderId;
   clearDirty();
   renderAll();
   toast('设置已保存');
@@ -1238,7 +1238,7 @@ async function importSettings(file: File): Promise<void> {
       toast('导入失败：文件格式无效或缺少必要配置', true);
       return;
     }
-    await sendRuntime({ type: 'save-settings', settings: normalized });
+    await sendRuntime({ type: 'save-settings', settings: normalized, replaceAll: true });
     draft = normalized;
     selectedId = normalized.activeProviderId;
     renderAll();

@@ -11,15 +11,24 @@ import { createServer } from 'node:http';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {
+  assertGatewayCommit,
+  DEFAULT_GATEWAY_EXE,
+  ensurePublishedGateway,
+  gitHead,
+} from './ensure-gateway-publish.mjs';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const EXE =
-  process.argv[2] ??
-  path.join(
-    root,
-    'native-host/PolyPage.Gateway/bin/Release/net8.0/win-x64/publish/PolyPage.Gateway.exe',
-  );
+const EXE = process.argv[2] ?? DEFAULT_GATEWAY_EXE;
+try {
+  if (process.argv[2]) {
+    assertGatewayCommit(EXE, gitHead());
+  } else {
+    ensurePublishedGateway(EXE);
+  }
+} catch (e) {
+  console.error(e instanceof Error ? e.message : e);
+  process.exit(1);
+}
 
 let failures = 0;
 function check(name, cond, detail = '') {

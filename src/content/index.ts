@@ -34,7 +34,7 @@ import {
 } from './media';
 import { bytesToBase64 } from '../shared/binaryChunk';
 import { ImageTranslateController } from './imageButton';
-import { removeImageOverlay } from '../ocr/overlay';
+import { OCR_OVERLAY_HOST_CLASS, removeImageOverlay } from '../ocr/overlay';
 import { FeedbackMarker } from './feedback';
 
 const translator = new PageTranslator();
@@ -66,6 +66,7 @@ function isOwnNode(node: Node): boolean {
     node.classList.contains('wt-tooltip-host') ||
     node.classList.contains('wt-selection-host') ||
     node.classList.contains('wt-ocr-host') ||
+    node.classList.contains(OCR_OVERLAY_HOST_CLASS) ||
     node.classList.contains('wt-img-btn') ||
     node.classList.contains('wt-feedback-btn') ||
     node.classList.contains('wt-subtitle-host')

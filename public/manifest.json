@@ -40,12 +40,6 @@
       "all_frames": true
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["vendor/*", "vendor/tessdata/*"],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "commands": {
     "toggle-translate": {
       "suggested_key": {

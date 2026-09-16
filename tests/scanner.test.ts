@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 beforeEach(() => {
   HTMLElement.prototype.checkVisibility = () => true;
 });
-import { NAV_TRANSLATION_CLASS } from '../src/shared/constants';
+import { INLINE_DST_CLASS, INLINE_SRC_CLASS, NAV_TRANSLATION_CLASS } from '../src/shared/constants';
 import {
   isMenuChrome,
   scanTranslatableNodes,
@@ -44,6 +44,14 @@ describe('scanTranslatableNodes nav chrome', () => {
     const li = document.getElementById('item') as HTMLElement;
     expect(sourceTextOf(li)).toBe('Contents');
     expect(scanTranslatableNodes(document.body, 8).map((el) => sourceTextOf(el))).toEqual(['Contents']);
+  });
+
+  it('ignores inline destination spans when reading source text (M-01)', () => {
+    mount(
+      `<p id="p1"><span class="${INLINE_SRC_CLASS}">The quick brown fox.</span><span class="${INLINE_DST_CLASS}">敏捷的棕狐。</span></p>`,
+    );
+    const p = document.getElementById('p1') as HTMLElement;
+    expect(sourceTextOf(p)).toBe('The quick brown fox.');
   });
 
   it('still skips code and form controls outside nav', () => {

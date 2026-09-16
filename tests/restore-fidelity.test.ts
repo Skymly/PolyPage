@@ -11,6 +11,7 @@ import {
   INLINE_SRC_CLASS,
 } from '../src/shared/constants';
 import { PageTranslator } from '../src/content/translator';
+import { sourceTextOf } from '../src/content/scanner';
 import type { TranslateItemsFn } from '../src/content/runtimeTranslate';
 import type { DisplayMode } from '../src/shared/types';
 
@@ -113,5 +114,39 @@ describe('restore fidelity (M-18)', () => {
     expect(htmlWithoutWtId(root)).toBe(before);
     expect(document.getElementById('p1')?.textContent).toBe(ORIGINAL);
     translationChromeGone();
+  });
+
+  it('inline: restore() after a third-party mutation still matches original HTML (M-01)', async () => {
+    const root = mountArticle();
+    const before = htmlWithoutWtId(root);
+    const translator = translatorWithMap({ [ORIGINAL]: TRANSLATED });
+    await translator.translate('inline');
+    expect(document.getElementById('p1')?.querySelector(`.${INLINE_DST_CLASS}`)).not.toBeNull();
+
+    const junk = document.createElement('span');
+    junk.id = 'third-party';
+    junk.textContent = 'ad banner';
+    root.appendChild(junk);
+    expect(translator.detectRecycledNodes()).toBe(false);
+
+    translator.restore();
+    junk.remove();
+    expect(htmlWithoutWtId(root)).toBe(before);
+    expect(document.getElementById('p1')?.textContent).toBe(ORIGINAL);
+    translationChromeGone();
+  });
+
+  it('inline: replacing the paragraph content is still treated as recycle (M-01)', async () => {
+    mountArticle();
+    const recycled = 'Completely new recycled paragraph text here for the virtual list.';
+    const translator = translatorWithMap({
+      [ORIGINAL]: TRANSLATED,
+      [recycled]: '虚拟列表换了新段落。',
+    });
+    await translator.translate('inline');
+    const p = document.getElementById('p1') as HTMLElement;
+    p.textContent = recycled;
+    expect(translator.detectRecycledNodes()).toBe(true);
+    expect(sourceTextOf(p)).toBe(recycled);
   });
 });

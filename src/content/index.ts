@@ -12,6 +12,7 @@ import {
   INLINE_SRC_CLASS,
   LANGUAGE_DETECT_MAX_SAMPLES,
   LANGUAGE_DETECT_SAMPLE_CHARS,
+  NAV_TRANSLATION_CLASS,
   SHADOW_STYLE_ATTR,
 } from '../shared/constants';
 import { detectLanguage } from '../shared/languageDetect';
@@ -19,6 +20,7 @@ import { resolveLanguageCode } from '../providers/langCodes';
 import type { ContentSettings, EffectiveRule, PageState } from '../shared/types';
 import { DomObserver } from './observer';
 import { effectiveRuleForHost, hostBlacklisted, topLevelHostname } from './rules';
+import { isInsertedOwnElement } from './scanner';
 import { SelectionTranslator } from './selection';
 import { PageTranslator } from './translator';
 import { SubtitleManager, captureMediaWindow } from './media';
@@ -50,22 +52,20 @@ function isOwnNode(node: Node): boolean {
     return isOwnNode(parent);
   }
   if (node.hasAttribute?.(SHADOW_STYLE_ATTR)) return true;
+  if (isInsertedOwnElement(node)) return true;
   if (
-    node.classList.contains(BILINGUAL_CLASS) ||
     node.classList.contains('wt-tooltip-host') ||
     node.classList.contains('wt-selection-host') ||
     node.classList.contains('wt-ocr-host') ||
     node.classList.contains('wt-img-btn') ||
     node.classList.contains('wt-feedback-btn') ||
-    node.classList.contains('wt-subtitle-host') ||
-    node.classList.contains(INLINE_SRC_CLASS) ||
-    node.classList.contains(INLINE_DST_CLASS)
+    node.classList.contains('wt-subtitle-host')
   ) {
     return true;
   }
   return (
     node.closest(
-      `.${BILINGUAL_CLASS}, .wt-tooltip-host, .${INLINE_SRC_CLASS}, .${INLINE_DST_CLASS}`,
+      `.${BILINGUAL_CLASS}, .${NAV_TRANSLATION_CLASS}, .wt-tooltip-host, .${INLINE_SRC_CLASS}, .${INLINE_DST_CLASS}`,
     ) !== null
   );
 }

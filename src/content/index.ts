@@ -72,7 +72,6 @@ function isOwnNode(node: Node): boolean {
 
 const observer = new DomObserver(
   () => {
-    observer.scanForShadowRoots(document.body);
     if (translator.active) {
       translator.detectRecycledNodes();
       translator.rescan();

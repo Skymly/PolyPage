@@ -36,6 +36,7 @@ import {
 import { bytesToBase64 } from '../shared/binaryChunk';
 import { ImageTranslateController } from './imageButton';
 import { OCR_OVERLAY_HOST_CLASS, removeImageOverlay } from '../ocr/overlay';
+import { restorePage } from './restorePage';
 import { FeedbackMarker } from './feedback';
 
 const translator = new PageTranslator();
@@ -234,6 +235,17 @@ function defaultMode(): ContentSettings['defaultDisplayMode'] {
   return effectiveRule?.defaultMode ?? contentSettings?.defaultDisplayMode ?? 'bilingual';
 }
 
+function restorePageLayers(): void {
+  const asrRequestId = restorePage({
+    abortAsr: () => asrSession.abort(),
+    restoreTranslator: () => translator.restore(),
+    restoreSubtitles: () => subtitleManager.restoreAll(),
+    removeOverlay: removeImageOverlay,
+    scheduleReport,
+  });
+  if (asrRequestId) void sendRuntime({ type: 'asr-cancel', requestId: asrRequestId });
+}
+
 async function handleCommand(cmd: TabCommand): Promise<unknown> {
   switch (cmd.type) {
     case 'wt:get-state':
@@ -244,17 +256,12 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       return { ok: true };
     }
     case 'wt:restore': {
-      const asrRequestId = asrSession.abort();
-      if (asrRequestId) void sendRuntime({ type: 'asr-cancel', requestId: asrRequestId });
-      translator.restore();
-      subtitleManager.restoreAll();
-      removeImageOverlay();
-      scheduleReport();
+      restorePageLayers();
       return { ok: true };
     }
     case 'wt:toggle': {
       if (translator.active) {
-        translator.restore();
+        restorePageLayers();
       } else {
         void translator.translate(defaultMode());
       }

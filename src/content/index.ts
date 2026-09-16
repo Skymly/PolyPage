@@ -23,7 +23,7 @@ import { effectiveRuleForHost, hostBlacklisted, topLevelHostname } from './rules
 import { isInsertedOwnElement } from './scanner';
 import { SelectionTranslator } from './selection';
 import { PageTranslator } from './translator';
-import { SubtitleManager, captureMediaWindow } from './media';
+import { AsrSession, SubtitleManager, captureMediaWindow, isAbortError } from './media';
 import { bytesToBase64 } from '../shared/binaryChunk';
 import { ImageTranslateController } from './imageButton';
 import { removeImageOverlay } from '../ocr/overlay';
@@ -34,6 +34,7 @@ translator.init();
 
 const selectionTranslator = new SelectionTranslator();
 const subtitleManager = new SubtitleManager();
+const asrSession = new AsrSession();
 const imageController = new ImageTranslateController();
 const feedbackMarker = new FeedbackMarker();
 
@@ -90,7 +91,7 @@ function extendedState(): PageState {
   state.subtitles = subtitleManager.state();
   state.subtitleVideos = subtitleManager.subtitleVideoCount();
   state.captionlessMedia = subtitleManager.captionlessMediaCount();
-  state.asrActive = subtitleManager.asrActive();
+  state.asrActive = subtitleManager.asrActive() || asrSession.active;
   return state;
 }
 
@@ -138,6 +139,7 @@ function pageMatchesTargetLanguage(): boolean {
 async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; skipped?: string; error?: string }> {
   if (!contentSettings?.asrEnabled) return { ok: false, error: '语音转写已关闭' };
   if (!contentSettings.asrSupported) return { ok: false, error: '当前翻译服务不支持转写' };
+  if (asrSession.active) return { ok: false, error: '转写进行中' };
   if (subtitleManager.asrActive()) {
     subtitleManager.restoreAll();
     scheduleReport();
@@ -160,47 +162,67 @@ async function handleTranscribeMedia(force: boolean): Promise<{ ok: boolean; ski
     );
     if (full) duration = remaining;
   }
-  let captured: { mime: string; bytes: Uint8Array; start: number; duration: number };
-  try {
-    captured = await captureMediaWindow(media, duration);
-  } catch (e) {
-    const src = media.currentSrc || media.src;
-    if (src && /^https?:/i.test(src)) {
-      const res = await fetch(src);
-      if (!res.ok) return { ok: false, error: e instanceof Error ? e.message : String(e) };
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      captured = {
-        mime: res.headers.get('content-type')?.split(';')[0]?.trim() || 'audio/webm',
-        bytes,
-        start: media.currentTime || 0,
-        duration,
-      };
-    } else {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }
-  const requestId = `asr-${Date.now()}`;
-  const res = await sendRuntime({
-    type: 'asr-start',
-    requestId,
-    mime: captured.mime,
-    base64: bytesToBase64(captured.bytes),
-    windowStart: captured.start,
-    windowDuration: captured.duration,
-    languageHint: pageLanguage ?? undefined,
-  });
-  if (!res?.ok) return { ok: false, error: res && 'error' in res ? res.error : '转写失败' };
-  subtitleManager.applyMemoryCues(
-    media,
-    res.cues.map((c) => ({
-      startTime: c.start,
-      endTime: c.end,
-      text: c.text,
-      translation: c.translation,
-    })),
-  );
+  const { requestId, signal } = asrSession.start();
+  const onHide = (): void => {
+    asrSession.abort();
+  };
+  window.addEventListener('pagehide', onHide);
   scheduleReport();
-  return { ok: true };
+  try {
+    let captured: { mime: string; bytes: Uint8Array; start: number; duration: number };
+    try {
+      captured = await captureMediaWindow(media, duration, signal);
+    } catch (e) {
+      if (isAbortError(e) || signal.aborted) return { ok: true };
+      const src = media.currentSrc || media.src;
+      if (src && /^https?:/i.test(src)) {
+        const res = await fetch(src);
+        if (!res.ok) return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        captured = {
+          mime: res.headers.get('content-type')?.split(';')[0]?.trim() || 'audio/webm',
+          bytes,
+          start: media.currentTime || 0,
+          duration,
+        };
+      } else {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    if (signal.aborted) {
+      void sendRuntime({ type: 'asr-cancel', requestId });
+      return { ok: true };
+    }
+    const res = await sendRuntime({
+      type: 'asr-start',
+      requestId,
+      mime: captured.mime,
+      base64: bytesToBase64(captured.bytes),
+      windowStart: captured.start,
+      windowDuration: captured.duration,
+      languageHint: pageLanguage ?? undefined,
+    });
+    if (signal.aborted) {
+      void sendRuntime({ type: 'asr-cancel', requestId });
+      return { ok: true };
+    }
+    if (!res?.ok) return { ok: false, error: res && 'error' in res ? res.error : '转写失败' };
+    subtitleManager.applyMemoryCues(
+      media,
+      res.cues.map((c) => ({
+        startTime: c.start,
+        endTime: c.end,
+        text: c.text,
+        translation: c.translation,
+      })),
+    );
+    scheduleReport();
+    return { ok: true };
+  } finally {
+    window.removeEventListener('pagehide', onHide);
+    asrSession.finish();
+    scheduleReport();
+  }
 }
 
 /* --------------------------------- commands ---------------------------------- */
@@ -218,11 +240,15 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       void translator.translate(mode);
       return { ok: true };
     }
-    case 'wt:restore':
+    case 'wt:restore': {
+      const asrRequestId = asrSession.abort();
+      if (asrRequestId) void sendRuntime({ type: 'asr-cancel', requestId: asrRequestId });
       translator.restore();
       subtitleManager.restoreAll();
       removeImageOverlay();
+      scheduleReport();
       return { ok: true };
+    }
     case 'wt:toggle': {
       if (translator.active) {
         translator.restore();

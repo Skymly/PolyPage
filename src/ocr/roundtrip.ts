@@ -13,7 +13,7 @@ import type { OcrResultCache } from './resultCache';
 import { defaultFetchImage, defaultPrepareDataUrl, sha256Hex } from './imagePrep';
 import { sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
 import type { ErrorKind, OcrEngineId, OcrSegment, ProviderConfig, Settings } from '../shared/types';
-import { providerSupportsVision, toProviderError } from '../providers/provider';
+import { providerSupportsVision, ProviderError, toProviderError } from '../providers/provider';
 import type { TranslationContext, TranslationProvider } from '../providers/provider';
 import { buildContext, effectiveLanguages, isProviderConfigured } from '../translation/context';
 import type { OcrResponse } from '../messaging/messages';
@@ -155,6 +155,7 @@ export class OcrRoundTrip {
 
       const engine = (this.deps.createEngine ?? defaultCreateEngine)(engineId, tessLangs, instance);
       const result = await engine.recognize({ dataUrl }, ctx, input.signal);
+      if (input.signal.aborted) throw new ProviderError('aborted', '已取消');
       let segments: OcrSegment[] = result.segments.map((seg) => ({
         ...seg,
         translation: sanitizeSegmentTranslation(seg.translation || '', settings),
@@ -176,6 +177,7 @@ export class OcrRoundTrip {
       }
 
       if (settings.cacheEnabled && provider && ocrSegmentsCacheable(segments)) {
+        if (input.signal.aborted) throw new ProviderError('aborted', '已取消');
         try {
           const key = buildOcrCacheKey({
             providerId: provider.id,

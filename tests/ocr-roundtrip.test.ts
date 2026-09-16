@@ -234,4 +234,34 @@ describe('OcrRoundTrip', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.kind).toBe('network');
   });
+
+  it('does not cache OCR results after abort (M-58)', async () => {
+    const ac = new AbortController();
+    let finish!: (value: { engine: 'tesseract-wasm'; segments: Array<{ text: string; translation: string }> }) => void;
+    let started!: () => void;
+    const startedAt = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { trip, cache } = make(
+      settings({ imageTranslate: { ...defaultSettings().imageTranslate, engine: 'tesseract-wasm', enabled: true } }),
+      {
+        createEngine: () => ({
+          id: 'tesseract-wasm',
+          recognize: () =>
+            new Promise((resolve) => {
+              finish = resolve;
+              started();
+            }),
+        }),
+        translateTexts: async (texts) => texts.map((t) => `译:${t}`),
+      },
+    );
+    const pending = trip.recognize({ url: 'https://example.test/a.png', signal: ac.signal });
+    await startedAt;
+    ac.abort();
+    finish({ engine: 'tesseract-wasm', segments: [{ text: 'HELLO', translation: '' }] });
+    const res = await pending;
+    expect(res.ok).toBe(false);
+    expect((cache as MemoryOcrCache).map.size).toBe(0);
+  });
 });

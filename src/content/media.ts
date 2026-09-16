@@ -462,10 +462,69 @@ export class SubtitleManager {
   }
 }
 
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message === '请求已取消');
+}
+
+export function abortError(): Error {
+  const error = new Error('请求已取消');
+  error.name = 'AbortError';
+  return error;
+}
+
+/** Abortable delay used by capture so restore / pagehide can stop the window. */
+export function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** In-flight ASR capture / round-trip (M-10). */
+export class AsrSession {
+  private controller: AbortController | null = null;
+  requestId: string | null = null;
+
+  get active(): boolean {
+    return this.controller !== null && !this.controller.signal.aborted;
+  }
+
+  get signal(): AbortSignal | undefined {
+    return this.controller?.signal;
+  }
+
+  start(): { requestId: string; signal: AbortSignal } {
+    this.controller = new AbortController();
+    this.requestId = `asr-${Date.now()}`;
+    return { requestId: this.requestId, signal: this.controller.signal };
+  }
+
+  abort(): string | null {
+    const id = this.requestId;
+    this.controller?.abort();
+    return id;
+  }
+
+  finish(): void {
+    this.controller = null;
+    this.requestId = null;
+  }
+}
+
 export async function captureMediaWindow(
   media: HTMLMediaElement,
   maxSeconds: number,
+  signal?: AbortSignal,
 ): Promise<{ mime: string; bytes: Uint8Array; start: number; duration: number }> {
+  if (signal?.aborted) throw abortError();
   const start = media.currentTime || 0;
   const remaining =
     Number.isFinite(media.duration) && media.duration > 0 ? Math.max(0, media.duration - start) : maxSeconds;
@@ -504,7 +563,17 @@ export async function captureMediaWindow(
       /* user gesture may be required; keep recording silence */
     }
   }
-  await new Promise((r) => window.setTimeout(r, Math.max(200, duration * 1000)));
+  const stopTracks = (): void => {
+    if (recorder.state !== 'inactive') recorder.stop();
+    audioTracks.forEach((t) => t.stop());
+  };
+  try {
+    await delay(Math.max(200, duration * 1000), signal);
+  } catch (e) {
+    stopTracks();
+    await stopped.catch(() => undefined);
+    throw e;
+  }
   if (recorder.state !== 'inactive') recorder.stop();
   await stopped;
   audioTracks.forEach((t) => t.stop());

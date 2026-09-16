@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
 namespace PolyPage.Gateway;
@@ -10,13 +11,17 @@ namespace PolyPage.Gateway;
 ///  - copies the gateway exe to %LocalAppData%\PolyPage\;
 ///  - writes the Native Messaging host manifest;
 ///  - registers HKCU NativeMessagingHosts keys for Chrome and Edge (no admin);
-///  - --allow &lt;origin&gt; appends allowed_origins (dev-mode extension ids).
+///  - --allow origin replaces allowed_origins after format validation (M-75).
 /// </summary>
 public static class Installer
 {
     public const string DefaultHostName = "com.skymly.polypage.gateway";
 
     public const string DefaultGeckoId = "polypage@skymly.com";
+
+    /// <summary>Chrome/Edge Native Messaging origin: chrome-extension://id/ (M-75).</summary>
+    private static readonly Regex ChromeExtensionOrigin =
+        new(@"^chrome-extension://[a-z0-9._-]+/$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly string[] BrowserRegistryRoots =
     {
@@ -35,12 +40,58 @@ public static class Installer
 
     /// <summary>
     /// Default host keeps the historical exe name. Other host names (smoke, side-by-side)
-    /// get their own file so <c>--install</code> cannot overwrite a production gateway.
+    /// get their own file so --install cannot overwrite a production gateway.
     /// </summary>
     public static string InstalledExecutableFileName(string hostName) =>
         string.Equals(hostName, DefaultHostName, StringComparison.OrdinalIgnoreCase)
             ? "PolyPage.Gateway.exe"
             : $"{hostName}.exe";
+
+    public static bool IsChromeExtensionOrigin(string origin) =>
+        !string.IsNullOrWhiteSpace(origin) && ChromeExtensionOrigin.IsMatch(origin.Trim());
+
+    /// <summary>
+    /// Non-empty --allow replaces the stored list; otherwise existing origins are kept (M-75).
+    /// </summary>
+    public static List<string> ResolveOrigins(IReadOnlyList<string> existing, string[] allowOrigins)
+    {
+        if (allowOrigins.Length > 0)
+        {
+            return allowOrigins
+                .Select(o => o.Trim())
+                .Where(o => o.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        return existing.ToList();
+    }
+
+    public static Dictionary<string, object> ChromiumManifest(
+        string hostName,
+        string exePath,
+        IReadOnlyList<string> origins) => new()
+    {
+        ["name"] = hostName,
+        ["description"] = "PolyPage local translation gateway",
+        ["path"] = exePath,
+        ["type"] = "stdio",
+        ["allowed_origins"] = origins,
+    };
+
+    public static Dictionary<string, object> FirefoxManifest(
+        string hostName,
+        string exePath,
+        IReadOnlyList<string> geckoIds) => new()
+    {
+        ["name"] = hostName,
+        ["description"] = "PolyPage local translation gateway",
+        ["path"] = exePath,
+        ["type"] = "stdio",
+        ["allowed_extensions"] = geckoIds,
+    };
+
+    public static bool RemovesGatewayConfig(string hostName) =>
+        string.Equals(hostName, DefaultHostName, StringComparison.OrdinalIgnoreCase);
 
     public static int Install(string[] allowOrigins, string[]? allowGeckoIds = null)
     {
@@ -48,6 +99,15 @@ public static class Installer
         {
             Console.Error.WriteLine("安装器目前仅支持 Windows。");
             return 1;
+        }
+
+        foreach (var origin in allowOrigins)
+        {
+            if (!IsChromeExtensionOrigin(origin))
+            {
+                Console.Error.WriteLine($"非法 allowed origin（需要 chrome-extension://<id>/）：{origin}");
+                return 1;
+            }
         }
 
         Directory.CreateDirectory(InstallDir);
@@ -65,8 +125,8 @@ public static class Installer
             Console.WriteLine($"网关已在安装位置: {InstalledExe}");
         }
 
-        // 2. Manifest with allowed_origins (merge with any existing manifest).
-        var origins = new List<string>();
+        // 2. Chromium manifest: allowed_origins only. Firefox uses a sibling file.
+        var storedOrigins = new List<string>();
         if (File.Exists(ManifestPath))
         {
             try
@@ -75,7 +135,7 @@ public static class Installer
                 if (existing.RootElement.TryGetProperty("allowed_origins", out var arr) &&
                     arr.ValueKind == JsonValueKind.Array)
                 {
-                    origins.AddRange(arr.EnumerateArray()
+                    storedOrigins.AddRange(arr.EnumerateArray()
                         .Where(e => e.ValueKind == JsonValueKind.String)
                         .Select(e => e.GetString()!));
                 }
@@ -85,11 +145,9 @@ public static class Installer
                 // corrupted manifest — rebuild
             }
         }
-        foreach (var origin in allowOrigins)
-        {
-            if (!origins.Contains(origin)) origins.Add(origin);
-        }
-        var geckoIds = new List<string>();
+        var origins = ResolveOrigins(storedOrigins, allowOrigins);
+
+        var storedGecko = new List<string>();
         if (File.Exists(FirefoxManifestPath))
         {
             try
@@ -98,7 +156,7 @@ public static class Installer
                 if (existingFx.RootElement.TryGetProperty("allowed_extensions", out var fxArr) &&
                     fxArr.ValueKind == JsonValueKind.Array)
                 {
-                    geckoIds.AddRange(fxArr.EnumerateArray()
+                    storedGecko.AddRange(fxArr.EnumerateArray()
                         .Where(e => e.ValueKind == JsonValueKind.String)
                         .Select(e => e.GetString()!));
                 }
@@ -108,42 +166,21 @@ public static class Installer
                 /* rebuild */
             }
         }
-        foreach (var id in allowGeckoIds ?? Array.Empty<string>())
-        {
-            if (!geckoIds.Contains(id)) geckoIds.Add(id);
-        }
+        var geckoIds = allowGeckoIds is { Length: > 0 }
+            ? allowGeckoIds.Select(id => id.Trim()).Where(id => id.Length > 0).Distinct().ToList()
+            : storedGecko;
         if (geckoIds.Count == 0) geckoIds.Add(DefaultGeckoId);
 
-        var manifest = new Dictionary<string, object>
-        {
-            ["name"] = HostName,
-            ["description"] = "PolyPage local translation gateway",
-            ["path"] = InstalledExe,
-            ["type"] = "stdio",
-            ["allowed_origins"] = origins,
-            ["allowed_extensions"] = geckoIds,
-        };
-        File.WriteAllText(ManifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-        }));
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        File.WriteAllText(ManifestPath, JsonSerializer.Serialize(
+            ChromiumManifest(HostName, InstalledExe, origins), jsonOptions));
         Console.WriteLine($"已写入 host manifest: {ManifestPath}");
-        var firefoxManifest = new Dictionary<string, object>
-        {
-            ["name"] = HostName,
-            ["description"] = "PolyPage local translation gateway",
-            ["path"] = InstalledExe,
-            ["type"] = "stdio",
-            ["allowed_extensions"] = geckoIds,
-        };
-        File.WriteAllText(FirefoxManifestPath, JsonSerializer.Serialize(firefoxManifest, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-        }));
+        File.WriteAllText(FirefoxManifestPath, JsonSerializer.Serialize(
+            FirefoxManifest(HostName, InstalledExe, geckoIds), jsonOptions));
         Console.WriteLine($"已写入 Firefox host manifest: {FirefoxManifestPath}");
         if (origins.Count == 0)
         {
-            Console.WriteLine("警告: allowed_origins 为空。请用 --allow chrome-extension://<id>/ 追加扩展来源。");
+            Console.WriteLine("警告: allowed_origins 为空。请用 --allow chrome-extension://<id>/ 指定扩展来源。");
         }
 
         // 3. Registry entries (HKCU — no elevation required).
@@ -208,7 +245,14 @@ public static class Installer
             if (File.Exists(ManifestPath)) File.Delete(ManifestPath);
             if (File.Exists(FirefoxManifestPath)) File.Delete(FirefoxManifestPath);
             if (File.Exists(InstalledExe)) File.Delete(InstalledExe);
-            Console.WriteLine("已移除 manifest 与网关文件（保留 gateway.json 配置与日志）。");
+            if (RemovesGatewayConfig(HostName)
+                && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("POLYPAGE_GATEWAY_CONFIG"))
+                && File.Exists(GatewayConfig.ConfigPath))
+            {
+                File.Delete(GatewayConfig.ConfigPath);
+                Console.WriteLine("已移除 gateway.json。");
+            }
+            Console.WriteLine("已移除 manifest 与网关文件（日志目录保留）。");
         }
         catch (Exception e)
         {

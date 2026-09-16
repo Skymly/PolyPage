@@ -10,6 +10,11 @@
     <Version>4.0.0</Version>
     <!-- Spec 2.0 §5.4 item 1: PublishSingleFile + SelfContained (x64).
          Publish with: dotnet publish -c Release -r win-x64 -->
+    <!-- M-17: ProductVersion carries git HEAD so contract/smoke can refuse a stale exe.
+         IncludeSourceRevisionInInformationalVersion is off so we never get Version+sha+sha. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <InformationalVersion Condition="'$(SourceRevisionId)' != ''">$(Version)+$(SourceRevisionId)</InformationalVersion>
+    <InformationalVersion Condition="'$(SourceRevisionId)' == ''">$(Version)</InformationalVersion>
     <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
     <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>

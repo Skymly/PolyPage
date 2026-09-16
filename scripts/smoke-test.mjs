@@ -21,6 +21,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_GATEWAY_EXE, ensurePublishedGateway } from './ensure-gateway-publish.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = path.join(root, 'dist');
@@ -28,10 +29,7 @@ const PORT_PAGE = 8123;
 const PORT_API = 8124;
 const PORT_XORIGIN = 8125;
 const BROWSER = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-const GATEWAY_EXE = path.join(
-  root,
-  'native-host/PolyPage.Gateway/bin/Release/net8.0/win-x64/publish/PolyPage.Gateway.exe',
-);
+const GATEWAY_EXE = DEFAULT_GATEWAY_EXE;
 const HOST_NAME = 'com.skymly.polypage.gateway';
 const LOCAL_APP_DATA = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
 const GATEWAY_DIR = path.join(LOCAL_APP_DATA, 'PolyPage');
@@ -591,6 +589,14 @@ await writeFile(
     ],
   }),
 );
+
+// M-17: never install / talk to a stale publish/ exe.
+try {
+  ensurePublishedGateway(GATEWAY_EXE);
+} catch (e) {
+  console.error(e instanceof Error ? e.message : e);
+  process.exit(1);
+}
 
 // Install the gateway BEFORE launching the browser. allowed_origins gets the
 // real extension id once the service worker target reveals it (the manifest

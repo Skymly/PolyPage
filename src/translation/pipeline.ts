@@ -15,12 +15,11 @@ import {
   toProviderError,
 } from '../providers/provider';
 import type { TranslationProvider } from '../providers/provider';
-import type { TranslationCache } from '../storage/cache';
+import { cacheFingerprint, type TranslationCache } from '../storage/cache';
 import { TranslationMemory, tmLangPair } from '../storage/tm';
 import {
   buildContext,
   buildFailoverChain,
-  effectiveLanguages,
   failoverEligible,
   isProviderConfigured,
 } from './context';
@@ -56,7 +55,11 @@ export interface PipelineDeps {
     frameId: number | undefined,
     items: Array<{ key: string; text: string }>,
   ) => Promise<void> | void;
-  completeTasks?: (tabId: number | undefined, keys: string[]) => Promise<void> | void;
+  completeTasks?: (
+    tabId: number | undefined,
+    keys: string[],
+    frameId?: number,
+  ) => Promise<void> | void;
 }
 
 function applyOutputSanitize(
@@ -84,6 +87,7 @@ interface QueueItem {
   tabId?: number;
   frameId?: number;
   stream: boolean;
+  immediate: boolean;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   resolve: (r: ItemResult) => void;
@@ -104,15 +108,26 @@ export class TranslationPipeline {
   cancelTab(tabId: number): void {
     this.cancelledTabs.add(tabId);
     const set = this.inflightByTab.get(tabId);
-    if (!set) return;
-    this.inflightByTab.delete(tabId);
-    for (const controller of set) {
-      try {
-        controller.abort();
-      } catch {
-        /* ignore */
+    if (set) {
+      this.inflightByTab.delete(tabId);
+      for (const controller of set) {
+        try {
+          controller.abort();
+        } catch {
+          /* ignore */
+        }
       }
     }
+    const kept: QueueItem[] = [];
+    for (const item of this.queue) {
+      if (item.tabId === tabId) {
+        item.resolve({ error: { kind: 'aborted', message: '请求已取消' } });
+      } else {
+        kept.push(item);
+      }
+    }
+    this.queue.length = 0;
+    this.queue.push(...kept);
   }
 
   async translate(items: PipelineItem[], options: TranslateOptions = {}): Promise<TranslateResults> {
@@ -132,6 +147,25 @@ export class TranslationPipeline {
           });
           return;
         }
+        const dup =
+          item.key &&
+          item.key !== '' &&
+          item.key !== 'selection' &&
+          this.queue.find(
+            (q) =>
+              q.tabId === item.tabId &&
+              q.frameId === item.frameId &&
+              q.key === item.key &&
+              q.text === item.text,
+          );
+        if (dup) {
+          const inner = dup.resolve;
+          dup.resolve = (outcome) => {
+            inner(outcome);
+            resolve({ resultKey, outcome });
+          };
+          return;
+        }
         this.queue.push({
           requestId,
           resultKey,
@@ -143,6 +177,7 @@ export class TranslationPipeline {
           tabId: item.tabId,
           frameId: item.frameId,
           stream: typeof options.onDelta === 'function',
+          immediate: options.immediate === true,
           signal: options.signal,
           onDelta: options.onDelta
             ? (delta) => options.onDelta!(resultKey, delta)
@@ -209,7 +244,7 @@ export class TranslationPipeline {
 
     const groups = new Map<string, QueueItem[]>();
     for (const item of items) {
-      const key = `${item.providerId}|${item.tabId ?? -1}`;
+      const key = `${item.providerId}|${item.tabId ?? -1}|${item.frameId ?? -1}|${item.domain ?? ''}|${item.pageLanguage ?? ''}`;
       const list = groups.get(key) ?? [];
       list.push(item);
       groups.set(key, list);
@@ -221,7 +256,12 @@ export class TranslationPipeline {
     }
 
     let index = 0;
-    const workers = Array.from({ length: Math.min(MAX_CONCURRENT_REQUESTS, Math.max(jobs.length, 0)) }, async () => {
+    const allImmediate = items.length > 0 && items.every((i) => i.immediate);
+    const workerCount = Math.min(
+      allImmediate ? Math.max(jobs.length, 1) : MAX_CONCURRENT_REQUESTS,
+      Math.max(jobs.length, 0),
+    );
+    const workers = Array.from({ length: workerCount }, async () => {
       while (index < jobs.length) {
         const job = jobs[index++];
         await job();
@@ -234,6 +274,10 @@ export class TranslationPipeline {
     const providerId = group[0].providerId;
     const groupTabId = group[0].tabId;
     const groupFrameId = group[0].frameId;
+    if (this.tabWasCancelled(groupTabId)) {
+      this.resolveBatchAborted(group, groupTabId);
+      return [];
+    }
     const provider = settings.providers.find((p) => p.id === providerId);
     if (!provider || !isProviderConfigured(provider)) {
       const message = !provider
@@ -247,7 +291,10 @@ export class TranslationPipeline {
       await this.deps.logError?.('background', 'config', `Provider "${provider?.name ?? providerId}": ${message}`, providerId);
       return [];
     }
-    const { source, target } = effectiveLanguages(settings, provider);
+    const ctx = buildContext(settings, provider, group[0].domain, group[0].pageLanguage);
+    const source = ctx.sourceLanguage;
+    const target = ctx.targetLanguage;
+    const fingerprint = cacheFingerprint(provider);
 
     let hits = new Map<string, string>();
     if (settings.cacheEnabled) {
@@ -258,20 +305,40 @@ export class TranslationPipeline {
           source,
           target,
           settings.glossaryVersion,
+          fingerprint,
         );
       } catch {
         hits = new Map();
       }
     }
     const misses: QueueItem[] = [];
-    group.forEach((item, i) => {
+    const stale: string[] = [];
+    for (let i = 0; i < group.length; i++) {
+      const item = group[i];
       const cached = hits.get(String(i));
       if (cached !== undefined) {
         const cleaned = applyOutputSanitize(cached, settings);
         if (cleaned.ok) item.resolve({ translated: cleaned.text });
-        else misses.push(item);
+        else {
+          stale.push(item.text);
+          misses.push(item);
+        }
       } else misses.push(item);
-    });
+    }
+    if (stale.length > 0) {
+      try {
+        await this.deps.cache.delete?.(
+          stale,
+          providerId,
+          source,
+          target,
+          settings.glossaryVersion,
+          fingerprint,
+        );
+      } catch {
+        /* best-effort */
+      }
+    }
     if (settings.translationMemory.enabled && misses.length > 0) {
       try {
         const pair = tmLangPair(source, target);
@@ -298,7 +365,7 @@ export class TranslationPipeline {
     }
     if (misses.length === 0) return [];
 
-    const resumeItems = misses.filter((m) => m.key !== '' && !m.stream);
+    const resumeItems = misses.filter((m) => m.key !== '' && m.key !== 'selection' && !m.stream);
     if (resumeItems.length > 0) {
       try {
         await this.deps.recordInflight?.(
@@ -336,7 +403,7 @@ export class TranslationPipeline {
     }
     if (batch.length > 0) batches.push(batch);
     for (const b of batches) {
-      jobs.push(() => this.runBatchWithFailover(settings, provider, b, groupTabId));
+      jobs.push(() => this.runBatchWithFailover(settings, provider, b, groupTabId, groupFrameId));
     }
     return jobs;
   }
@@ -346,6 +413,7 @@ export class TranslationPipeline {
     primary: ProviderConfig,
     batch: QueueItem[],
     tabId?: number,
+    frameId?: number,
   ): Promise<void> {
     const chain = buildFailoverChain(settings, primary.id);
     const attempts: ProviderConfig[] = [primary];
@@ -365,6 +433,8 @@ export class TranslationPipeline {
         provider,
         batch,
         tabId,
+        frameId,
+        primary.id,
         i > 0 ? provider.name : undefined,
       );
       if (!error) {
@@ -387,7 +457,8 @@ export class TranslationPipeline {
         for (const item of batch) item.resolve({ error: { kind: error.kind, message: error.message } });
         await this.deps.completeTasks?.(
           tabId,
-          batch.map((b) => b.key).filter((k) => k !== ''),
+          batch.map((b) => b.key).filter((k) => k !== '' && k !== 'selection'),
+          frameId,
         );
         await this.deps.logError?.(
           'background',
@@ -415,6 +486,8 @@ export class TranslationPipeline {
     providerConfig: ProviderConfig,
     batch: QueueItem[],
     tabId?: number,
+    frameId?: number,
+    cacheOwnerId?: string,
     actualProviderName?: string,
   ): Promise<{ kind: ErrorKind; message: string } | null> {
     let instance: TranslationProvider;
@@ -422,23 +495,22 @@ export class TranslationPipeline {
       instance = this.deps.createProvider(providerConfig);
     } catch (e) {
       const err = toProviderError(e);
-      for (const item of batch) item.resolve({ error: { kind: err.kind, message: err.message } });
-      await this.deps.logError?.('background', err.kind, err.message, providerConfig.id);
-      return null;
+      return { kind: err.kind, message: err.message };
     }
     const started = Date.now();
     const controller = new AbortController();
     this.registerInflight(tabId, controller);
     const onExternal = (): void => controller.abort();
-    const extra = batch[0]?.signal;
-    extra?.addEventListener('abort', onExternal);
+    const extras = [...new Set(batch.map((b) => b.signal).filter((s): s is AbortSignal => !!s))];
+    for (const extra of extras) extra.addEventListener('abort', onExternal);
     try {
-      if (controller.signal.aborted || extra?.aborted) {
+      if (controller.signal.aborted || extras.some((s) => s.aborted)) {
         throw new ProviderError('aborted', '请求已取消');
       }
       const texts = batch.map((b) => b.text);
       const ctx = buildContext(settings, providerConfig, batch[0]?.domain, batch[0]?.pageLanguage);
-      const { source, target } = effectiveLanguages(settings, providerConfig);
+      const fingerprint = cacheFingerprint(providerConfig);
+      const cacheId = cacheOwnerId ?? providerConfig.id;
       const translated = await instance.translateTexts(texts, ctx, controller.signal);
       const successes: { text: string; translated: string }[] = [];
       const doneKeys: string[] = [];
@@ -448,6 +520,7 @@ export class TranslationPipeline {
           const cleaned = applyOutputSanitize(t, settings);
           if (!cleaned.ok) {
             item.resolve({ error: { kind: 'invalid_response', message: '译文卫生层剥离后为空' } });
+            if (item.key !== '' && item.key !== 'selection') doneKeys.push(item.key);
             return;
           }
           item.resolve({
@@ -455,15 +528,27 @@ export class TranslationPipeline {
             ...(actualProviderName ? { actualProviderName } : {}),
           });
           successes.push({ text: item.text, translated: cleaned.text });
-          if (item.key !== '') doneKeys.push(item.key);
+          if (item.key !== '' && item.key !== 'selection') doneKeys.push(item.key);
         } else {
           item.resolve({ error: { kind: 'invalid_response', message: '该条目缺少翻译结果' } });
+          if (item.key !== '' && item.key !== 'selection') doneKeys.push(item.key);
         }
       });
-      this.deps.recordStat?.(providerConfig.id, true, Date.now() - started);
+      if (successes.length > 0) {
+        this.deps.recordStat?.(providerConfig.id, true, Date.now() - started);
+      } else {
+        this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, 'invalid_response');
+      }
       if (settings.cacheEnabled && successes.length > 0) {
         try {
-          await this.deps.cache.put(successes, providerConfig.id, source, target, settings.glossaryVersion);
+          await this.deps.cache.put(
+            successes,
+            cacheId,
+            ctx.sourceLanguage,
+            ctx.targetLanguage,
+            settings.glossaryVersion,
+            fingerprint,
+          );
         } catch {
           /* cache failures never break translation results */
         }
@@ -472,21 +557,23 @@ export class TranslationPipeline {
         try {
           await this.deps.tm.remember(
             successes.map((s) => ({ source: s.text, target: s.translated })),
-            tmLangPair(source, target),
+            tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
           );
         } catch {
           /* TM write is best-effort */
         }
       }
-      void this.deps.completeTasks?.(tabId, doneKeys);
+      await this.deps.completeTasks?.(tabId, doneKeys, frameId);
       return null;
     } catch (e) {
       const err = toProviderError(e);
-      this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, err.message);
+      if (err.kind !== 'aborted') {
+        this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, err.message);
+      }
       return { kind: err.kind, message: err.message };
     } finally {
-      extra?.removeEventListener('abort', onExternal);
+      for (const extra of extras) extra.removeEventListener('abort', onExternal);
       this.unregisterInflight(tabId, controller);
     }
   }
@@ -515,6 +602,7 @@ export class TranslationPipeline {
         provider,
         item,
         emitDeltas,
+        primary.id,
         i > 0 ? provider.name : undefined,
       );
       if (!error) {
@@ -557,6 +645,7 @@ export class TranslationPipeline {
     providerConfig: ProviderConfig,
     item: QueueItem,
     emitDeltas: boolean,
+    cacheOwnerId: string,
     actualProviderName?: string,
   ): Promise<{ kind: ErrorKind; message: string } | null> {
     let instance: TranslationProvider;
@@ -568,6 +657,7 @@ export class TranslationPipeline {
     }
     const started = Date.now();
     const controller = new AbortController();
+    this.registerInflight(item.tabId, controller);
     const onExternal = (): void => controller.abort();
     item.signal?.addEventListener('abort', onExternal);
     try {
@@ -575,7 +665,7 @@ export class TranslationPipeline {
         return { kind: 'aborted', message: '请求已取消' };
       }
       const ctx = buildContext(settings, providerConfig, item.domain, item.pageLanguage);
-      const { source, target } = effectiveLanguages(settings, providerConfig);
+      const fingerprint = cacheFingerprint(providerConfig);
       let full: string;
       const streaming = providerSupportsStreaming(instance);
       if (streaming && typeof instance.translateStream === 'function') {
@@ -593,10 +683,12 @@ export class TranslationPipeline {
         if (emitDeltas && full !== '') item.onDelta?.(full);
       }
       if (typeof full !== 'string' || full.trim() === '') {
+        this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, 'invalid_response');
         return { kind: 'invalid_response', message: '缺少翻译结果' };
       }
       const cleaned = applyOutputSanitize(full, settings);
       if (!cleaned.ok) {
+        this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, 'invalid_response');
         return { kind: 'invalid_response', message: '译文卫生层剥离后为空' };
       }
       this.deps.recordStat?.(providerConfig.id, true, Date.now() - started);
@@ -604,10 +696,11 @@ export class TranslationPipeline {
         try {
           await this.deps.cache.put(
             [{ text: item.text, translated: cleaned.text }],
-            providerConfig.id,
-            source,
-            target,
+            cacheOwnerId,
+            ctx.sourceLanguage,
+            ctx.targetLanguage,
             settings.glossaryVersion,
+            fingerprint,
           );
         } catch {
           /* best-effort */
@@ -617,7 +710,7 @@ export class TranslationPipeline {
         try {
           await this.deps.tm.remember(
             [{ source: item.text, target: cleaned.text }],
-            tmLangPair(source, target),
+            tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
           );
         } catch {
@@ -628,13 +721,19 @@ export class TranslationPipeline {
         translated: cleaned.text,
         ...(actualProviderName ? { actualProviderName } : {}),
       });
+      if (item.key !== '' && item.key !== 'selection') {
+        await this.deps.completeTasks?.(item.tabId, [item.key], item.frameId);
+      }
       return null;
     } catch (e) {
       const err = toProviderError(e);
-      this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, err.message);
+      if (err.kind !== 'aborted') {
+        this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, err.message);
+      }
       return { kind: err.kind, message: err.message };
     } finally {
       item.signal?.removeEventListener('abort', onExternal);
+      this.unregisterInflight(item.tabId, controller);
     }
   }
 
@@ -646,7 +745,8 @@ export class TranslationPipeline {
     for (const item of batch) item.resolve({ error: { kind: 'aborted', message: '请求已取消' } });
     void this.deps.completeTasks?.(
       tabId,
-      batch.map((b) => b.key).filter((k) => k !== ''),
+      batch.map((b) => b.key).filter((k) => k !== '' && k !== 'selection'),
+      batch[0]?.frameId,
     );
   }
 

@@ -138,11 +138,14 @@ export class TaskTable {
   }
 
   /** Delete completed tasks (idempotent: absent records are fine). */
-  async markDone(tabId: number, keys: string[]): Promise<void> {
+  async markDone(tabId: number, keys: string[], frameId?: number): Promise<void> {
     if (keys.length === 0) return;
     const keySet = new Set(keys);
     await this.store.deleteMany(
-      (r) => r.tabId === tabId && keySet.has(r.taskKey),
+      (r) =>
+        r.tabId === tabId &&
+        keySet.has(r.taskKey) &&
+        (frameId === undefined || r.frameId === frameId),
     );
   }
 

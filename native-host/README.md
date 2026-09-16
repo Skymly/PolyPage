@@ -10,7 +10,8 @@ Host 运行，把扩展的翻译请求路由到本地或远程后端（Ollama、
 扩展 Background (MV3 SW)  ──Native Messaging(stdio, 长度前缀 JSON)──▶  PolyPage Gateway
      native-host Provider        JSON-RPC 2.0                          后端路由
                                                                           ├─ OllamaBackend (localhost:11434/v1)
-                                                                          └─ HttpBackend   (通用 JSON 转发)
+                                                                          ├─ HttpBackend   (通用 JSON 转发)
+                                                                          └─ WhisperBackend (HTTP 或 whisper.cpp CLI)
 ```
 
 - 传输层：Native Messaging 标准帧（32 位小端长度前缀 + UTF-8 JSON，单条 ≤ 1MB）。
@@ -22,9 +23,12 @@ Host 运行，把扩展的翻译请求路由到本地或远程后端（Ollama、
 | 方法 | 说明 |
 |---|---|
 | `ping` | 探活，返回 `{ protocol, name, version }` |
-| `capabilities` | 后端列表、是否支持流式、批量上限 |
+| `capabilities` | 后端列表、流式/视觉/ASR 标志、默认后端批量上限、`maxBinaryBytes` |
 | `translate` | 批量翻译 `{ texts[], source, target, backend? }` → `{ translations[], backend }` |
 | `translate.stream` | 单条流式 `{ text, source, target, backend? }`；逐块 `translate.delta` 通知 + 最终 `{ translation }` |
+| `binary.chunk` | 分块上传二进制 `{ transferId, index, total, mime, data(base64), sha256? }`；齐块后可选校验 sha256 |
+| `translate.image` | 视觉翻译：小图可内联 `dataUrl`，大图先 `binary.chunk` 再传 `transferId` → `{ segments[], backend }` |
+| `transcribe` | 转写，**必须**先 `binary.chunk` 再传 `{ transferId, languageHint?, source?, target?, backend? }`；拒绝内联音频 |
 | `cancel` | 按请求 id 取消 |
 | `backends.list` | 后端元数据 |
 | `health` | 各后端健康状态 |
@@ -46,7 +50,7 @@ dotnet publish native-host/PolyPage.Gateway -c Release -r win-x64
 ## 安装（Windows，无需管理员）
 
 ```powershell
-# 开发态：先加载扩展拿到扩展 ID（chrome://extensions），再追加 allowed_origins
+# 开发态：先加载扩展拿到扩展 ID（chrome://extensions），再写入 allowed_origins
 .\PolyPage.Gateway.exe --install --allow "chrome-extension://<扩展ID>/"
 
 # 查询安装状态

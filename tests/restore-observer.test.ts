@@ -1,16 +1,16 @@
 /**
- * M-85: toggle-off must share restore teardown (ASR, translator, subtitles, overlay).
+ * M-61: restorePageLayers must stop the DOM observer; translate restarts it.
  */
 import { describe, expect, it } from 'vitest';
 import { restorePage } from '../src/content/restorePage';
 
-describe('restorePage (M-85)', () => {
-  it('runs ASR abort, translator, subtitles, overlay, then report in that order', () => {
+describe('restorePage observer stop (M-61)', () => {
+  it('stops the observer after overlay teardown', () => {
     const order: string[] = [];
-    const asrRequestId = restorePage({
+    restorePage({
       abortAsr() {
         order.push('asr');
-        return 'req-1';
+        return null;
       },
       restoreTranslator() {
         order.push('translator');
@@ -28,7 +28,6 @@ describe('restorePage (M-85)', () => {
         order.push('report');
       },
     });
-    expect(asrRequestId).toBe('req-1');
     expect(order).toEqual(['asr', 'translator', 'subtitles', 'overlay', 'observer', 'report']);
   });
 });

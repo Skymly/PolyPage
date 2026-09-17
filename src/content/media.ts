@@ -351,6 +351,32 @@ export class SubtitleManager {
   private wired = false;
   private pipWired = new Set<HTMLVideoElement>();
 
+  /** Test seam (M-61). */
+  get controllerCount(): number {
+    return this.controllers.size;
+  }
+
+  /** Test seam (M-61). */
+  get interactionWired(): boolean {
+    return this.wired;
+  }
+
+  private onVideoMouseEnter = (e: Event): void => {
+    if (e.target instanceof HTMLVideoElement) this.activeVideo = e.target;
+  };
+
+  private onVideoClick = (e: Event): void => {
+    if (e.target instanceof HTMLVideoElement) this.activeVideo = e.target;
+  };
+
+  private onFullscreenChange = (): void => {
+    this.syncPresentation();
+  };
+
+  private onPipChange = (): void => {
+    this.syncPresentation();
+  };
+
   configure(style: SubtitleStyleConfig): void {
     this.style = { ...style };
     for (const controller of this.controllers.values()) {
@@ -361,21 +387,17 @@ export class SubtitleManager {
   private wireInteraction(): void {
     if (this.wired) return;
     this.wired = true;
-    document.addEventListener(
-      'mouseenter',
-      (e) => {
-        if (e.target instanceof HTMLVideoElement) this.activeVideo = e.target;
-      },
-      true,
-    );
-    document.addEventListener(
-      'click',
-      (e) => {
-        if (e.target instanceof HTMLVideoElement) this.activeVideo = e.target;
-      },
-      true,
-    );
-    document.addEventListener('fullscreenchange', () => this.syncPresentation());
+    document.addEventListener('mouseenter', this.onVideoMouseEnter, true);
+    document.addEventListener('click', this.onVideoClick, true);
+    document.addEventListener('fullscreenchange', this.onFullscreenChange);
+  }
+
+  private unwireInteraction(): void {
+    if (!this.wired) return;
+    document.removeEventListener('mouseenter', this.onVideoMouseEnter, true);
+    document.removeEventListener('click', this.onVideoClick, true);
+    document.removeEventListener('fullscreenchange', this.onFullscreenChange);
+    this.wired = false;
   }
 
   syncPresentation(): void {
@@ -388,8 +410,8 @@ export class SubtitleManager {
       this.controllerFor(video).setPictureInPicture(pip);
       if (!this.pipWired.has(video)) {
         this.pipWired.add(video);
-        video.addEventListener('enterpictureinpicture', () => this.syncPresentation());
-        video.addEventListener('leavepictureinpicture', () => this.syncPresentation());
+        video.addEventListener('enterpictureinpicture', this.onPipChange);
+        video.addEventListener('leavepictureinpicture', this.onPipChange);
       }
     }
   }
@@ -490,8 +512,18 @@ export class SubtitleManager {
 
   restoreAll(): void {
     this.asrTarget = null;
-    for (const controller of this.controllers.values()) controller.restore();
+    this.activeVideo = null;
+    for (const [media, controller] of this.controllers) {
+      controller.restore();
+      if (media instanceof HTMLVideoElement && this.pipWired.has(media)) {
+        media.removeEventListener('enterpictureinpicture', this.onPipChange);
+        media.removeEventListener('leavepictureinpicture', this.onPipChange);
+      }
+    }
+    this.controllers.clear();
+    this.pipWired.clear();
     this.restoreSelectors();
+    this.unwireInteraction();
   }
 
   /* ------------------------- subtitleSelectors (P1) ------------------------- */

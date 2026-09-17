@@ -35,6 +35,13 @@ function allOverlays(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>('.' + HOST_CLASS)];
 }
 
+function cancelPendingRelayout(): void {
+  if (raf === 0) return;
+  if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
+  else clearTimeout(raf);
+  raf = 0;
+}
+
 function stopListening(): void {
   if (!listening) return;
   window.removeEventListener('scroll', scheduleRelayout, true);
@@ -123,12 +130,16 @@ export function removeImageOverlay(img?: HTMLImageElement): void {
   if (!img) {
     for (const entry of [...live]) forgetOverlay(entry);
     for (const el of allOverlays()) el.remove();
+    cancelPendingRelayout();
     stopListening();
     return;
   }
   const entry = liveByImg.get(img);
   if (entry) forgetOverlay(entry);
-  if (live.size === 0) stopListening();
+  if (live.size === 0) {
+    cancelPendingRelayout();
+    stopListening();
+  }
 }
 
 /**

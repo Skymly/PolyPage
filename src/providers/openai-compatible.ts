@@ -11,7 +11,7 @@ import type { ProviderConfig } from '../shared/types';
 import { asrRequestTimeoutMs } from '../shared/constants';
 import { minimaxHostHint } from '../shared/sanitize';
 import { parseBatchTranslation, renderTemplate } from '../shared/utils';
-import { buildVisionRequest, buildVisionUserPrompt } from '../ocr/llm-vision';
+import { buildVisionRequest, buildVisionUserPrompt } from '../shared/visionRequest';
 import {
   ProviderError,
   classifyHttpStatus,

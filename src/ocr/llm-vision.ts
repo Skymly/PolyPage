@@ -13,40 +13,10 @@ import { stripCodeFences } from '../shared/utils';
 import type { ImageInput, OcrEngine } from './engine';
 import type { OcrResult } from '../shared/types';
 
-/** Structured output prompt; glossary injected like text translation. */
-export function buildVisionUserPrompt(ctx: TranslationContext): string {
-  const glossary = ctx.glossary && ctx.glossary.trim() !== '' ? `\n${ctx.glossary}` : '';
-  return `You are an OCR + translation engine.
-Extract ALL visible text fragments from this image, in reading order.
-Translate every fragment from ${ctx.sourceLanguage} to ${ctx.targetLanguage}.
-Respond with ONLY a JSON array, no explanations, in this exact shape:
-[{"text": "original fragment", "translation": "translated fragment"}]${glossary}`;
-}
-
-/** Pure chat/completions body builder (unit-tested). */
-export function buildVisionRequest(
-  model: string,
-  temperature: number,
-  maxTokens: number,
-  prompt: string,
-  dataUrl: string,
-): Record<string, unknown> {
-  return {
-    model,
-    stream: false,
-    temperature,
-    max_tokens: maxTokens,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: dataUrl } },
-        ],
-      },
-    ],
-  };
-}
+export {
+  buildVisionRequest,
+  buildVisionUserPrompt,
+} from '../shared/visionRequest';
 
 const TEXT_KEYS = ['text', 'original', 'source', 'src'];
 const TRANSLATION_KEYS = ['translation', 'translated', 'target', 'dst'];

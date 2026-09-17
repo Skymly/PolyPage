@@ -15,8 +15,8 @@
  *  - glossary + domain injected into the translation context.
  *
  * 3.0 additions:
- *  - OCR request routing: image fetch -> downsample -> vision provider,
- *    all through the existing cache + error classification (pillar F);
+ *  - OCR request routing: image fetch -> downsample -> OCR 往返,
+ *    which keeps its own cache (ADR-0002; not 翻译管线 cache) (pillar F);
  *  - translate-cue low-latency path for subtitles (pillar G);
  *  - quality feedback log handlers (pillar H);
  *  - PDF reader open/progress messages (pillar E);

@@ -16,8 +16,16 @@ describe('stripThinkTags', () => {
     );
   });
 
-  it('treats unclosed think as running to end-of-string', () => {
-    expect(stripThinkTags('<think>I will reason forever').trim()).toBe('');
+  it('treats unclosed think as running to end-of-string when holding', () => {
+    expect(stripThinkTags('<think>I will reason forever', { holdUnclosed: true }).trim()).toBe('');
+  });
+
+  it('does not swallow the rest of a translation after an unclosed think tag (M-79)', () => {
+    expect(stripThinkTags('请加上 <think> 再试')).toBe('请加上  再试');
+  });
+
+  it('keeps same-line text around a leftover close tag (M-79)', () => {
+    expect(stripThinkTags('请输出</think>结束')).toBe('请输出结束');
   });
 
   it('drops a leftover qwen3 </think> prefix', () => {
@@ -66,7 +74,11 @@ describe('sanitizeTranslation', () => {
 
   it('leaves raw model output untouched when disabled', () => {
     const raw = '<think>debug me</think>hello';
-    expect(sanitizeTranslation(raw, { enabled: false })).toEqual({ ok: true, text: raw });
+    expect(sanitizeTranslation(raw, { enabled: false })).toEqual({
+      ok: true,
+      text: raw,
+      persist: false,
+    });
   });
 });
 

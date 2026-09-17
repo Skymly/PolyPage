@@ -174,6 +174,81 @@ describe('TranslationPipeline', () => {
     expect(hits.size).toBe(0);
   });
 
+  it('does not persist cache when outputSanitize is disabled (M-79)', async () => {
+    const cache = new MemoryTranslationCache();
+    const s = settings({
+      outputSanitize: { enabled: false, stripThink: true, stripCodeFences: false },
+    });
+    const pipeline = makePipeline(
+      s,
+      {
+        a: (c) => fake(c, { translateTexts: async () => ['<think>raw</think>hello'] }),
+      },
+      { cache },
+    );
+    const res = await pipeline.translate([{ text: 'Hello', key: 'k1' }], { immediate: true });
+    expect(res.results.k1).toBe('<think>raw</think>hello');
+    const hits = await cache.get(
+      [{ key: 'k1', text: 'Hello' }],
+      'a',
+      'English',
+      '简体中文',
+      0,
+      cacheFingerprint(s.providers[0]),
+    );
+    expect(hits.size).toBe(0);
+  });
+
+  it('does not persist cache when outputSanitize is disabled (M-79)', async () => {
+    const cache = new MemoryTranslationCache();
+    const s = settings({
+      outputSanitize: { enabled: false, stripThink: true, stripCodeFences: false },
+    });
+    const pipeline = makePipeline(
+      s,
+      {
+        a: (c) => fake(c, { translateTexts: async () => ['<think>raw</think>hello'] }),
+      },
+      { cache },
+    );
+    const res = await pipeline.translate([{ text: 'Hello', key: 'k1' }], { immediate: true });
+    expect(res.results.k1).toBe('<think>raw</think>hello');
+    const hits = await cache.get(
+      [{ key: 'k1', text: 'Hello' }],
+      'a',
+      'English',
+      '简体中文',
+      0,
+      cacheFingerprint(s.providers[0]),
+    );
+    expect(hits.size).toBe(0);
+  });
+
+  it('does not persist cache when outputSanitize is disabled (M-79)', async () => {
+    const cache = new MemoryTranslationCache();
+    const s = settings({
+      outputSanitize: { enabled: false, stripThink: true, stripCodeFences: false },
+    });
+    const pipeline = makePipeline(
+      s,
+      {
+        a: (c) => fake(c, { translateTexts: async () => ['<think>raw</think>hello'] }),
+      },
+      { cache },
+    );
+    const res = await pipeline.translate([{ text: 'Hello', key: 'k1' }], { immediate: true });
+    expect(res.results.k1).toBe('<think>raw</think>hello');
+    const hits = await cache.get(
+      [{ key: 'k1', text: 'Hello' }],
+      'a',
+      'English',
+      '简体中文',
+      0,
+      cacheFingerprint(s.providers[0]),
+    );
+    expect(hits.size).toBe(0);
+  });
+
   it('failover on network, not on invalid_response', async () => {
     const a = provider('a', 'Alpha');
     const b = provider('b', 'Beta');

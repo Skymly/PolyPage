@@ -15,24 +15,36 @@ export interface SanitizeOptions {
 }
 
 export type SanitizeResult =
-  | { ok: true; text: string }
+  | { ok: true; text: string; persist?: boolean }
   | { ok: false; reason: 'empty' };
 
-const THINK_PAIR = /<think\b[^>]*>[\s\S]*?(?:<\/think>|$)/gi;
+/** Debug `enabled: false` must not persist raw model output into cache / TM. */
+export function persistSanitizedOutput(settings: { outputSanitize?: { enabled?: boolean } }): boolean {
+  return settings.outputSanitize?.enabled !== false;
+}
+
+const THINK_PAIR = /<think\b[^>]*>[\s\S]*?<\/think>/gi;
+const THINK_PAIR_HOLD = /<think\b[^>]*>[\s\S]*?(?:<\/think>|$)/gi;
 const THINK_TAG = /<\/?think\b[^>]*>/gi;
 const THINK_CLOSE = /<\/think>/i;
 
 /**
- * Strip thinking-chain tags. Paired `<think>…</think>` (case-insensitive,
- * unclosed pairs run to end-of-string) are removed first. A leftover
- * `</think>` is treated as the end of a qwen3-style thinking prefix.
- * Remaining bare tags are dropped. The word "think" is never touched.
+ * Strip thinking-chain tags. Closed `<think>…</think>` pairs are always
+ * removed. Unclosed open tags: streaming holds through end-of-string;
+ * final hygiene only drops the tag so a translation that mentions `<think>`
+ * is not swallowed. A leftover `</think>` is a qwen3 prefix only when it
+ * sits after a newline (or at the start); same-line mentions keep the body.
  */
-export function stripThinkTags(content: string): string {
-  let text = content.replace(THINK_PAIR, '');
+export function stripThinkTags(content: string, options?: { holdUnclosed?: boolean }): string {
+  let text = content.replace(options?.holdUnclosed ? THINK_PAIR_HOLD : THINK_PAIR, '');
   const close = text.search(THINK_CLOSE);
   if (close >= 0) {
-    text = text.slice(close).replace(THINK_CLOSE, '');
+    const prefix = text.slice(0, close);
+    if (prefix.includes('\n') || prefix.trim() === '') {
+      text = text.slice(close).replace(THINK_CLOSE, '');
+    } else {
+      text = text.replace(THINK_CLOSE, '');
+    }
   }
   return text.replace(THINK_TAG, '');
 }
@@ -46,7 +58,7 @@ export function createThinkDeltaFilter(): (delta: string) => string {
   let shown = '';
   return (delta: string): string => {
     acc += delta;
-    const cleaned = stripThinkTags(acc);
+    const cleaned = stripThinkTags(acc, { holdUnclosed: true });
     const piece = cleaned.startsWith(shown) ? cleaned.slice(shown.length) : cleaned;
     shown = cleaned;
     return piece;
@@ -72,7 +84,7 @@ export function sanitizeOptionsFromSettings(
  */
 export function sanitizeTranslation(raw: string, options?: SanitizeOptions): SanitizeResult {
   if (options?.enabled === false) {
-    return raw.trim() === '' ? { ok: false, reason: 'empty' } : { ok: true, text: raw };
+    return raw.trim() === '' ? { ok: false, reason: 'empty' } : { ok: true, text: raw, persist: false };
   }
 
   let text = raw;

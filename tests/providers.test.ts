@@ -7,7 +7,13 @@ import '../src/providers/deepl';
 import '../src/providers/azure-translator';
 import '../src/providers/google-translate';
 import '../src/providers/openai-compatible';
-import { createProvider } from '../src/providers/provider';
+import {
+  createProvider,
+  parseRetryAfterMs,
+  assertHttpBaseUrl,
+  ProviderError,
+  RETRYABLE_HTTP,
+} from '../src/providers/provider';
 import { toAzureLanguage, toDeepLLanguage, toGoogleLanguage } from '../src/providers/langCodes';
 import type { ProviderConfig } from '../src/shared/types';
 
@@ -38,6 +44,7 @@ function mockFetchOnce(responseJson: unknown, capture: CapturedRequest[]): void 
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -177,14 +184,30 @@ describe('Google Translate provider', () => {
   });
 
   it('maps HTTP 429 to rate_limit', async () => {
+    vi.useFakeTimers();
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ error: { message: 'quota' } }), { status: 429 })),
     );
     const provider = createProvider(baseConfig('google-translate'));
-    await expect(
-      provider.translateTexts(['a'], ctx, new AbortController().signal),
-    ).rejects.toMatchObject({ kind: 'rate_limit' });
+    const pending = provider.translateTexts(['a'], ctx, new AbortController().signal);
+    const rejected = expect(pending).rejects.toMatchObject({ kind: 'rate_limit' });
+    await vi.runAllTimersAsync();
+    await rejected;
+  });
+
+  it('decodes numeric entities and apos (M-77)', async () => {
+    mockFetchOnce(
+      {
+        data: {
+          translations: [{ translatedText: '&#x27;hex&#x27; &#65; &apos;q&apos;' }],
+        },
+      },
+      [],
+    );
+    const provider = createProvider(baseConfig('google-translate'));
+    const out = await provider.translateTexts(['x'], ctx, new AbortController().signal);
+    expect(out).toEqual(["'hex' A 'q'"]);
   });
 });
 
@@ -282,5 +305,60 @@ describe('OpenAI-compatible transcribe', () => {
       new AbortController().signal,
     );
     expect(result.text).toBe('just the words');
+  });
+});
+
+describe('provider HTTP odds (M-77)', () => {
+  it('RETRYABLE_HTTP drives ProviderError.retryable', () => {
+    expect(RETRYABLE_HTTP.has('rate_limit')).toBe(true);
+    expect(new ProviderError('rate_limit', 'quota').retryable).toBe(true);
+    expect(new ProviderError('server', 'oops').retryable).toBe(true);
+    expect(new ProviderError('auth', 'no').retryable).toBe(false);
+  });
+
+  it('parseRetryAfterMs reads delta-seconds and HTTP-date, capped at 30s', () => {
+    expect(parseRetryAfterMs(new Response('', { headers: { 'Retry-After': '2' } }))).toBe(2000);
+    expect(parseRetryAfterMs(new Response('', { headers: { 'Retry-After': '120' } }))).toBe(30_000);
+    const future = new Date(Date.now() + 5_000).toUTCString();
+    const fromDate = parseRetryAfterMs(new Response('', { headers: { 'Retry-After': future } }));
+    expect(fromDate).toBeGreaterThan(0);
+    expect(fromDate).toBeLessThanOrEqual(30_000);
+    expect(parseRetryAfterMs(new Response('', { headers: { 'Retry-After': 'nope' } }))).toBeUndefined();
+  });
+
+  it('assertHttpBaseUrl rejects javascript: and empty', () => {
+    expect(() => assertHttpBaseUrl('javascript:alert(1)')).toThrow(ProviderError);
+    try {
+      assertHttpBaseUrl('javascript:alert(1)');
+    } catch (e) {
+      expect((e as ProviderError).kind).toBe('config');
+    }
+    expect(() => assertHttpBaseUrl('')).toThrow(ProviderError);
+    expect(assertHttpBaseUrl('https://api.example.com/v1').protocol).toBe('https:');
+  });
+
+  it('honors Retry-After on 429 then succeeds', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'quota' } }), {
+          status: 429,
+          headers: { 'Retry-After': '2' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { translations: [{ translatedText: 'ok' }] } }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createProvider(baseConfig('google-translate'));
+    const pending = provider.translateTexts(['a'], ctx, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual(['ok']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

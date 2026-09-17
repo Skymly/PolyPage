@@ -16,18 +16,14 @@ export class ProviderError extends Error {
   constructor(
     public readonly kind: ErrorKind,
     message: string,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'ProviderError';
   }
 
   get retryable(): boolean {
-    return (
-      this.kind === 'network' ||
-      this.kind === 'timeout' ||
-      this.kind === 'rate_limit' ||
-      this.kind === 'server'
-    );
+    return this.kind === 'network' || this.kind === 'timeout' || RETRYABLE_HTTP.has(this.kind);
   }
 }
 
@@ -156,6 +152,47 @@ export const RETRYABLE_HTTP: ReadonlySet<ErrorKind> = new Set<ErrorKind>([
   'server',
 ]);
 
+/** Parse Retry-After (delta-seconds or HTTP-date). Caps at 30s. */
+export function parseRetryAfterMs(res?: Response): number | undefined {
+  if (!res) return undefined;
+  const raw = res.headers.get('Retry-After');
+  if (raw == null || raw.trim() === '') return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30_000);
+  const at = Date.parse(raw);
+  if (!Number.isNaN(at)) return Math.min(Math.max(0, at - Date.now()), 30_000);
+  return undefined;
+}
+
+export function assertHttpBaseUrl(raw: string): URL {
+  const trimmed = raw.trim();
+  if (trimmed === '') throw new ProviderError('config', '未配置 Base URL');
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new ProviderError('config', 'Base URL 不是合法 URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ProviderError('config', 'Base URL 只支持 http/https');
+  }
+  return parsed;
+}
+
+export function httpApiBase(raw: string): string {
+  return assertHttpBaseUrl(raw).toString().replace(/\/+$/, '');
+}
+
+export function providerHttpError(res: Response, label: string, detail = ''): ProviderError {
+  const kind = classifyHttpStatus(res.status);
+  const suffix = detail ? `: ${detail}` : '';
+  return new ProviderError(
+    kind,
+    `${label} (HTTP ${res.status})${suffix}`,
+    parseRetryAfterMs(res),
+  );
+}
+
 /**
  * Run an async operation with timeout, external cancellation and basic retry
  * (spec §8: timeout control, cancellation, basic retry).
@@ -175,11 +212,10 @@ export async function withTimeoutAndRetry<T>(
     } catch (e) {
       lastError = e;
       const err = toProviderError(e);
-      const isTimeoutOrNetwork = err.kind === 'timeout' || err.kind === 'network';
-      const canRetry =
-        attempt < retries && (err.retryable || isTimeoutOrNetwork) && err.kind !== 'aborted';
+      const canRetry = attempt < retries && err.retryable && err.kind !== 'aborted';
       if (!canRetry) throw err;
-      await sleep(400 * (attempt + 1));
+      const delay = Math.min(err.retryAfterMs ?? 400 * (attempt + 1), 30_000);
+      await sleep(delay);
     }
   }
   throw toProviderError(lastError);

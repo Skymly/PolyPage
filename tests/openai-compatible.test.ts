@@ -99,6 +99,40 @@ describe('openai-compatible translateStream', () => {
     expect(deltas.join('')).toBe('你好');
     expect(full).toBe('你好');
   });
+
+  it('parses CRLF-delimited SSE events (M-77)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = sseBody([
+          'data: {"choices":[{"delta":{"content":"你"}}]}\r\n\r\n',
+          'data: {"choices":[{"delta":{"content":"好"}}]}\r\n\r\n',
+          'data: [DONE]\r\n\r\n',
+        ]);
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }),
+    );
+    const provider = createProvider(config());
+    const deltas: string[] = [];
+    const full = await provider.translateStream!(
+      'Hello',
+      ctx,
+      (d) => deltas.push(d),
+      new AbortController().signal,
+    );
+    expect(deltas.join('')).toBe('你好');
+    expect(full).toBe('你好');
+  });
+
+  it('does not retry translateStream after emitting would be irrecoverable (M-77)', async () => {
+    const fetchMock = vi.fn(async () => new Response('quota', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createProvider(config());
+    await expect(
+      provider.translateStream!('Hello', ctx, () => undefined, new AbortController().signal),
+    ).rejects.toMatchObject({ kind: 'rate_limit' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('openai-compatible transcribe timeout (M-73)', () => {

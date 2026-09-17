@@ -15,6 +15,8 @@ import { buildVisionRequest, buildVisionUserPrompt } from '../shared/visionReque
 import {
   ProviderError,
   classifyHttpStatus,
+  httpApiBase,
+  parseRetryAfterMs,
   readApiErrorMessage,
   registerProviderFactory,
   toProviderError,
@@ -28,16 +30,11 @@ const FANOUT_LIMIT = 6;
 const LOCAL_ORIGIN_403_HINT =
   'Ollama 拒绝了扩展来源。请设置环境变量 OLLAMA_ORIGINS=*（或 chrome-extension://*）后从托盘退出并重启 Ollama';
 
-function throwHttpFailure(
-  status: number,
-  detail: string,
-  local: boolean,
-  label: string,
-): never {
-  const kind = local && status === 403 ? 'config' : classifyHttpStatus(status);
-  let suffix =
-    local && status === 403 ? `：${LOCAL_ORIGIN_403_HINT}` : detail ? `: ${detail}` : '';
-  throw new ProviderError(kind, `${label} (HTTP ${status})${suffix}`);
+function throwHttpFailure(res: Response, detail: string, local: boolean, label: string): never {
+  const kind = local && res.status === 403 ? 'config' : classifyHttpStatus(res.status);
+  const suffix =
+    local && res.status === 403 ? `：${LOCAL_ORIGIN_403_HINT}` : detail ? `: ${detail}` : '';
+  throw new ProviderError(kind, `${label} (HTTP ${res.status})${suffix}`, parseRetryAfterMs(res));
 }
 
 export class OpenAICompatibleProvider implements TranslationProvider {
@@ -83,7 +80,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         ? config.userPromptTemplate
         : 'Translate the following text from {{sourceLanguage}} to {{targetLanguage}}:\n\n{{text}}';
     const userContent = renderTemplate(template, this.templateVars(ctx, { text }));
-    const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const url = `${httpApiBase(config.baseUrl)}/chat/completions`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
@@ -116,7 +113,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         }
         if (!res.ok) {
           throwHttpFailure(
-            res.status,
+            res,
             this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             'API 请求失败',
@@ -130,7 +127,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
           throw new ProviderError('invalid_response', '流式响应未包含任何内容');
         }
       },
-      { timeoutMs: config.timeoutMs, signal },
+      { timeoutMs: config.timeoutMs, signal, retries: 0 },
     );
     return full.trim();
   }
@@ -151,6 +148,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, '\n');
         // SSE events are separated by blank lines; process complete ones only.
         let sep: number;
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
@@ -205,7 +203,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
     }
     const prompt = buildVisionUserPrompt(ctx);
-    const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const url = `${httpApiBase(config.baseUrl)}/chat/completions`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
@@ -225,7 +223,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         }
         if (!res.ok) {
           throwHttpFailure(
-            res.status,
+            res,
             this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             '视觉翻译请求失败',
@@ -259,7 +257,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
       throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
     }
-    const url = `${config.baseUrl.replace(/\/+$/, '')}/audio/transcriptions`;
+    const url = `${httpApiBase(config.baseUrl)}/audio/transcriptions`;
     const headers: Record<string, string> = {
       ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
       ...config.headers,
@@ -285,7 +283,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         }
         if (!res.ok) {
           throwHttpFailure(
-            res.status,
+            res,
             this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             '转写请求失败',
@@ -403,7 +401,7 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
     if (config.apiKey.trim() === '' && !this.isLocalEndpoint()) {
       throw new ProviderError('config', '未配置 API Key，请先在设置页填写');
     }
-    const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const url = `${httpApiBase(config.baseUrl)}/chat/completions`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(config.apiKey.trim() !== '' ? { Authorization: `Bearer ${config.apiKey}` } : {}),
@@ -434,7 +432,7 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
         }
         if (!res.ok) {
           throwHttpFailure(
-            res.status,
+            res,
             this.maybeMinimaxHint(res.status, await readApiErrorMessage(res)),
             this.isLocalEndpoint(),
             'API 请求失败',

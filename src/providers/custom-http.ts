@@ -17,7 +17,8 @@ import type { ProviderConfig } from '../shared/types';
 import { escapeForJsonString, getByPath } from '../shared/utils';
 import {
   ProviderError,
-  classifyHttpStatus,
+  httpApiBase,
+  providerHttpError,
   readApiErrorMessage,
   registerProviderFactory,
   toProviderError,
@@ -52,8 +53,7 @@ export class CustomHttpProvider implements TranslationProvider {
   }
 
   private buildUrl(): string {
-    let url = this.config.baseUrl.trim();
-    if (url === '') throw new ProviderError('config', '未配置 Base URL');
+    let url = httpApiBase(this.config.baseUrl);
     if (this.config.apiKeyPlacement === 'query' && this.config.apiKey !== '') {
       const name = this.config.apiKeyParamName || 'api_key';
       url += `${url.includes('?') ? '&' : '?'}${encodeURIComponent(name)}=${encodeURIComponent(this.config.apiKey)}`;
@@ -117,10 +117,18 @@ export class CustomHttpProvider implements TranslationProvider {
   }
 
   private async request(texts: string[], ctx: TranslationContext, signal: AbortSignal): Promise<unknown> {
-    const url = this.buildUrl();
     const method = this.config.method ?? 'POST';
     const headers = this.buildHeaders();
     const body = method === 'GET' ? undefined : this.renderBody(texts, ctx);
+    let url = this.buildUrl();
+    if (method === 'GET') {
+      const parsed = new URL(url);
+      if (texts.length === 1) parsed.searchParams.set('text', texts[0]);
+      for (const text of texts) parsed.searchParams.append('q', text);
+      parsed.searchParams.set('source', ctx.sourceLanguage);
+      parsed.searchParams.set('target', ctx.targetLanguage);
+      url = parsed.toString();
+    }
 
     return withTimeoutAndRetry(
       async (innerSignal) => {
@@ -131,12 +139,7 @@ export class CustomHttpProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `API 请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
-          );
+          throw providerHttpError(res, 'API 请求失败', await readApiErrorMessage(res));
         }
         try {
           return await res.json();

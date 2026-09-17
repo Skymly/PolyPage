@@ -20,7 +20,7 @@
  *    protocol version and stay fully compatible (spec 3.0 §0 item 1);
  *  - new: ocr-request / ocr-cancel (image OCR), translate-cue (subtitle
  *    low-latency path), mark-feedback / feedback log access, pdf-open /
- *    pdf-progress (PDF reader), detect-language;
+ *    pdf-progress (PDF reader);
  *  - new TabCommands: wt:open-pdf-viewer, wt:translate-image,
  *    wt:toggle-subtitles, wt:repeat-selection, wt:resume-inflight.
  *
@@ -55,6 +55,19 @@ import type {
 } from '../shared/types';
 
 export const PROTOCOL_VERSION = 6;
+
+/** Stamp v last so a caller-supplied v cannot override the current protocol. */
+export function withProtocol<T extends object>(message: T): T & { v: number } {
+  return { ...message, v: PROTOCOL_VERSION };
+}
+
+/** Absent v stays compatible; a numeric v must match PROTOCOL_VERSION. */
+export function protocolVersionOk(raw: unknown): boolean {
+  if (raw === null || typeof raw !== 'object') return true;
+  const v = (raw as { v?: unknown }).v;
+  if (v === undefined) return true;
+  return v === PROTOCOL_VERSION;
+}
 
 /* --------------------------- content -> background --------------------------- */
 
@@ -100,8 +113,6 @@ export type RuntimeMessage =
   | { type: 'pdf-open'; v?: number; url: string }
   /** 3.0 (pillar E): viewer progress report (popup hint). */
   | { type: 'pdf-progress'; v?: number; url: string; done: number; total: number; failed: number }
-  /** 3.0 (pillar H): detect the dominant language of text samples. */
-  | { type: 'detect-language'; v?: number; texts: string[] }
   | {
       type: 'asr-start';
       v?: number;
@@ -154,7 +165,6 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'clear-feedback-log' } ? { ok: true } :
   M extends { type: 'pdf-open' } ? { ok: boolean; tabId?: number; error?: string } :
   M extends { type: 'pdf-progress' } ? { ok: true } :
-  M extends { type: 'detect-language' } ? { language: string | null; confident: boolean } :
   M extends { type: 'asr-start' } ? AsrResponse :
   M extends { type: 'asr-cancel' } ? { ok: true } :
   M extends { type: 'tm-clear' } ? { ok: true } :
@@ -184,7 +194,7 @@ export function sendRuntime<M extends RuntimeMessage>(
 ): Promise<RuntimeResponseFor<M>> {
   return new Promise((resolve, reject) => {
     try {
-      chrome.runtime.sendMessage({ v: PROTOCOL_VERSION, ...message }, (response) => {
+      chrome.runtime.sendMessage(withProtocol(message), (response) => {
         const err = chrome.runtime.lastError;
         if (err) reject(new Error(err.message ?? 'runtime message failed'));
         else resolve(response as RuntimeResponseFor<M>);
@@ -254,7 +264,7 @@ export function sendViewerResume(
   return new Promise((resolve, reject) => {
     try {
       chrome.runtime.sendMessage(
-        { v: PROTOCOL_VERSION, type: VIEWER_RESUME_TYPE, tabId, tasks },
+        withProtocol({ type: VIEWER_RESUME_TYPE, tabId, tasks }),
         (response: { ok?: boolean } | undefined) => {
           const err = chrome.runtime.lastError;
           if (err) reject(new Error(err.message ?? 'viewer resume failed'));
@@ -278,7 +288,7 @@ export function sendTabCommand<C extends TabCommand>(
 ): Promise<TabCommandResponse<C>> {
   return new Promise((resolve, reject) => {
     try {
-      const payload = { v: PROTOCOL_VERSION, ...command };
+      const payload = withProtocol(command);
       const reply = (response: TabCommandResponse<C>): void => {
         const err = chrome.runtime.lastError;
         if (err) reject(new Error(err.message ?? 'tab message failed'));

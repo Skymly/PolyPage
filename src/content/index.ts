@@ -4,7 +4,7 @@
  * subtitle manager, image translate entries, feedback marker and the
  * popup/background commands. Runs in every frame (all_frames).
  */
-import { sendRuntime } from '../messaging/messages';
+import { protocolVersionOk, sendRuntime } from '../messaging/messages';
 import type { TabCommand } from '../messaging/messages';
 import {
   BILINGUAL_CLASS,
@@ -323,6 +323,10 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
 
 chrome.runtime.onMessage.addListener((message: TabCommand, _sender, sendResponse) => {
   if (typeof message?.type !== 'string' || !message.type.startsWith('wt:')) return false;
+  if (!protocolVersionOk(message)) {
+    sendResponse({ ok: false });
+    return true;
+  }
   settleTabResponse(handleCommand(message), sendResponse);
   return true; // async response
 });

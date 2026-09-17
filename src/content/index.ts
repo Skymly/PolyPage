@@ -241,6 +241,7 @@ function restorePageLayers(): void {
     restoreTranslator: () => translator.restore(),
     restoreSubtitles: () => subtitleManager.restoreAll(),
     removeOverlay: removeImageOverlay,
+    stopObserver: () => observer.stop(),
     scheduleReport,
   });
   if (asrRequestId) void sendRuntime({ type: 'asr-cancel', requestId: asrRequestId });
@@ -251,6 +252,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
     case 'wt:get-state':
       return extendedState();
     case 'wt:translate': {
+      observer.start();
       const mode = cmd.mode ?? defaultMode();
       void translator.translate(mode);
       return { ok: true };
@@ -274,6 +276,7 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       void translator.retryFailed();
       return { ok: true };
     case 'wt:rescan':
+      observer.start();
       translator.rescan();
       return { ok: true };
     case 'wt:translate-selection':
@@ -356,6 +359,11 @@ async function init(): Promise<void> {
   }
 
   observer.start();
+  window.addEventListener('pagehide', () => {
+    observer.stop();
+    subtitleManager.restoreAll();
+    removeImageOverlay();
+  });
   if (!blacklisted) translator.rescan();
 
   if (
@@ -423,6 +431,7 @@ function applyLiveSettings(cs: ContentSettings): void {
     translator.restore();
     subtitleManager.restoreAll();
     removeImageOverlay();
+    observer.stop();
   }
   if (document.body) {
     detectPageLanguage();

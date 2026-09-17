@@ -4,7 +4,7 @@
  * getBoundingClientRect after scroll / resize, batched on rAF.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyImageOverlay, relayoutAll, removeImageOverlay } from '../src/ocr/overlay';
+import { applyImageOverlay, relayoutAll, removeImageOverlay, scheduleRelayout } from '../src/ocr/overlay';
 
 function mockRect(el: HTMLElement, rect: { left: number; top: number; width: number; height: number }): void {
   vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
@@ -72,6 +72,27 @@ describe('image overlay relayout', () => {
     const hosts = document.querySelectorAll('.wt-ocr-overlay-host');
     expect(hosts.length).toBe(1);
     expect(hosts[0].textContent).toBe('新译文');
+    img.remove();
+  });
+
+  it('removeImageOverlay cancels a pending rAF (M-61)', () => {
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((cb: FrameRequestCallback) => {
+        void cb;
+        return 77;
+      }),
+    );
+    vi.stubGlobal('cancelAnimationFrame', cancel);
+    const img = document.createElement('img');
+    img.src = 'https://example.com/c.png';
+    document.body.appendChild(img);
+    mockRect(img, { left: 0, top: 0, width: 120, height: 80 });
+    applyImageOverlay(img, [{ text: 'X', translation: 'Y' }]);
+    scheduleRelayout();
+    removeImageOverlay();
+    expect(cancel).toHaveBeenCalledWith(77);
     img.remove();
   });
 });

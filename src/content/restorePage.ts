@@ -7,6 +7,7 @@ export interface PageRestoreTargets {
   restoreTranslator(): void;
   restoreSubtitles(): void;
   removeOverlay(): void;
+  stopObserver(): void;
   scheduleReport(): void;
 }
 
@@ -16,6 +17,7 @@ export function restorePage(targets: PageRestoreTargets): string | null {
   targets.restoreTranslator();
   targets.restoreSubtitles();
   targets.removeOverlay();
+  targets.stopObserver();
   targets.scheduleReport();
   return asrRequestId;
 }

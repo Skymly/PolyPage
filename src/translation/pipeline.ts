@@ -355,6 +355,7 @@ export class TranslationPipeline {
         const tmHits = await this.deps.tm.lookup(
           misses.map((m, i) => ({ key: String(i), text: m.text })),
           pair,
+          settings.glossaryVersion,
         );
         const still: QueueItem[] = [];
         misses.forEach((item, i) => {
@@ -573,6 +574,7 @@ export class TranslationPipeline {
             successes.map((s) => ({ source: s.body, target: s.translated })),
             tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
+            settings.glossaryVersion,
           );
         } catch {
           /* TM write is best-effort */
@@ -732,6 +734,7 @@ export class TranslationPipeline {
             [{ source: item.text, target: cleaned.text }],
             tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
+            settings.glossaryVersion,
           );
         } catch {
           /* best-effort */

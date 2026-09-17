@@ -91,4 +91,55 @@ describe('TranslationMemory', () => {
     await tm.clear();
     expect((await tm.stats()).entries).toBe(0);
   });
+
+  it('does not miss a new sentence when the table is full of hit entries (M-81)', async () => {
+    const store = new MemoryTmStore();
+    const tm = new TranslationMemory(store, 2);
+    await tm.remember([{ source: 'AAAAAAAA', target: '甲' }], PAIR);
+    await tm.remember([{ source: 'BBBBBBBB', target: '乙' }], PAIR);
+    await tm.lookup(
+      [
+        { key: 'a', text: 'AAAAAAAA' },
+        { key: 'b', text: 'BBBBBBBB' },
+      ],
+      PAIR,
+    );
+    await tm.remember([{ source: 'CCCCCCCC', target: '丙' }], PAIR);
+    const left = (await store.getAll()).map((e) => e.source).sort();
+    expect(left).toContain('CCCCCCCC');
+    expect(left).toHaveLength(2);
+  });
+
+  it('namespaces entries by glossaryVersion (M-81)', async () => {
+    const tm = new TranslationMemory(new MemoryTmStore(), 10);
+    await tm.remember([{ source: 'Hello, world!', target: '旧术语' }], PAIR, 10, 1);
+    const stale = await tm.lookup([{ key: 'a', text: 'Hello, world!' }], PAIR, 0);
+    const fresh = await tm.lookup([{ key: 'a', text: 'Hello, world!' }], PAIR, 1);
+    expect(stale.size).toBe(0);
+    expect(fresh.get('a')).toBe('旧术语');
+  });
+
+  it('lookup uses getMany rather than getAll (M-81)', async () => {
+    const store = new MemoryTmStore();
+    const tm = new TranslationMemory(store, 10);
+    await tm.remember([{ source: 'Hello, world!', target: '你好，世界' }], PAIR);
+    let getAllCalls = 0;
+    const original = store.getAll.bind(store);
+    store.getAll = async () => {
+      getAllCalls += 1;
+      return original();
+    };
+    await tm.lookup([{ key: 'a', text: 'Hello, world!' }], PAIR);
+    expect(getAllCalls).toBe(0);
+  });
+
+  it('remember of an existing entry does not bump hits (M-81)', async () => {
+    const store = new MemoryTmStore();
+    const tm = new TranslationMemory(store, 10);
+    await tm.remember([{ source: 'Hello, world!', target: '一' }], PAIR);
+    await tm.remember([{ source: 'Hello, world!', target: '二' }], PAIR);
+    const entry = (await store.getAll())[0];
+    expect(entry.target).toBe('二');
+    expect(entry.hits).toBe(0);
+  });
 });

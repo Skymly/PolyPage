@@ -8,6 +8,7 @@
  * The store backend is injectable so unit tests run against memory.
  */
 import { DEFAULT_TM_MAX_ENTRIES } from '../shared/constants';
+import { openIndexedDb, type IdbOpenCache } from '../shared/idbOpen';
 import { hashText } from '../shared/utils';
 
 export const TM_MIN_CHARS = 8;
@@ -95,24 +96,16 @@ export class MemoryTmStore implements TmStore {
 }
 
 export class IdbTmStore implements TmStore {
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly cache: IdbOpenCache = { promise: null };
 
   constructor(private readonly dbName = TM_DB_NAME) {}
 
   private open(): Promise<IDBDatabase> {
-    if (this.dbPromise) return this.dbPromise;
-    this.dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(this.dbName, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(TM_STORE_NAME)) {
-          db.createObjectStore(TM_STORE_NAME, { keyPath: 'hash' });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed'));
+    return openIndexedDb(this.cache, this.dbName, 1, (db) => {
+      if (!db.objectStoreNames.contains(TM_STORE_NAME)) {
+        db.createObjectStore(TM_STORE_NAME, { keyPath: 'hash' });
+      }
     });
-    return this.dbPromise;
   }
 
   private withStore<T>(

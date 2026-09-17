@@ -2,10 +2,10 @@
  * Quality feedback log tests (spec 3.0 §8.2, §12.1): ring limit and
  * CSV/JSON export formatting.
  */
-import { describe, expect, it } from 'vitest';
-import { FEEDBACK_LOG_MAX } from '../src/shared/constants';
+import { afterEach, describe, expect, it } from 'vitest';
+import { FEEDBACK_LOG_KEY, FEEDBACK_LOG_MAX } from '../src/shared/constants';
 import type { FeedbackEntry } from '../src/shared/types';
-import { csvEscape, feedbackToCsv, sanitizeFeedbackPageUrl } from '../src/storage/feedback';
+import { appendFeedback, csvEscape, feedbackToCsv, sanitizeFeedbackPageUrl } from '../src/storage/feedback';
 
 function entry(i: number): FeedbackEntry {
   return {
@@ -81,5 +81,40 @@ describe('sanitizeFeedbackPageUrl (M-59)', () => {
 
   it('keeps pdf-viewer labels without query', () => {
     expect(sanitizeFeedbackPageUrl('pdf-viewer:My Doc.pdf?x=1')).toBe('pdf-viewer:My Doc.pdf');
+  });
+});
+
+describe('appendFeedback lock (M-62)', () => {
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it('keeps both entries when two appends overlap', async () => {
+    let stored: FeedbackEntry[] = [];
+    let releaseFirstGet: () => void = () => undefined;
+    const firstGetBlocked = new Promise<void>((resolve) => {
+      releaseFirstGet = resolve;
+    });
+    let gets = 0;
+    (globalThis as unknown as { chrome: typeof chrome }).chrome = {
+      storage: {
+        local: {
+          get: async () => {
+            gets += 1;
+            if (gets === 1) await firstGetBlocked;
+            return { [FEEDBACK_LOG_KEY]: stored };
+          },
+          set: async (obj: Record<string, unknown>) => {
+            stored = (obj[FEEDBACK_LOG_KEY] as FeedbackEntry[]) ?? stored;
+          },
+        },
+      },
+    } as typeof chrome;
+
+    const first = appendFeedback(entry(1));
+    const second = appendFeedback(entry(2));
+    releaseFirstGet();
+    await Promise.all([first, second]);
+    expect(stored.map((e) => e.source)).toEqual(['source 2', 'source 1']);
   });
 });

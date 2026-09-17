@@ -12,6 +12,7 @@
  *  - total ring size capped at TASK_TABLE_MAX (oldest evicted).
  */
 import { TASK_TABLE_MAX } from '../shared/constants';
+import { openIndexedDb, type IdbOpenCache } from '../shared/idbOpen';
 import type { TaskRecord } from '../shared/types';
 import { hashText } from '../shared/utils';
 
@@ -40,25 +41,17 @@ export class MemoryTaskStore implements TaskStore {
 
 /** IndexedDB-backed store used by the service worker. */
 export class IdbTaskStore implements TaskStore {
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly cache: IdbOpenCache = { promise: null };
 
   constructor(private readonly dbName = 'polypage-tasktable') {}
 
   private open(): Promise<IDBDatabase> {
-    if (this.dbPromise) return this.dbPromise;
-    this.dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(this.dbName, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains('tasks')) {
-          const store = db.createObjectStore('tasks', { keyPath: 'id', autoIncrement: true });
-          store.createIndex('by-tab', 'tabId', { unique: false });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed'));
+    return openIndexedDb(this.cache, this.dbName, 1, (db) => {
+      if (!db.objectStoreNames.contains('tasks')) {
+        const store = db.createObjectStore('tasks', { keyPath: 'id', autoIncrement: true });
+        store.createIndex('by-tab', 'tabId', { unique: false });
+      }
     });
-    return this.dbPromise;
   }
 
   private withStore<T>(

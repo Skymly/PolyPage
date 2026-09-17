@@ -7,6 +7,7 @@
  * stay in vendor/tessdata and are not managed here.
  */
 import { DEFAULT_TESS_LANGS } from '../shared/constants';
+import { openIndexedDb, type IdbOpenCache } from '../shared/idbOpen';
 
 export const OCR_PACK_DB_NAME = 'polypage-ocrpacks';
 export const OCR_PACK_STORE_NAME = 'packs';
@@ -116,24 +117,16 @@ export class MemoryOcrPackStore implements OcrPackStore {
 }
 
 export class IdbOcrPackStore implements OcrPackStore {
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly cache: IdbOpenCache = { promise: null };
 
   constructor(private readonly dbName = OCR_PACK_DB_NAME) {}
 
   private open(): Promise<IDBDatabase> {
-    if (this.dbPromise) return this.dbPromise;
-    this.dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(this.dbName, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(OCR_PACK_STORE_NAME)) {
-          db.createObjectStore(OCR_PACK_STORE_NAME, { keyPath: 'id' });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed'));
+    return openIndexedDb(this.cache, this.dbName, 1, (db) => {
+      if (!db.objectStoreNames.contains(OCR_PACK_STORE_NAME)) {
+        db.createObjectStore(OCR_PACK_STORE_NAME, { keyPath: 'id' });
+      }
     });
-    return this.dbPromise;
   }
 
   private withStore<T>(

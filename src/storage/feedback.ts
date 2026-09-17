@@ -20,8 +20,19 @@ export async function loadFeedbackLog(): Promise<FeedbackEntry[]> {
   });
 }
 
-/** Prepend one entry and enforce the ring limit. */
+let appendChain: Promise<void> = Promise.resolve();
+
+/** Prepend one entry and enforce the ring limit. Serialized (M-62). */
 export async function appendFeedback(entry: FeedbackEntry): Promise<void> {
+  const run = appendChain.then(() => appendFeedbackUnlocked(entry));
+  appendChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function appendFeedbackUnlocked(entry: FeedbackEntry): Promise<void> {
   const entries = await loadFeedbackLog();
   entries.unshift({ ...entry, pageUrl: sanitizeFeedbackPageUrl(entry.pageUrl) });
   await chrome.storage.local.set({

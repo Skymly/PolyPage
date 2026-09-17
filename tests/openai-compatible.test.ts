@@ -73,6 +73,39 @@ describe('openai-compatible translateTexts', () => {
     expect(captured[0].body.stream).toBe(false);
     expect(out).toEqual(['你好，世界']);
   });
+
+  it('does not treat localhost as a URL substring (M-78)', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createProvider(config({ baseUrl: 'https://example.com/v1?next=localhost', apiKey: '' }));
+    await expect(
+      provider.translateTexts(['Hello'], ctx, new AbortController().signal),
+    ).rejects.toMatchObject({ kind: 'config', message: expect.stringContaining('API Key') });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('injects MiniMax thinking only on official MiniMax hosts (M-78)', async () => {
+    const captured: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        captured.push(JSON.parse(String(init?.body)));
+        return chatJson('ok');
+      }),
+    );
+    const openrouter = createProvider(
+      config({ baseUrl: 'https://openrouter.ai/api/v1', model: 'minimax/minimax-m2' }),
+    );
+    await openrouter.translateTexts(['Hello'], ctx, new AbortController().signal);
+    expect(captured[0].thinking).toBeUndefined();
+    expect(captured[0].think).toBeUndefined();
+
+    const minimax = createProvider(
+      config({ baseUrl: 'https://api.minimax.chat/v1', model: 'MiniMax-M2' }),
+    );
+    await minimax.translateTexts(['Hello'], ctx, new AbortController().signal);
+    expect(captured[1].thinking).toEqual({ type: 'disabled' });
+  });
 });
 
 describe('openai-compatible translateStream', () => {

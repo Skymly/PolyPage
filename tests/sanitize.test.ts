@@ -81,6 +81,11 @@ describe('minimaxHostHint', () => {
     expect(minimaxHostHint('https://api.minimax.chat/v1', 'sk-cp-not-a-real-key')).toBeNull();
     expect(minimaxHostHint('https://api.minimax.io/v1', 'sk-other')).toBeNull();
   });
+
+  it('does not match minimax.io as a substring (M-78)', () => {
+    expect(minimaxHostHint('https://api.minimax.io.evil.com/v1', 'sk-cp-not-a-real-key')).toBeNull();
+    expect(minimaxHostHint('https://minimax.iot.example.com/v1', 'sk-cp-not-a-real-key')).toBeNull();
+  });
 });
 
 describe('createThinkDeltaFilter (M-60)', () => {

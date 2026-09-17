@@ -9,7 +9,7 @@
  */
 import type { ProviderConfig } from '../shared/types';
 import { asrRequestTimeoutMs } from '../shared/constants';
-import { minimaxHostHint } from '../shared/sanitize';
+import { isMinimaxApiHost, minimaxHostHint, hostnameOfUrl } from '../shared/sanitize';
 import { parseBatchTranslation, renderTemplate } from '../shared/utils';
 import { buildVisionRequest, buildVisionUserPrompt } from '../shared/visionRequest';
 import {
@@ -297,14 +297,14 @@ export class OpenAICompatibleProvider implements TranslationProvider {
   }
 
   private isLocalEndpoint(): boolean {
-    const url = this.config.baseUrl.toLowerCase();
-    return url.includes('localhost') || url.includes('127.0.0.1') || url.includes('0.0.0.0');
+    const host = hostnameOfUrl(this.config.baseUrl);
+    return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1';
   }
 
   /** MiniMax-M3 thinking and Ollama Qwen3 reasoning otherwise eat the token budget. */
   private extraModelOptions(): Record<string, unknown> {
     if (this.isLocalEndpoint()) return { think: false };
-    if (/minimax/i.test(this.config.model) || /minimax/i.test(this.config.baseUrl)) {
+    if (isMinimaxApiHost(this.config.baseUrl)) {
       return { thinking: { type: 'disabled' } };
     }
     return {};

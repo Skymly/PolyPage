@@ -40,6 +40,7 @@
 import type {
   ContentSettings,
   DisplayMode,
+  ErrorKind,
   ErrorLogEntry,
   FeedbackEntry,
   FrameStateEntry,
@@ -67,6 +68,10 @@ export function protocolVersionOk(raw: unknown): boolean {
   const v = (raw as { v?: unknown }).v;
   if (v === undefined) return true;
   return v === PROTOCOL_VERSION;
+}
+
+export function kindedFailure(kind: ErrorKind, error: string): { ok: false; kind: ErrorKind; error: string } {
+  return { ok: false, kind, error };
 }
 
 /* --------------------------- content -> background --------------------------- */
@@ -134,12 +139,12 @@ export type RuntimeMessage =
 
 export type OcrResponse =
   | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string }
-  | { ok: false; kind: string; error: string };
+  | { ok: false; kind: ErrorKind; error: string };
 
 export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'translate' } ? TranslateResults :
-  M extends { type: 'translate-selection' } ? { ok: boolean; translated?: string; language?: string; error?: string } :
-  M extends { type: 'translate-cue' } ? { ok: boolean; translated?: string; error?: string } :
+  M extends { type: 'translate-selection' } ? { ok: boolean; translated?: string; language?: string; error?: string; kind?: ErrorKind } :
+  M extends { type: 'translate-cue' } ? { ok: boolean; translated?: string; error?: string; kind?: ErrorKind } :
   M extends { type: 'get-content-settings' } ? ContentSettings :
   M extends { type: 'get-settings-summary' } ? SettingsSummary :
   M extends { type: 'get-full-settings' } ? { settings: unknown } :
@@ -180,7 +185,7 @@ export type AsrResponse =
       ok: true;
       cues: Array<{ start: number; end: number; text: string; translation?: string }>;
     }
-  | { ok: false; kind: string; error: string };
+  | { ok: false; kind: ErrorKind; error: string };
 
 export interface ExportEntry {
   original: string;

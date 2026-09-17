@@ -84,6 +84,7 @@ describe('JSON-RPC error code mapping', () => {
     expect(rpcCodeToErrorKind(RPC_ERROR_CODES.invalid_response)).toBe('invalid_response');
     expect(rpcCodeToErrorKind(RPC_ERROR_CODES.config)).toBe('config');
     expect(rpcCodeToErrorKind(RPC_ERROR_CODES.aborted)).toBe('aborted');
+    expect(rpcCodeToErrorKind(-32601)).toBe('config');
     expect(rpcCodeToErrorKind(-31000)).toBe('unknown');
   });
 });

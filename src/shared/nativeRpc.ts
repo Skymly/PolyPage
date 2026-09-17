@@ -44,6 +44,7 @@ export const RPC_ERROR_CODES = {
 export type RpcErrorKindName = keyof typeof RPC_ERROR_CODES;
 
 export function rpcCodeToErrorKind(code: number): RpcErrorKindName | 'unknown' {
+  if (code === -32601) return 'config';
   for (const [name, value] of Object.entries(RPC_ERROR_CODES)) {
     if (value === code) return name as RpcErrorKindName;
   }

@@ -23,7 +23,7 @@
  *  - language detection helper + auto source-language fill-in (pillar H);
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
-import { MEDIA_COMMAND_FRAME_ID, protocolVersionOk, sendTabCommand, sendViewerResume, withProtocol } from '../messaging/messages';
+import { MEDIA_COMMAND_FRAME_ID, kindedFailure, protocolVersionOk, sendTabCommand, sendViewerResume, withProtocol } from '../messaging/messages';
 import { hostnameFromUrl } from '../shared/siteRules';
 import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
@@ -396,12 +396,12 @@ async function handleTranslateCue(
   text: string,
   domain?: string,
   tabId?: number,
-): Promise<{ translated?: string; error?: string }> {
+): Promise<{ translated?: string; error?: string; kind?: ErrorKind }> {
   const res = await pipeline.translate([{ text, domain, tabId }], { immediate: true });
   const translated = Object.values(res.results)[0];
   if (translated !== undefined) return { translated };
   const err = Object.values(res.errors)[0];
-  return { error: err?.message ?? '翻译失败' };
+  return { error: err?.message ?? '翻译失败', kind: err?.kind ?? 'unknown' };
 }
 
 async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortInit): Promise<void> {
@@ -790,7 +790,7 @@ chrome.runtime.onMessage.addListener(
     void (async () => {
       try {
         if (!protocolVersionOk(message)) {
-          sendResponse({ ok: false, error: `unsupported protocol v` });
+          sendResponse(kindedFailure('config', `unsupported protocol v`));
           return;
         }
         const extensionOrigin = extensionOriginOf(chrome.runtime.getURL('/'));
@@ -830,14 +830,17 @@ chrome.runtime.onMessage.addListener(
                 : settings.defaultTargetLanguage;
               sendResponse({ ok: true, translated: outcome.results.selection, language: target });
             } else {
-              sendResponse({ ok: false, error: outcome.errors.selection?.message ?? '翻译失败' });
+              sendResponse(kindedFailure(
+                outcome.errors.selection?.kind ?? 'unknown',
+                outcome.errors.selection?.message ?? '翻译失败',
+              ));
             }
             break;
           }
           case 'translate-cue': {
             const res = await handleTranslateCue(message.text, message.domain, sender.tab?.id);
             if (res.translated !== undefined) sendResponse({ ok: true, translated: res.translated });
-            else sendResponse({ ok: false, error: res.error ?? '翻译失败' });
+            else sendResponse(kindedFailure(res.kind ?? 'unknown', res.error ?? '翻译失败'));
             break;
           }
           case 'get-content-settings': {
@@ -1187,12 +1190,12 @@ chrome.runtime.onMessage.addListener(
             break;
           }
           default:
-            sendResponse({ ok: false, error: 'unknown message' });
+            sendResponse(kindedFailure('config', 'unknown message'));
         }
       } catch (e) {
         const err = toProviderError(e);
         await logError('message-handler', err.kind, err.message);
-        sendResponse({ ok: false, error: err.message });
+        sendResponse(kindedFailure(err.kind, err.message));
       }
     })();
     return true; // async response

@@ -1,0 +1,3 @@
+# Vendor SHA-256 pins in scripts/vendor-hashes.json are of git blob bytes.
+# Windows checkout must not convert EOL or the hashes diverge from Linux/local LF.
+vendor/** -text

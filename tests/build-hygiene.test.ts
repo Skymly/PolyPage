@@ -21,6 +21,11 @@ describe('build hygiene (M-90)', () => {
     expect(hashes.files['tesseract-core-simd-lstm.wasm']).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('vendor files are not subject to checkout EOL conversion', () => {
+    const attr = readFileSync(resolve('.gitattributes'), 'utf8');
+    expect(attr).toMatch(/vendor\/\*\* -text/);
+  });
+
   it('vendored JS has no dangling sourceMappingURL', () => {
     for (const name of [
       'vendor/tesseract.esm.min.js',

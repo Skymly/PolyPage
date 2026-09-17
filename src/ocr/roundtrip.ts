@@ -11,7 +11,7 @@ import { TesseractEngine } from './tesseract';
 import { buildOcrCacheKey } from './resultCache';
 import type { OcrResultCache } from './resultCache';
 import { defaultFetchImage, defaultPrepareDataUrl, sha256Hex } from './imagePrep';
-import { sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
+import { persistSanitizedOutput, sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
 import type { ErrorKind, OcrEngineId, OcrSegment, ProviderConfig, Settings } from '../shared/types';
 import { providerSupportsVision, ProviderError, toProviderError } from '../providers/provider';
 import type { TranslationContext, TranslationProvider } from '../providers/provider';
@@ -190,7 +190,7 @@ export class OcrRoundTrip {
         this.deps.recordStat?.(provider.id, true, Date.now() - started);
       }
 
-      if (settings.cacheEnabled && cacheProviderId && ocrSegmentsCacheable(segments, engineId === 'tesseract-wasm' && !instance)) {
+      if (settings.cacheEnabled && persistSanitizedOutput(settings) && cacheProviderId && ocrSegmentsCacheable(segments, engineId === 'tesseract-wasm' && !instance)) {
         if (input.signal.aborted) throw new ProviderError('aborted', '已取消');
         try {
           const key = buildOcrCacheKey({

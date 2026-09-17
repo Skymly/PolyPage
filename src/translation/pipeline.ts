@@ -7,7 +7,7 @@
  * progress, not 译文.
  */
 import { BATCH_WINDOW_MS, MAX_CONCURRENT_REQUESTS } from '../shared/constants';
-import { createThinkDeltaFilter, sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
+import { createThinkDeltaFilter, persistSanitizedOutput, sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
 import type { ErrorKind, ProviderConfig, Settings, TranslateResults } from '../shared/types';
 import {
   ProviderError,
@@ -553,7 +553,7 @@ export class TranslationPipeline {
       } else {
         this.deps.recordStat?.(providerConfig.id, false, Date.now() - started, 'invalid_response');
       }
-      if (settings.cacheEnabled && successes.length > 0) {
+      if (settings.cacheEnabled && persistSanitizedOutput(settings) && successes.length > 0) {
         try {
           await this.deps.cache.put(
             successes.map((s) => ({ text: s.cacheText, translated: s.translated })),
@@ -567,7 +567,7 @@ export class TranslationPipeline {
           /* cache failures never break translation results */
         }
       }
-      if (settings.translationMemory.enabled && successes.length > 0) {
+      if (settings.translationMemory.enabled && persistSanitizedOutput(settings) && successes.length > 0) {
         try {
           await this.deps.tm.remember(
             successes.map((s) => ({ source: s.body, target: s.translated })),
@@ -712,7 +712,7 @@ export class TranslationPipeline {
         return { kind: 'invalid_response', message: '译文卫生层剥离后为空' };
       }
       this.deps.recordStat?.(providerConfig.id, true, Date.now() - started);
-      if (settings.cacheEnabled) {
+      if (settings.cacheEnabled && persistSanitizedOutput(settings)) {
         try {
           await this.deps.cache.put(
             [{ text: cacheLookupText(item), translated: cleaned.text }],
@@ -726,7 +726,7 @@ export class TranslationPipeline {
           /* best-effort */
         }
       }
-      if (settings.translationMemory.enabled) {
+      if (settings.translationMemory.enabled && persistSanitizedOutput(settings)) {
         try {
           await this.deps.tm.remember(
             [{ source: item.text, target: cleaned.text }],

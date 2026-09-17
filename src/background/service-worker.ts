@@ -23,7 +23,7 @@
  *  - language detection helper + auto source-language fill-in (pillar H);
  *  - resume task table (IndexedDB) + SW-restart recovery (pillar H).
  */
-import { MEDIA_COMMAND_FRAME_ID, PROTOCOL_VERSION, sendTabCommand, sendViewerResume } from '../messaging/messages';
+import { MEDIA_COMMAND_FRAME_ID, protocolVersionOk, sendTabCommand, sendViewerResume, withProtocol } from '../messaging/messages';
 import { hostnameFromUrl } from '../shared/siteRules';
 import { ocrRequestAllowed } from '../shared/imageAccess';
 import { isExtensionViewerUrl, settleInflightAfterAttempt, tabIdForTranslate } from './recoverInflight';
@@ -63,7 +63,6 @@ import {
   sanitizeFeedbackPageUrl,
 } from '../storage/feedback';
 import { IdbTaskStore, resumePayloadForTab, TaskTable } from '../storage/taskTable';
-import { detectLanguage } from '../shared/languageDetect';
 import {
   DEFAULT_NATIVE_HOST_NAME,
   ERROR_LOG_KEY,
@@ -224,11 +223,10 @@ async function broadcastSettingsChanged(): Promise<void> {
     if (tab.id == null) continue;
     const cs = buildContentSettings(s, tab.url);
     try {
-      chrome.tabs.sendMessage(tab.id, {
-        v: PROTOCOL_VERSION,
+      chrome.tabs.sendMessage(tab.id, withProtocol({
         type: 'wt:settings-changed',
         settings: cs,
-      }, () => {
+      }), () => {
         void chrome.runtime.lastError;
       });
     } catch {
@@ -791,6 +789,10 @@ chrome.runtime.onMessage.addListener(
   (message: RuntimeMessage, sender: chrome.runtime.MessageSender, sendResponse) => {
     void (async () => {
       try {
+        if (!protocolVersionOk(message)) {
+          sendResponse({ ok: false, error: `unsupported protocol v` });
+          return;
+        }
         const extensionOrigin = extensionOriginOf(chrome.runtime.getURL('/'));
         switch (message.type) {
           case 'translate':
@@ -1084,11 +1086,6 @@ chrome.runtime.onMessage.addListener(
             }
             sendResponse({ ok: true });
             break;
-          case 'detect-language': {
-            const result = detectLanguage(message.texts);
-            sendResponse({ language: result.language, confident: result.confident });
-            break;
-          }
           case 'asr-start':
             sendResponse(
               await handleAsrStart(

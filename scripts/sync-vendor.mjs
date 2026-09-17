@@ -10,7 +10,7 @@
  * (jsDelivr CDN is a fallback for the same GitHub files):
  *
  *   npm install --save-dev pdfjs-dist@<version>
- *   npm install tesseract.js@<version>
+ *   npm install --save-dev tesseract.js@<version>
  *   node scripts/sync-vendor.mjs
  */
 import { spawn } from 'node:child_process';
@@ -56,6 +56,14 @@ function pickTesseractCore() {
 async function copyToVendor(from, rel) {
   const dest = path.join(vendor, rel);
   await mkdir(path.dirname(dest), { recursive: true });
+  if (/\.(js|mjs)$/.test(rel)) {
+    const text = await readFile(from, 'utf8');
+    if (/\/\/[#@]\s*sourceMappingURL=\S+/.test(text)) {
+      const stripped = text.replace(/\n?\/\/[#@]\s*sourceMappingURL=\S+/g, '');
+      await writeFile(dest, stripped);
+      return;
+    }
+  }
   await cp(from, dest);
 }
 

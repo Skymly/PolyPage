@@ -183,6 +183,7 @@ async function verifyDist() {
     'vendor/tesseract.esm.min.js',
     'vendor/tesseract-worker.min.js',
     'vendor/tesseract-core-simd-lstm.wasm.js',
+    'vendor/tesseract-core-simd-lstm.wasm',
     'vendor/tessdata/eng.traineddata',
     'vendor/tessdata/chi_sim.traineddata',
     'styles/content.css',

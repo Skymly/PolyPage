@@ -39,3 +39,7 @@ _Avoid_: 测试翻译, test translation
 **缓存作用域**:
 Optional prefix on a PipelineItem that participates in the translation cache key. It is not sent to a Provider and is not stored in sentence TM. PDF paragraphs use it so document identity does not leak into the request body.
 _Avoid_: 把 cacheScope 拼进待译文本
+
+**分层方向**:
+网页翻译 talks to 翻译管线 through chrome.runtime adapters and does not import providers/. Provider vision request builders live in shared/, not ocr/.
+_Avoid_: content → providers, providers → ocr

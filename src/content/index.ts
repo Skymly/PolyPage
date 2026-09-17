@@ -17,7 +17,7 @@ import {
 } from '../shared/constants';
 import { detectLanguage, pageLanguageBlocksAutoTranslate } from '../shared/languageDetect';
 import { shouldStartAutoTranslate } from '../shared/settingsSync';
-import { resolveLanguageCode } from '../providers/langCodes';
+import { resolveLanguageCode } from '../shared/langCodes';
 import type { ContentSettings, EffectiveRule, PageState } from '../shared/types';
 import { DomObserver } from './observer';
 import { effectiveRuleForHost, hostBlacklisted, resolveBlacklistHost, topLevelHostname } from './rules';

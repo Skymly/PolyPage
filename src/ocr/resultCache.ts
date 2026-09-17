@@ -55,6 +55,14 @@ interface Index {
   order: string[];
 }
 
+export async function ocrCacheClear(): Promise<void> {
+  const all = (await chrome.storage.local.get(null)) as Record<string, unknown>;
+  const keys = Object.keys(all).filter(
+    (k) => k === OCR_CACHE_INDEX_KEY || k.startsWith(OCR_CACHE_KEY_PREFIX),
+  );
+  if (keys.length > 0) await chrome.storage.local.remove(keys);
+}
+
 export class ChromeOcrCache implements OcrResultCache {
   private lock: Promise<unknown> = Promise.resolve();
 

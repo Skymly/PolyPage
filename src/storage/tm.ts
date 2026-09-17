@@ -52,8 +52,12 @@ export function tmLangPair(sourceLanguage: string, targetLanguage: string): stri
   return sourceLanguage.trim() + '|' + targetLanguage.trim();
 }
 
-export function tmEntryHash(normalizedSource: string, langPair: string): string {
-  return hashText(langPair + '\u0000' + normalizedSource);
+export function tmEntryHash(
+  normalizedSource: string,
+  langPair: string,
+  glossaryVersion = 0,
+): string {
+  return hashText(`${langPair}\u0000g${glossaryVersion}\u0000${normalizedSource}`);
 }
 
 export function isTmEligible(text: string): boolean {
@@ -137,13 +141,26 @@ export class IdbTmStore implements TmStore {
   }
 
   async getMany(hashes: string[]): Promise<Map<string, TmEntry>> {
-    const all = await this.getAll();
-    const want = new Set(hashes);
-    const out = new Map<string, TmEntry>();
-    for (const entry of all) {
-      if (want.has(entry.hash)) out.set(entry.hash, entry);
-    }
-    return out;
+    const unique = [...new Set(hashes)].filter((h) => h !== '');
+    if (unique.length === 0) return new Map();
+    return this.open().then(
+      (db) =>
+        new Promise<Map<string, TmEntry>>((resolve, reject) => {
+          const tx = db.transaction(TM_STORE_NAME, 'readonly');
+          const store = tx.objectStore(TM_STORE_NAME);
+          const out = new Map<string, TmEntry>();
+          for (const hash of unique) {
+            const request = store.get(hash);
+            request.onsuccess = () => {
+              const value = request.result as TmEntry | undefined;
+              if (value && typeof value.hash === 'string') out.set(hash, value);
+            };
+          }
+          tx.oncomplete = () => resolve(out);
+          tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
+          tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
+        }),
+    );
   }
 
   async put(entry: TmEntry): Promise<void> {
@@ -180,14 +197,31 @@ export interface TmStats {
  * enabled === false callers must not invoke lookup/remember.
  */
 export class TranslationMemory {
+  private lock: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly store: TmStore,
     private readonly maxEntries: number = DEFAULT_TM_MAX_ENTRIES,
   ) {}
 
+  private withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.lock.then(fn, fn);
+    this.lock = run.catch(() => undefined);
+    return run;
+  }
+
   async lookup(
     items: TmLookupItem[],
     langPair: string,
+    glossaryVersion = 0,
+  ): Promise<Map<string, string>> {
+    return this.withLock(() => this.lookupUnlocked(items, langPair, glossaryVersion));
+  }
+
+  private async lookupUnlocked(
+    items: TmLookupItem[],
+    langPair: string,
+    glossaryVersion: number,
   ): Promise<Map<string, string>> {
     const hits = new Map<string, string>();
     if (items.length === 0) return hits;
@@ -195,7 +229,7 @@ export class TranslationMemory {
     for (const item of items) {
       const normalized = normalizeTmSource(item.text);
       if (normalized === '') continue;
-      planned.push({ key: item.key, hash: tmEntryHash(normalized, langPair) });
+      planned.push({ key: item.key, hash: tmEntryHash(normalized, langPair, glossaryVersion) });
     }
     if (planned.length === 0) return hits;
     const found = await this.store.getMany(planned.map((p) => p.hash));
@@ -213,30 +247,42 @@ export class TranslationMemory {
     items: Array<{ source: string; target: string }>,
     langPair: string,
     maxEntries = this.maxEntries,
+    glossaryVersion = 0,
+  ): Promise<void> {
+    return this.withLock(() => this.rememberUnlocked(items, langPair, maxEntries, glossaryVersion));
+  }
+
+  private async rememberUnlocked(
+    items: Array<{ source: string; target: string }>,
+    langPair: string,
+    maxEntries: number,
+    glossaryVersion: number,
   ): Promise<void> {
     const now = Date.now();
+    const written = new Set<string>();
     for (const item of items) {
       if (!isTmEligible(item.source)) continue;
       const translated = item.target.trim();
       if (translated === '') continue;
       const normalized = normalizeTmSource(item.source);
       if (normalized === '') continue;
-      const hash = tmEntryHash(normalized, langPair);
+      const hash = tmEntryHash(normalized, langPair, glossaryVersion);
       const existing = await this.store.get(hash);
       await this.store.put({
         hash,
         source: normalized,
         target: translated,
         langPair,
-        hits: existing ? existing.hits + 1 : 0,
+        hits: existing ? existing.hits : 0,
         ts: now,
       });
+      written.add(hash);
     }
-    await this.prune(maxEntries);
+    await this.prune(maxEntries, written);
   }
 
   async clear(): Promise<void> {
-    await this.store.clear();
+    return this.withLock(() => this.store.clear());
   }
 
   async stats(): Promise<TmStats> {
@@ -247,11 +293,25 @@ export class TranslationMemory {
     };
   }
 
-  private async prune(maxEntries = this.maxEntries): Promise<void> {
+  private async prune(maxEntries = this.maxEntries, keep: ReadonlySet<string> = new Set()): Promise<void> {
     const all = await this.store.getAll();
     if (all.length <= maxEntries) return;
+    const overflow = all.length - maxEntries;
     const sorted = [...all].sort((a, b) => a.hits - b.hits || a.ts - b.ts);
-    const evict = sorted.slice(0, all.length - maxEntries);
+    const evict: TmEntry[] = [];
+    for (const entry of sorted) {
+      if (evict.length >= overflow) break;
+      if (keep.has(entry.hash)) continue;
+      evict.push(entry);
+    }
+    if (evict.length < overflow) {
+      const evicted = new Set(evict.map((e) => e.hash));
+      for (const entry of sorted) {
+        if (evict.length >= overflow) break;
+        if (evicted.has(entry.hash)) continue;
+        evict.push(entry);
+      }
+    }
     for (const entry of evict) {
       await this.store.delete(entry.hash);
     }

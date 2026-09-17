@@ -87,16 +87,33 @@ export function sanitizeTranslation(raw: string, options?: SanitizeOptions): San
   return { ok: true, text };
 }
 
+export function hostnameOfUrl(raw: string): string | null {
+  try {
+    return new URL(raw.trim()).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function hostMatches(host: string, root: string): boolean {
+  return host === root || host.endsWith(`.${root}`);
+}
+
+/** Official MiniMax API hosts (not a substring of an unrelated URL). */
+export function isMinimaxApiHost(baseUrl: string): boolean {
+  const host = hostnameOfUrl(baseUrl);
+  if (!host) return false;
+  return hostMatches(host, 'minimax.chat') || hostMatches(host, 'minimax.io');
+}
+
 /**
  * Token Plan keys (`sk-cp-`) must hit `api.minimax.chat`. The international
  * `api.minimax.io` host returns 401 for those keys. Never include the key.
  */
 export function minimaxHostHint(baseUrl: string, apiKey: string): string | null {
-  const url = baseUrl.trim().toLowerCase();
   const key = apiKey.trim();
   if (!key.startsWith('sk-cp-')) return null;
-  if (url.includes('minimax.io')) {
-    return 'Token Plan 密钥应使用 https://api.minimax.chat ，不要指向 api.minimax.io';
-  }
-  return null;
+  const host = hostnameOfUrl(baseUrl);
+  if (!host || !hostMatches(host, 'minimax.io')) return null;
+  return 'Token Plan 密钥应使用 https://api.minimax.chat ，不要指向 api.minimax.io';
 }

@@ -10,7 +10,8 @@ import type { ProviderConfig } from '../shared/types';
 import { toGoogleLanguage } from './langCodes';
 import {
   ProviderError,
-  classifyHttpStatus,
+  httpApiBase,
+  providerHttpError,
   readApiErrorMessage,
   registerProviderFactory,
   toProviderError,
@@ -38,7 +39,7 @@ export class GoogleTranslateProvider implements TranslationProvider {
     }
     const source = toGoogleLanguage(ctx.sourceLanguage);
 
-    const baseUrl = (this.config.baseUrl.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URL);
     const url = `${baseUrl}?key=${encodeURIComponent(this.config.apiKey.trim())}`;
 
     const body: Record<string, unknown> = {
@@ -62,11 +63,10 @@ export class GoogleTranslateProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `Google Translate 请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          throw providerHttpError(
+            res,
+            'Google Translate 请求失败',
+            await readApiErrorMessage(res),
           );
         }
         try {
@@ -96,9 +96,19 @@ export class GoogleTranslateProvider implements TranslationProvider {
   }
 }
 
+function codePointOr(original: string, code: number): string {
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return original;
+  return String.fromCodePoint(code);
+}
+
 /** Google v2 HTML-escapes output even for format=text. */
 function decodeHtmlEntities(text: string): string {
   return text
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (match, hex: string) =>
+      codePointOr(match, Number.parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (match, dec: string) => codePointOr(match, Number.parseInt(dec, 10)))
     .replace(/&#39;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&gt;/g, '>')

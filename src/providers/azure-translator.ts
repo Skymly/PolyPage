@@ -10,7 +10,8 @@ import type { ProviderConfig } from '../shared/types';
 import { toAzureLanguage } from './langCodes';
 import {
   ProviderError,
-  classifyHttpStatus,
+  httpApiBase,
+  providerHttpError,
   readApiErrorMessage,
   registerProviderFactory,
   toProviderError,
@@ -38,7 +39,7 @@ export class AzureTranslatorProvider implements TranslationProvider {
     }
     const from = toAzureLanguage(ctx.sourceLanguage);
 
-    const baseUrl = (this.config.baseUrl.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URL);
     const params = new URLSearchParams({ 'api-version': '3.0', to });
     if (from) params.set('from', from);
     const url = `${baseUrl}/translate?${params.toString()}`;
@@ -65,11 +66,10 @@ export class AzureTranslatorProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `Azure Translator 请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          throw providerHttpError(
+            res,
+            'Azure Translator 请求失败',
+            await readApiErrorMessage(res),
           );
         }
         try {

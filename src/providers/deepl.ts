@@ -9,7 +9,8 @@ import type { ProviderConfig } from '../shared/types';
 import { toDeepLLanguage } from './langCodes';
 import {
   ProviderError,
-  classifyHttpStatus,
+  httpApiBase,
+  providerHttpError,
   readApiErrorMessage,
   registerProviderFactory,
   toProviderError,
@@ -37,7 +38,7 @@ export class DeepLProvider implements TranslationProvider {
     }
     const source = toDeepLLanguage(ctx.sourceLanguage);
 
-    const baseUrl = (this.config.baseUrl.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URL);
     const url = `${baseUrl}/v2/translate`;
     const body: Record<string, unknown> = {
       text: texts,
@@ -65,12 +66,7 @@ export class DeepLProvider implements TranslationProvider {
           throw toProviderError(e);
         }
         if (!res.ok) {
-          const kind = classifyHttpStatus(res.status);
-          const detail = await readApiErrorMessage(res);
-          throw new ProviderError(
-            kind,
-            `DeepL 请求失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
-          );
+          throw providerHttpError(res, 'DeepL 请求失败', await readApiErrorMessage(res));
         }
         try {
           return (await res.json()) as unknown;

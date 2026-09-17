@@ -71,7 +71,7 @@ import {
 } from '../shared/constants';
 import { OcrRoundTrip } from '../ocr/roundtrip';
 import { AsrRoundTrip } from '../asr/roundtrip';
-import { ChromeOcrCache } from '../ocr/resultCache';
+import { ChromeOcrCache, ocrCacheClear } from '../ocr/resultCache';
 import { TranslationPipeline } from '../translation/pipeline';
 import { effectiveLanguages, isProviderConfigured } from '../translation/context';
 import { providerCapabilities } from '../providers/capabilities';
@@ -951,6 +951,7 @@ chrome.runtime.onMessage.addListener(
             break;
           case 'clear-cache':
             await cacheClear();
+            await ocrCacheClear();
             sendResponse({ ok: true });
             break;
           case 'get-error-log': {

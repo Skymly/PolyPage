@@ -61,7 +61,37 @@ async function readIndex(): Promise<CacheIndex> {
   const data = await chrome.storage.local.get(CACHE_INDEX_KEY);
   const index = data[CACHE_INDEX_KEY] as CacheIndex | undefined;
   if (!index || !Array.isArray(index.order)) return { order: [] };
-  return { order: index.order.filter((h) => typeof h === 'string') };
+  return { order: uniqueKeepOrder(index.order.filter((h) => typeof h === 'string')) };
+}
+
+/** First-seen order; used so a batch cannot push the same hash twice. */
+export function uniqueKeepOrder(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+/** Move `hashes` to the LRU tail (once each) and return keys to evict. */
+export function applyLruTouch(
+  order: string[],
+  hashes: string[],
+  maxEntries: number,
+): { order: string[]; evict: string[] } {
+  const uniqueNew = uniqueKeepOrder(hashes);
+  const touched = new Set(uniqueNew);
+  const next = uniqueKeepOrder(order).filter((h) => !touched.has(h));
+  next.push(...uniqueNew);
+  const evict: string[] = [];
+  while (next.length > maxEntries) {
+    const oldest = next.shift();
+    if (oldest) evict.push(oldest);
+  }
+  return { order: next, evict };
 }
 
 export async function cacheGet(
@@ -112,21 +142,17 @@ export async function cachePut(
     writes[CACHE_KEY_PREFIX + hash] = { t: translated, ts: now };
     hashes.push(hash);
   }
-  await chrome.storage.local.set(writes);
   await withIndexLock(async () => {
     const index = await readIndex();
-    const hashSet = new Set(hashes);
-    // Move touched hashes to the tail (most recently used).
-    index.order = index.order.filter((h) => !hashSet.has(h));
-    index.order.push(...hashes);
-    // Evict oldest entries beyond the limit.
-    const evict: string[] = [];
-    while (index.order.length > CACHE_MAX_ENTRIES) {
-      const oldest = index.order.shift();
-      if (oldest) evict.push(CACHE_KEY_PREFIX + oldest);
+    const touched = applyLruTouch(index.order, hashes, CACHE_MAX_ENTRIES);
+    const keep = new Set(touched.order);
+    for (const key of Object.keys(writes)) {
+      if (!keep.has(key.slice(CACHE_KEY_PREFIX.length))) delete writes[key];
     }
-    if (evict.length > 0) await chrome.storage.local.remove(evict);
-    await chrome.storage.local.set({ [CACHE_INDEX_KEY]: index });
+    if (touched.evict.length > 0) {
+      await chrome.storage.local.remove(touched.evict.map((h) => CACHE_KEY_PREFIX + h));
+    }
+    await chrome.storage.local.set({ ...writes, [CACHE_INDEX_KEY]: { order: touched.order } });
   });
 }
 
@@ -158,10 +184,11 @@ export async function cacheStats(): Promise<{ entries: number }> {
 
 export async function cacheClear(): Promise<void> {
   await withIndexLock(async () => {
-    const index = await readIndex();
-    const keys = index.order.map((h) => CACHE_KEY_PREFIX + h);
-    keys.push(CACHE_INDEX_KEY);
-    await chrome.storage.local.remove(keys);
+    const all = (await chrome.storage.local.get(null)) as Record<string, unknown>;
+    const keys = Object.keys(all).filter(
+      (k) => k === CACHE_INDEX_KEY || k.startsWith(CACHE_KEY_PREFIX),
+    );
+    if (keys.length > 0) await chrome.storage.local.remove(keys);
   });
 }
 

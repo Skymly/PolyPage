@@ -11,6 +11,9 @@
  *    the REAL .NET gateway via Native Messaging, and failover chains.
  *
  * Note: branded Chrome ignores --load-extension, so Edge is used.
+ *
+ * Env overrides (M-91): EDGE_PATH, SMOKE_PORT_PAGE / SMOKE_PORT_API /
+ * SMOKE_PORT_XORIGIN, SMOKE_CDP_PORT, FFMPEG_PATH.
  */
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
@@ -25,10 +28,24 @@ import { DEFAULT_GATEWAY_EXE, ensurePublishedGateway } from './ensure-gateway-pu
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = path.join(root, 'dist');
-const PORT_PAGE = 8123;
-const PORT_API = 8124;
-const PORT_XORIGIN = 8125;
-const BROWSER = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+function envPort(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`${name}=${JSON.stringify(raw)} is not a valid TCP port`);
+  }
+  return n;
+}
+
+const PORT_PAGE = envPort('SMOKE_PORT_PAGE', 8123);
+const PORT_API = envPort('SMOKE_PORT_API', 8124);
+const PORT_XORIGIN = envPort('SMOKE_PORT_XORIGIN', 8125);
+const PORT_CDP = envPort('SMOKE_CDP_PORT', 9222);
+const BROWSER =
+  process.env.EDGE_PATH ||
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 const GATEWAY_EXE = DEFAULT_GATEWAY_EXE;
 const PRODUCTION_HOST_NAME = 'com.skymly.polypage.gateway';
 const HOST_NAME = 'com.skymly.polypage.gateway.smoke';
@@ -250,11 +267,15 @@ function loadCaptionlessWebm() {
   }
   mkdirSync(dir, { recursive: true });
   const ffmpeg = spawnSync(
-    'ffmpeg',
+    FFMPEG,
     ['-y', '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', '1', '-c:a', 'libopus', out],
     { stdio: 'ignore' },
   );
   if (ffmpeg.status === 0 && existsSync(out)) return readFileSync(out);
+  const why = ffmpeg.error?.message || `exit ${ffmpeg.status}`;
+  console.warn(
+    `WARN: ffmpeg unavailable (${why}). Set FFMPEG_PATH or install ffmpeg. Using a tiny WebM stub; ASR media assertions may be weak.`,
+  );
   // Fallback: tiny WebM header. Content script fetch-src fallback still
   // uploads these bytes to the mock /audio/transcriptions endpoint.
   return Buffer.from('GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOA', 'base64');
@@ -473,7 +494,7 @@ async function captureSmokeScreenshot() {
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `crash-${Date.now()}.png`);
   try {
-    const targets = await fetchJson('http://127.0.0.1:9222/json');
+    const targets = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
     const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
     if (!page) return null;
     const client = await CDP.connect(page.webSocketDebuggerUrl);
@@ -592,8 +613,8 @@ async function findExtensionId(port) {
 
 // Refuse to run against a stale browser from a previous run.
 try {
-  await fetch('http://127.0.0.1:9222/json/version');
-  console.error('ABORT: something is already listening on port 9222 (stale browser?). Kill it first.');
+  await fetch(`http://127.0.0.1:${PORT_CDP}/json/version`);
+  console.error(`ABORT: something is already listening on port ${PORT_CDP} (stale browser?). Kill it first.`);
   process.exit(2);
 } catch {
   // port free — good
@@ -608,7 +629,7 @@ function killTree(proc) {
     }
     for (let i = 0; i < 10; i++) {
       const out = spawnSync('netstat', ['-ano'], { encoding: 'utf8' }).stdout ?? '';
-      const line = out.split('\n').find((l) => l.includes(':9222') && l.includes('LISTENING'));
+      const line = out.split('\n').find((l) => l.includes(':' + PORT_CDP) && l.includes('LISTENING'));
       if (!line) break;
       const pid = line.trim().split(/\s+/).pop();
       if (pid) spawnSync('taskkill', ['/F', '/T', '/PID', pid], { stdio: 'ignore' });
@@ -766,10 +787,13 @@ const browserArgs = [
   '--disable-gpu',
   '--disable-sync',
   '--load-extension=' + distDir,
-  '--remote-debugging-port=9222',
+  `--remote-debugging-port=${PORT_CDP}`,
   '--user-data-dir=' + profileDir,
   `http://127.0.0.1:${PORT_PAGE}/`,
 ];
+if (!existsSync(BROWSER)) {
+  throw new Error(`Edge not found at ${BROWSER}. Set EDGE_PATH to msedge.exe.`);
+}
 const browser = spawn(BROWSER, browserArgs, {
   stdio: 'ignore',
   env: { ...process.env, POLYPAGE_GATEWAY_CONFIG: gatewayConfigPath },
@@ -872,7 +896,7 @@ async function openPage(browserCdp, url) {
 
 async function pageFor(urlPrefix) {
   const target = await waitForTarget(
-    9222,
+    PORT_CDP,
     (t) => t.type === 'page' && t.url.startsWith(urlPrefix),
     urlPrefix,
   );
@@ -882,7 +906,7 @@ async function pageFor(urlPrefix) {
 }
 
 async function closePage(browserCdp, urlPrefix) {
-  const targets = await fetchJson('http://127.0.0.1:9222/json');
+  const targets = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
   for (const t of targets.filter((x) => x.type === 'page' && x.url.startsWith(urlPrefix))) {
     try {
       await browserCdp.send('Target.closeTarget', { targetId: t.id });
@@ -902,7 +926,7 @@ async function saveSettingsThroughExtension(payload) {
 
 try {
   console.log('Waiting for extension service worker...');
-  extensionId = await findExtensionId(9222);
+  extensionId = await findExtensionId(PORT_CDP);
   check('extension loaded (service worker registered)', true);
 
   // Now that we know the extension id, refresh the host manifest's
@@ -918,13 +942,13 @@ try {
   }
 
   // Open the extension's options page via the browser-level debugger.
-  const version = await fetchJson('http://127.0.0.1:9222/json/version');
+  const version = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json/version`);
   const browserCdp = await CDP.connect(version.webSocketDebuggerUrl);
   const optionsUrl = `chrome-extension://${extensionId}/options/options.html`;
   await openPage(browserCdp, optionsUrl);
 
   const optionsTarget = await waitForTarget(
-    9222,
+    PORT_CDP,
     (t) => t.type === 'page' && t.url.startsWith(optionsUrl),
     'options page',
   );
@@ -1386,7 +1410,7 @@ try {
   // which also proves the frame ran the translation end-to-end.
   let xoriginOk = false;
   const xoriginTarget = await waitForTarget(
-    9222,
+    PORT_CDP,
     (t) => (t.type === 'iframe' || t.type === 'page') && t.url.startsWith(`http://127.0.0.1:${PORT_XORIGIN}`),
     'cross-origin iframe target',
     15000,
@@ -1969,7 +1993,7 @@ try {
       tessDiag += ` | error-log=${e instanceof Error ? e.message : e}`;
     }
     try {
-      const targets = await fetchJson('http://127.0.0.1:9222/json');
+      const targets = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
       const off = (targets ?? []).find((t) => String(t.url ?? '').includes('offscreen'));
       tessDiag += ` | offscreen=${off ? off.url : 'missing'}`;
       if (off?.webSocketDebuggerUrl) {
@@ -2221,7 +2245,7 @@ try {
   await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:translate' }`), 5000);
   await sleep(500); // tasks now recorded in-flight against the slow endpoint
 
-  const targetsBeforeKill = await fetchJson('http://127.0.0.1:9222/json');
+  const targetsBeforeKill = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
   const swTarget = targetsBeforeKill.find(
     (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
   );
@@ -2280,7 +2304,7 @@ try {
     await sleep(250);
   }
   check('PDF resume: paragraphs in-flight before SW kill', sawPending === true);
-  const targetsBeforePdfKill = await fetchJson('http://127.0.0.1:9222/json');
+  const targetsBeforePdfKill = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
   const swPdf = targetsBeforePdfKill.find(
     (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
   );

@@ -43,3 +43,10 @@ _Avoid_: 把 cacheScope 拼进待译文本
 **分层方向**:
 网页翻译 talks to 翻译管线 through chrome.runtime adapters and does not import providers/. Provider vision request builders live in shared/, not ocr/.
 _Avoid_: content → providers, providers → ocr
+
+## Identifiers
+
+`_Avoid_` constrains design prose (docs, comments, issue text). Exported class
+names, file names, and type names already in the tree (`PageTranslator`,
+`OcrEngineId`, `src/asr/engine.ts`) are historical identifiers, not a rename
+list.

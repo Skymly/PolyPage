@@ -124,10 +124,17 @@ function render(size) {
   return out;
 }
 
-const outDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public/icons');
-await mkdir(outDir, { recursive: true });
-for (const size of [16, 32, 48, 128]) {
-  const png = encodePNG(size, render(size));
-  await writeFile(path.join(outDir, `icon${size}.png`), png);
-  console.log(`Generated icon${size}.png (${png.length} bytes)`);
+export async function generateIcons(outDir) {
+  await mkdir(outDir, { recursive: true });
+  for (const size of [16, 32, 48, 128]) {
+    const png = encodePNG(size, render(size));
+    await writeFile(path.join(outDir, `icon${size}.png`), png);
+    console.log(`Generated icon${size}.png (${png.length} bytes)`);
+  }
+}
+
+const invokedDirectly =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  await generateIcons(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public/icons'));
 }

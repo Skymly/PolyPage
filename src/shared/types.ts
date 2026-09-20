@@ -30,6 +30,10 @@ export const DISPLAY_MODES: DisplayMode[] = [
   'inline',
 ];
 
+export function parseDisplayMode(value: unknown): DisplayMode | null {
+  return DISPLAY_MODES.includes(value as DisplayMode) ? (value as DisplayMode) : null;
+}
+
 /**
  * Provider types. 1.0: openai-compatible, custom-http.
  * 2.0 adds: deepl, azure-translator, google-translate, native-host.

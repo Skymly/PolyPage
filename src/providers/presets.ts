@@ -5,7 +5,12 @@
  * after creating from a preset the user normally only has to paste an API
  * key. Presets never modify providers the user already created.
  */
-import { DEFAULT_NATIVE_HOST_NAME, DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT } from '../shared/constants';
+import {
+  DEFAULT_BASE_URLS,
+  DEFAULT_NATIVE_HOST_NAME,
+  DEFAULT_SYSTEM_PROMPT,
+  DEFAULT_USER_PROMPT,
+} from '../shared/constants';
 import type { ProviderConfig, ProviderType } from '../shared/types';
 import { defaultProvider } from '../shared/constants';
 
@@ -35,7 +40,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'OpenAI',
     description: 'OpenAI 官方 API（gpt-4o-mini）',
     type: 'openai-compatible',
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: DEFAULT_BASE_URLS['openai-compatible'],
     model: 'gpt-4o-mini',
     needsApiKey: true,
   },
@@ -89,7 +94,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'DeepL',
     description: 'DeepL API Free/Pro（需 DeepL Auth Key）',
     type: 'deepl',
-    baseUrl: 'https://api-free.deepl.com',
+    baseUrl: DEFAULT_BASE_URLS.deepl,
     model: '',
     needsApiKey: true,
   },
@@ -98,7 +103,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'Azure Translator',
     description: 'Azure AI 翻译服务（订阅密钥 + 区域）',
     type: 'azure-translator',
-    baseUrl: 'https://api.cognitive.microsofttranslator.com',
+    baseUrl: DEFAULT_BASE_URLS['azure-translator'],
     model: '',
     needsApiKey: true,
   },
@@ -107,7 +112,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'Google Translate',
     description: 'Google Cloud Translation v2（API Key）',
     type: 'google-translate',
-    baseUrl: 'https://translation.googleapis.com/language/translate/v2',
+    baseUrl: DEFAULT_BASE_URLS['google-translate'],
     model: '',
     needsApiKey: true,
   },

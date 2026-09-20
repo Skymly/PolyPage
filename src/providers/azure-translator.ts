@@ -6,6 +6,7 @@
  *  - batch: request body is an array of { Text } objects; response is an
  *    array of { translations: [{ text, to }] }.
  */
+import { DEFAULT_BASE_URLS } from '../shared/constants';
 import type { ProviderConfig } from '../shared/types';
 import { toAzureLanguage } from './langCodes';
 import {
@@ -19,7 +20,6 @@ import {
 } from './provider';
 import type { TranslationContext, TranslationProvider } from './provider';
 
-const DEFAULT_BASE_URL = 'https://api.cognitive.microsofttranslator.com';
 
 export class AzureTranslatorProvider implements TranslationProvider {
   constructor(public readonly config: ProviderConfig) {}
@@ -39,7 +39,7 @@ export class AzureTranslatorProvider implements TranslationProvider {
     }
     const from = toAzureLanguage(ctx.sourceLanguage);
 
-    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URL);
+    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URLS['azure-translator']);
     const params = new URLSearchParams({ 'api-version': '3.0', to });
     if (from) params.set('from', from);
     const url = `${baseUrl}/translate?${params.toString()}`;

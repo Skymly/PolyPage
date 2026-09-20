@@ -6,6 +6,7 @@
  *  - batch: { q: [...], target, source?, format: "text" }
  *  - response: { data: { translations: [{ translatedText }] } }
  */
+import { DEFAULT_BASE_URLS } from '../shared/constants';
 import type { ProviderConfig } from '../shared/types';
 import { toGoogleLanguage } from './langCodes';
 import {
@@ -19,7 +20,6 @@ import {
 } from './provider';
 import type { TranslationContext, TranslationProvider } from './provider';
 
-const DEFAULT_BASE_URL = 'https://translation.googleapis.com/language/translate/v2';
 
 export class GoogleTranslateProvider implements TranslationProvider {
   constructor(public readonly config: ProviderConfig) {}
@@ -39,7 +39,7 @@ export class GoogleTranslateProvider implements TranslationProvider {
     }
     const source = toGoogleLanguage(ctx.sourceLanguage);
 
-    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URL);
+    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URLS['google-translate']);
     const url = `${baseUrl}?key=${encodeURIComponent(this.config.apiKey.trim())}`;
 
     const body: Record<string, unknown> = {

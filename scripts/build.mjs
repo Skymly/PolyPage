@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeFirefoxDist, GECKO_ID } from './manifest-firefox.mjs';
+import { generateIcons } from './generate-icons.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
@@ -163,6 +164,7 @@ async function buildContent() {
 }
 
 async function copyStatic() {
+  await generateIcons(path.join(root, 'public/icons'));
   await cp(path.join(root, 'public/manifest.json'), path.join(dist, 'manifest.json'));
   await cp(path.join(root, 'public/icons'), path.join(dist, 'icons'), { recursive: true });
   await mkdir(path.join(dist, 'styles'), { recursive: true });
@@ -228,7 +230,7 @@ console.log('[3/7] Building background service worker...');
 await buildBackground();
 console.log('[4/7] Building content script...');
 await buildContent();
-console.log('[5/7] Copying static assets + verifying vendor pdf.js / tesseract...');
+console.log('[5/7] Generating icons + copying static assets + verifying vendor pdf.js / tesseract...');
 await copyStatic();
 await copyVendor();
 console.log('[6/7] Verifying dist...');

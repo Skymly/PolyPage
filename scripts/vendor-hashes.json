@@ -1,5 +1,5 @@
 {
-  "_comment": "SHA-256 hashes of the pdf.js + tesseract.js vendor distribution (including tessdata_fast language packs). scripts/build.mjs refuses to build when a file changes without a matching hash update. Hashes are of git blob bytes (vendor/** is -text in .gitattributes).",
+  "_comment": "SHA-256 hashes of the pdf.js + tesseract.js vendor distribution (including tessdata_fast language packs). Drift detection only (same-repo pins, not tamper-proof). scripts/build.mjs refuses to build when a file changes without a matching hash update. Hashes are of git blob bytes (vendor/** is -text in .gitattributes).",
   "pdfjsVersion": "4.10.38",
   "tesseractJsVersion": "7.0.0",
   "files": {

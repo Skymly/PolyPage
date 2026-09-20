@@ -5,9 +5,15 @@
  * their SHA-256 hashes in scripts/vendor-hashes.json. scripts/build.mjs
  * refuses to build when vendor files drift from the pinned hashes.
  *
+ * Same-repo hashes are drift detection, not tamper-proofing: anyone who can
+ * change vendor/ can change the pin file. Do not treat this as a signing
+ * infrastructure.
+ *
  * Tessdata language packs (eng + chi_sim) are data files, not remote code.
  * They are downloaded from tesseract-ocr/tessdata_fast when missing
- * (jsDelivr CDN is a fallback for the same GitHub files):
+ * (jsDelivr CDN is a fallback for the same GitHub files). If vendor-hashes.json
+ * already pins the file, the bytes must match; a first-time download cannot
+ * overwrite an existing pin (no TOFU when a pin exists):
  *
  *   npm install --save-dev pdfjs-dist@<version>
  *   npm install --save-dev tesseract.js@<version>
@@ -15,7 +21,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, stat, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +154,28 @@ try {
   /* license file optional */
 }
 
+const hashesPath = path.join(root, 'scripts', 'vendor-hashes.json');
+const existingPins = existsSync(hashesPath)
+  ? (JSON.parse(await readFile(hashesPath, 'utf8')).files ?? {})
+  : {};
+
+async function sha256File(file) {
+  return createHash('sha256').update(await readFile(file)).digest('hex');
+}
+
+async function assertTessdataPin(rel, dest) {
+  const digest = await sha256File(dest);
+  const expected = existingPins[rel];
+  if (expected && expected !== digest) {
+    await rm(dest, { force: true });
+    throw new Error(
+      `tessdata hash mismatch for ${rel}: expected ${expected}, got ${digest}. ` +
+        'An existing pin is fail-closed; delete the pin only for a deliberate tessdata_fast upgrade.',
+    );
+  }
+  return digest;
+}
+
 const tessdataDir = path.join(vendor, 'tessdata');
 await mkdir(tessdataDir, { recursive: true });
 const tessdataFiles = [];
@@ -164,6 +192,7 @@ for (const lang of TESSDATA_LANGS) {
     const size = await download(TESSDATA_URLS(lang), dest);
     console.log(`  downloaded ${rel} (${size} bytes)`);
   }
+  await assertTessdataPin(rel, dest);
   tessdataFiles.push(rel);
 }
 
@@ -178,7 +207,7 @@ await writeFile(
 const hashed = [...pdfFiles.map((f) => f.to), ...tessFiles.map((f) => f.to), ...tessdataFiles];
 const pinned = {
   _comment:
-    'SHA-256 hashes of the pdf.js + tesseract.js vendor distribution (including tessdata_fast language packs). scripts/build.mjs refuses to build when a file changes without a matching hash update.',
+    'SHA-256 hashes of the pdf.js + tesseract.js vendor distribution (including tessdata_fast language packs). Drift detection only (same-repo pins, not tamper-proof). scripts/build.mjs refuses to build when a file changes without a matching hash update. Hashes are of git blob bytes (vendor/** is -text in .gitattributes).',
   pdfjsVersion: pdfPkg.version,
   tesseractJsVersion: tessPkg.version,
   files: {},

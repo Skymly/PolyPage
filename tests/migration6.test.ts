@@ -5,7 +5,6 @@
  *    ignored) — the same backwards-compat guarantee 4.1 gave 4.0.
  */
 import { describe, expect, it } from 'vitest';
-import { clamp } from '../src/shared/utils';
 import { normalizeSettings } from '../src/storage/settings';
 
 const v5Settings = {
@@ -113,75 +112,17 @@ describe('v5 -> v6 migration', () => {
   });
 });
 
-function legacy41Normalize(raw: unknown): Record<string, unknown> {
-  const defaults = {
-    schemaVersion: 5,
-    defaultDisplayMode: 'bilingual',
-    autoTranslate: false,
-    blacklist: [],
-    minTextLength: 6,
-    asr: { enabled: true, maxSeconds: 90, maxUploadMb: 20, confirmFull: true, streaming: false },
-    translationMemory: { enabled: false, maxEntries: 5000 },
-    ocrPacks: { extraLangs: [] },
-    imageOverlay: { enabled: false },
-  };
-  if (raw === null || typeof raw !== 'object') return defaults;
-  const r = raw as Record<string, unknown>;
-  const asrRaw = r.asr && typeof r.asr === 'object' ? (r.asr as Record<string, unknown>) : {};
-  const tmRaw = r.translationMemory && typeof r.translationMemory === 'object' ? (r.translationMemory as Record<string, unknown>) : {};
-  const pdfRaw = r.pdfViewer && typeof r.pdfViewer === 'object' ? (r.pdfViewer as Record<string, unknown>) : {};
-  const packsRaw = r.ocrPacks && typeof r.ocrPacks === 'object' ? (r.ocrPacks as Record<string, unknown>) : {};
-  const overlayRaw = r.imageOverlay && typeof r.imageOverlay === 'object' ? (r.imageOverlay as Record<string, unknown>) : {};
-  return {
-    schemaVersion: 5,
-    activeProviderId: typeof r.activeProviderId === 'string' ? r.activeProviderId : '',
-    providers: Array.isArray(r.providers) ? r.providers : [],
-    defaultDisplayMode: r.defaultDisplayMode,
-    autoTranslate: r.autoTranslate === true,
-    blacklist: Array.isArray(r.blacklist) ? r.blacklist : [],
-    minTextLength:
-      typeof r.minTextLength === 'number' && Number.isFinite(r.minTextLength)
-        ? clamp(Math.round(r.minTextLength), 1, 200)
-        : 6,
-    pdfViewer: {
-      enabled: pdfRaw.enabled !== false,
-      scannedPageOcr: pdfRaw.scannedPageOcr !== false,
-      layoutPreset: pdfRaw.layoutPreset === 'single' || pdfRaw.layoutPreset === 'columns' || pdfRaw.layoutPreset === 'table'
-        ? pdfRaw.layoutPreset
-        : 'auto',
-    },
-    asr: {
-      enabled: asrRaw.enabled !== false,
-      maxSeconds: typeof asrRaw.maxSeconds === 'number' ? asrRaw.maxSeconds : 90,
-      maxUploadMb: typeof asrRaw.maxUploadMb === 'number' ? asrRaw.maxUploadMb : 20,
-      confirmFull: asrRaw.confirmFull !== false,
-      streaming: asrRaw.streaming === true,
-    },
-    translationMemory: {
-      enabled: tmRaw.enabled === true,
-      maxEntries: typeof tmRaw.maxEntries === 'number' ? tmRaw.maxEntries : 5000,
-    },
-    ocrPacks: {
-      extraLangs: Array.isArray(packsRaw.extraLangs) ? packsRaw.extraLangs : [],
-    },
-    imageOverlay: { enabled: overlayRaw.enabled === true },
-  };
-}
-
-describe('v6 -> v5 read compatibility', () => {
-  it('4.1-style normalization reads a v6 document without losing v5 fields', () => {
-    const v6Doc = normalizeSettings(v5Settings);
-    const legacy = legacy41Normalize(v6Doc);
-    expect(legacy.schemaVersion).toBe(5);
-    expect(legacy.defaultDisplayMode).toBe('inline');
-    expect(legacy.autoTranslate).toBe(true);
-    expect(legacy.minTextLength).toBe(7);
-    expect((legacy.asr as { enabled: boolean }).enabled).toBe(false);
-    expect((legacy.asr as { streaming: boolean }).streaming).toBe(true);
-    expect((legacy.translationMemory as { maxEntries: number }).maxEntries).toBe(2000);
-    expect((legacy.ocrPacks as { extraLangs: string[] }).extraLangs).toEqual(['fra']);
-    expect((legacy.imageOverlay as { enabled: boolean }).enabled).toBe(true);
-    expect((legacy.pdfViewer as { layoutPreset?: string }).layoutPreset).toBe('columns');
-    expect(legacy.outputSanitize).toBeUndefined();
+describe('v6 is additive over v5 (M-93)', () => {
+  it('keeps the v5 seed and only adds 4.2 fields', () => {
+    const v6 = normalizeSettings(v5Settings);
+    const { schemaVersion: _ignored, siteRules, ...seed } = v5Settings;
+    expect(v6).toMatchObject(seed);
+    expect(v6.siteRules.some((rule) => rule.id === 'user-rule')).toBe(true);
+    expect(v6.schemaVersion).toBe(6);
+    expect(v6.outputSanitize).toEqual({
+      enabled: true,
+      stripThink: true,
+      stripCodeFences: false,
+    });
   });
 });

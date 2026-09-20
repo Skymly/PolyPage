@@ -33,7 +33,14 @@ export function providerCapabilities(
   if (provider.type === 'native-host') {
     if (!probed) return { ...NONE, gatewayProbe: 'unprobed' };
     if (!gateway) return { ...NONE, gatewayProbe: 'missing' };
-    if ((gateway.protocol ?? 1) < 2) return { ...NONE, gatewayProbe: 'stale-protocol' };
+    if ((gateway.protocol ?? 1) < 2) {
+      return {
+        vision: false,
+        asr: false,
+        streaming: gateway.supportsStreaming === true,
+        gatewayProbe: 'stale-protocol',
+      };
+    }
     return {
       vision: gateway.supportsVision === true,
       asr: gateway.supportsAsr === true,

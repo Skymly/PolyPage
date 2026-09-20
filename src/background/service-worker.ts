@@ -995,7 +995,7 @@ chrome.runtime.onMessage.addListener(
               browser: detectBrowser(),
               reason: ping.ok
                 ? stale
-                  ? '网关协议过旧，视觉/转写/流式不可用'
+                  ? '网关协议过旧，视觉/转写不可用'
                   : undefined
                 : nativeFailureReason(ping.error),
               probe: caps.gatewayProbe,

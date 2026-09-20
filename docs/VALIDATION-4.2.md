@@ -8,9 +8,9 @@
 | 命令 | 结果 |
 |---|---|
 | `npm run typecheck` | 通过 |
-| `npm run test` | **233** 通过（4.1 的 214 零回退 + 卫生层 / v6 迁移 / 覆盖重算 / ASR 流式能力 / 表格夹具） |
-| `npm run smoke` | **SMOKE TEST: ALL PASSED (128 assertions)** |
-| `dotnet test native-host/PolyPage.slnx` | 32 通过 |
+| `npm run test` | 以命令输出为准（不再维护绝对条数） |
+| `npm run smoke` | 以命令输出为准（不再维护绝对条数） |
+| `dotnet test native-host/PolyPage.slnx` | 以命令输出为准 |
 | `node scripts/gateway-contract-test.mjs` | ALL PASSED，`protocol === 2` |
 
 4.1 断言零回退：导航菜单 `原文[译文]`、TM 第二页零新增 mock、schema 自动迁移到 v6。
@@ -66,4 +66,4 @@ FIREFOX GATEWAY CHECK: connectNative ping + translate OK
 
 未提交的 4.2 Options / 覆盖 / 冒烟 / Firefox 脚本与规划文档收入 git。
 同期 architecture 加深（翻译管线 / OCR 往返 / 网页翻译 / 转写并翻译 / capability）
-把 `npm run test` 扩到 **255**。4.2 退出条件仍以 §1–§4 为准。
+当时把 `npm run test` 扩到 255。此后条数以 `npm run test` 输出为准，本文不再维护绝对数字。4.2 退出条件仍以 §1–§4 为准。

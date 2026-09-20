@@ -1,6 +1,6 @@
 # PolyPage 权限说明（与 `public/manifest.json` 一致）
 
-版本：4.0.0　日期：2026-08-15
+版本：4.2.0　日期：2026-08-15
 
 对照 `public/manifest.json`。**不申请麦克风。** Chrome/Edge 另需 `offscreen` 跑本地 Tesseract。
 

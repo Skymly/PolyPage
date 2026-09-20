@@ -1,4 +1,4 @@
-# Chrome Web Store Listing 草稿（4.0）
+# Chrome Web Store Listing 草稿（4.2.0）
 
 「已上架」不是 4.0 退出条件。下列文案供人工提交。
 

@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SCHEMA_VERSION } from './schema-version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
@@ -126,7 +127,7 @@ try {
     throw new Error('defaults never written');
   })()`);
   const settings = {
-    schemaVersion: 5,
+    schemaVersion: SCHEMA_VERSION,
     activeProviderId: 'ollama-local',
     providers: [{
       id: 'ollama-local',

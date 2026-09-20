@@ -3,7 +3,7 @@
 对照 `PolyPage-4.0.md` §8.2。Chrome / Edge 继续加载 `dist/`；Firefox 临时加载
 `dist-firefox/`（`browser_specific_settings.gecko.id = polypage@skymly.com`）。
 
-4.2 在 4.1 安装器键之上要求：隔离 profile + Marionette 临时加载 `dist-firefox/` 后，Options / `host-status` 显示已连接（`protocol === 2`）且至少一笔 native-host 翻译；失败则明确降级。完整无头冒烟仍以 Edge 为准。脚本：`node scripts/firefox-gateway-check.mjs`。
+4.2 在 4.1 安装器键之上要求：隔离 profile + Marionette 临时加载 `dist-firefox/` 后，Options / `host-status` 显示已连接（`protocol === 2`）且至少一笔 native-host 翻译。脚本 `node scripts/firefox-gateway-check.mjs`：完整成功 exit 0；附加组件已加载但网关降级 exit 3；找不到 Firefox exit 2；附加组件没加载 exit 1。完整无头冒烟仍以 Edge 为准。
 
 ## 1. API 差异
 
@@ -39,3 +39,11 @@
 4. Native Host / PDF / ASR 若置灰，对照上表，不要当作崩溃
 
 固定扩展 ID：`polypage@skymly.com`（供日后 Native Messaging `allowed_extensions`）。
+
+## 4. 可选主机权限
+
+Firefox 把 `host_permissions`（本扩展是 `<all_urls>`）当可选授予，用户可在
+about:addons 撤销。`content_scripts` 的 `http://*/*` / `https://*/*` 依赖该主机
+访问；撤销后脚本不再注入，网页翻译和划词不可用。这是浏览器模型，不是崩溃。
+PolyPage 不会自动再申请。`about:debugging` 临时加载通常在该会话授予主机访问。
+`firefox-gateway-check.mjs` 只探 Options + native-host，不覆盖撤销路径。

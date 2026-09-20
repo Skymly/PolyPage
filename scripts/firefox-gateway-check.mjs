@@ -5,10 +5,10 @@
  * Must use --no-remote + a throwaway profile + a dedicated Marionette port.
  * Never attach to the user's everyday Firefox.
  *
- * Exit 0 when the addon loads and either:
- *   - host-status reports installed && protocol === 2, plus one native-host
- *     translation, or
- *   - connectNative fails with an explicit degradation payload (no throw).
+ * Exit 0 only when the addon loads AND host-status reports
+ * installed && protocol === 2 AND one native-host translation succeeds.
+ * Exit 3 when the addon loaded but native-host is DEGRADED (not installed,
+ * protocol != 2, probe error, or missing fx1 translation).
  * Exit 2 if Firefox is missing. Exit 1 if the addon cannot be loaded.
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -278,20 +278,30 @@ try {
       } else if (!installed) {
         result.degraded = 'host-status did not report protocol 2; failover path remains available';
         console.log('DEGRADED', result.degraded);
+      } else {
+        result.degraded = 'native-host translate did not return fx1';
+        console.log('DEGRADED', result.degraded);
       }
     }
   }
   fox.close();
   clearTimeout(overall);
-  console.log('FIREFOX ADDON INSTALL PASSED');
-  process.exitCode = 0;
+  if (result.degraded) {
+    console.log('FIREFOX GATEWAY CHECK: DEGRADED');
+    process.exitCode = 3;
+  } else {
+    console.log('FIREFOX ADDON INSTALL PASSED');
+    process.exitCode = 0;
+  }
 } catch (e) {
   clearTimeout(overall);
   console.error('FIREFOX GATEWAY CHECK FAILED', e);
-  process.exitCode = result.addonLoaded ? 0 : 1;
   if (result.addonLoaded) {
     result.degraded = String(e && e.message ? e.message : e);
     console.log('DEGRADED after load', result.degraded);
+    process.exitCode = 3;
+  } else {
+    process.exitCode = 1;
   }
 } finally {
   console.log('SUMMARY', JSON.stringify(result));

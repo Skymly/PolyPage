@@ -50,6 +50,12 @@ describe('providerCapabilities', () => {
     expect(providerCapabilities(native(), inst, { protocol: 1, supportsStreaming: true, supportsVision: true })).toEqual({
       vision: false,
       asr: false,
+      streaming: true,
+      gatewayProbe: 'stale-protocol',
+    });
+    expect(providerCapabilities(native(), inst, { protocol: 1, supportsVision: true })).toEqual({
+      vision: false,
+      asr: false,
       streaming: false,
       gatewayProbe: 'stale-protocol',
     });

@@ -5,7 +5,7 @@
 本文档是 **3.0 版本的规划文档**，基于 `PolyPage.md`（1.0 规格）与 `PolyPage-2.0.md`（2.0 规划）制定。
 2.0 已交付并验证（strict TypeScript、83 单元测试、61 项无头浏览器端到端断言、
 28 项 .NET 网关契约测试 + 9 项真实进程 stdio 契约检查全部通过，
-记录见 `docs/VALIDATION-2.0.md`，仓库 `Skymly/PolyPage`）。
+记录见 `VALIDATION-2.0.md`，仓库 `Skymly/PolyPage`）。
 
 3.0 的主题是：
 
@@ -447,7 +447,7 @@ fixture 视频（双 cue WebVTT）冒烟（接管 → 双语渲染 → 关闭还
    - mock vision 端点（返回固定结构化片段）+ 静态图片页；
    - video + WebVTT 双字幕夹具页（含 cue 切换时序）；
    - 续译场景：翻译中途模拟 SW 重启后恢复。
-3. **手动联调清单**（记录结果入库，延续 `docs/VALIDATION-*.md` 体例）：
+3. **手动联调清单**（记录结果入库，延续 `VALIDATION-*.md` 体例）：
    - 真实 LLM 视觉 API 翻译截图 / 图表 / 多语言混排图片；
    - 真实网站 `<track>` 字幕与 1 个 subtitleSelectors 站点（YouTube）；
    - 大 PDF（≥ 50 页）按页翻译费用与时延记录；

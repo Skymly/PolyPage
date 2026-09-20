@@ -1,7 +1,7 @@
 /**
  * Manual integration check (spec 2.0 §12.3 item 1):
  * real local Ollama model translating through the real .NET gateway.
- * Recorded into docs/VALIDATION-2.0.md.
+ * Recorded into docs/history/VALIDATION-2.0.md.
  */
 import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';

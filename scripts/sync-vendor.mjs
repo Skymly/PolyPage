@@ -167,6 +167,14 @@ for (const lang of TESSDATA_LANGS) {
   tessdataFiles.push(rel);
 }
 
+await writeFile(
+  path.join(vendor, 'tessdata.LICENSE'),
+  'These language data files (eng.traineddata, chi_sim.traineddata) come from\n'
+    + 'https://github.com/tesseract-ocr/tessdata_fast\n'
+    + 'and are licensed under the Apache License, Version 2.0.\n\n'
+    + 'The Apache License 2.0 text is also in vendor/LICENSE and vendor/tesseract.LICENSE.\n',
+);
+
 const hashed = [...pdfFiles.map((f) => f.to), ...tessFiles.map((f) => f.to), ...tessdataFiles];
 const pinned = {
   _comment:

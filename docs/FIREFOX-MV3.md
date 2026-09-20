@@ -1,6 +1,6 @@
 # Firefox MV3 差异表（PolyPage 4.2）
 
-对照 `PolyPage-4.0.md` §8.2。Chrome / Edge 继续加载 `dist/`；Firefox 临时加载
+对照 `docs/history/PolyPage-4.0.md` §8.2。Chrome / Edge 继续加载 `dist/`；Firefox 临时加载
 `dist-firefox/`（`browser_specific_settings.gecko.id = polypage@skymly.com`）。
 
 4.2 在 4.1 安装器键之上要求：隔离 profile + Marionette 临时加载 `dist-firefox/` 后，Options / `host-status` 显示已连接（`protocol === 2`）且至少一笔 native-host 翻译。脚本 `node scripts/firefox-gateway-check.mjs`：完整成功 exit 0；附加组件已加载但网关降级 exit 3；找不到 Firefox exit 2；附加组件没加载 exit 1。完整无头冒烟仍以 Edge 为准。

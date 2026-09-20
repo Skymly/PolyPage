@@ -1,0 +1,5 @@
+These language data files (eng.traineddata, chi_sim.traineddata) come from
+https://github.com/tesseract-ocr/tessdata_fast
+and are licensed under the Apache License, Version 2.0.
+
+The Apache License 2.0 text is also in vendor/LICENSE and vendor/tesseract.LICENSE.

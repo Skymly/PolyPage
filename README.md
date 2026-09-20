@@ -21,10 +21,8 @@
 - **本地 .NET 网关（Native Messaging Host）**：可选依赖，协议 v2 支持图片 / 转写 / 分块；
 - 术语表、双语导出、翻译缓存、批量合并、超时/重试、错误分类与日志。
 
-> 本项目按 `PolyPage.md`（1.0）、`PolyPage-2.0.md`、`PolyPage-3.0.md` 与
-> `PolyPage-4.0.md` 实现；本版规划见 `PolyPage-4.2.md`。验证记录见 `docs/VALIDATION-2.0.md`、
-> `docs/VALIDATION-3.0.md` 与 `docs/VALIDATION-4.0.md`、`docs/VALIDATION-4.1.md` 与 `docs/VALIDATION-4.2.md`。Firefox 差异见
-> `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
+> 当前规格以 `PolyPage-4.2.md` 与 `docs/VALIDATION-4.2.md` 为准。已完成的 1.0–4.1 规划与
+> 验证记录在 `docs/history/`。Firefox 差异见 `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
 
 ---
 
@@ -40,7 +38,7 @@
 
 设置 `schemaVersion: 6`。消息协议标记 `v: 6`。网关 `4.2.0`，`ProtocolVersion = 2`。
 
-## 4.1 新特性（对照 PolyPage-4.1.md）
+## 4.1 新特性（对照 docs/history/PolyPage-4.1.md）
 
 4.0 能力全部保留。4.1 兑现欠账：
 
@@ -53,7 +51,7 @@
 
 设置 `schemaVersion: 5`。消息协议标记 `v: 5`。网关 `4.1.0`，`ProtocolVersion = 2`。
 
-## 4.0 新特性（对照 PolyPage-4.0.md）
+## 4.0 新特性（对照 docs/history/PolyPage-4.0.md）
 
 3.0 的网页六模式、PDF / 图片 / 有字幕视频与体验收口全部保留。4.0 增量：
 
@@ -66,7 +64,7 @@
 
 消息协议标记 `v: 4`（v1–v3 兼容）。设置 `schemaVersion: 4`。网关 `4.0.0`，`ProtocolVersion = 2`。
 
-4.1 规划见 `PolyPage-4.1.md`。4.2 规划见 `PolyPage-4.2.md`（消化 `docs/VALIDATION-4.1.md` §4：译文卫生、Firefox 进程内网关为 P0；流式 cue / 覆盖精修为 P1；表格夹具为 P2）。
+4.1 规划见 `docs/history/PolyPage-4.1.md`。4.2 规划见 `PolyPage-4.2.md`（消化 `docs/history/VALIDATION-4.1.md` §4：译文卫生、Firefox 进程内网关为 P0；流式 cue / 覆盖精修为 P1；表格夹具为 P2）。
 
 ## 目录结构
 
@@ -97,7 +95,7 @@
 │   ├── gateway-ollama-check.mjs
 │   └── load-edge-ollama.mjs    # headed Edge + 本地 Ollama 手动联调
 ├── tests/                      # vitest 单元测试（188 个）
-└── docs/                       # VALIDATION-2.0/3.0/4.0、FIREFOX-MV3、store/
+└── docs/                       # VALIDATION-4.2、history/、FIREFOX-MV3、store/
 ```
 
 ## 开发
@@ -181,7 +179,7 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 - `npm run smoke`：无头 Edge 加载真实扩展，**128 项端到端断言**（4.1 的 125 项零回退 + schema 落盘为 v6 + 带 think 的 mock 译文不含 `<think>`）；
 - `dotnet test` + `gateway-contract-test.mjs`：**32 + 扩展后的 stdio 契约**
   （旧 28+9 原样保留，协议升为 v2）；
-- 手动联调清单记录于 `docs/VALIDATION-4.0.md`。
+- 手动联调清单记录于 `docs/VALIDATION-4.2.md`。
 
 ## 已知限制
 

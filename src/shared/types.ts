@@ -1,14 +1,14 @@
 /**
  * Shared type definitions used across background, content, popup and options.
  * 2.0: schema v2 types (glossary, site rules, failover, selection translate,
- * inline mode, native-host provider). See PolyPage-2.0.md.
+ * inline mode, native-host provider). See docs/history/PolyPage-2.0.md.
  * 3.0: schema v3 types (PDF viewer, image translate, subtitles, language
  * detection, selection speak, feedback log, resume task table). See
- * PolyPage-3.0.md.
+ * docs/history/PolyPage-3.0.md.
  * 4.0: schema v4 types (ASR, translation memory, subtitle style,
- * scanned-page OCR, tesseract langs). See PolyPage-4.0.md.
+ * scanned-page OCR, tesseract langs). See docs/history/PolyPage-4.0.md.
  * 4.1: schema v5 types (ocrPacks, imageOverlay, asr.streaming,
- * pdf layoutPreset). See PolyPage-4.1.md.
+ * pdf layoutPreset). See docs/history/PolyPage-4.1.md.
  * 4.2: schema v6 types (outputSanitize). See PolyPage-4.2.md.
  */
 

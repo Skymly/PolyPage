@@ -10,3 +10,10 @@ native-host/**/bin/
 native-host/**/obj/
 *.user
 .smoke-backup/
+
+# Local secrets / IDE / test output (M-94)
+.env
+.vs/
+TestResults/
+coverage/
+nul

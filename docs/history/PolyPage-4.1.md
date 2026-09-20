@@ -6,7 +6,7 @@
 `PolyPage-3.0.md` 与 `PolyPage-4.0.md` 制定。
 4.0 已交付并收口（schema v4、网关协议 v2、ASR MVP、tesseract-wasm、扫描页 OCR、
 Firefox 可加载 MVP、商店材料；2026-08-18 本机 Ollama 文本联调与 Firefox 临时加载
-已记入 `docs/VALIDATION-4.0.md`）。仓库当前主线为 `main` @ 4.0.0。
+已记入 `VALIDATION-4.0.md`）。仓库当前主线为 `main` @ 4.0.0。
 
 4.1 的主题是：
 
@@ -217,7 +217,7 @@ tesseract 引擎把已就绪语言拼进 `lang`；缺包时降级到已有包并
   4.1 核对这些字段与当前 gecko.id 一致，缺则补，不要另搞一套 ID；
 - 代码继续只写 `chrome.*`；连接失败必须特性检测；
 - 无头 Firefox 若不稳定，允许「手动清单 + 安装器/manifest 单测」为自动退出，
-  但手动清单必须在 `docs/VALIDATION-4.1.md` 勾过第 7.1 三条。
+  但手动清单必须在 `VALIDATION-4.1.md` 勾过第 7.1 三条。
 
 ### 7.3 不做
 
@@ -309,7 +309,7 @@ Firefox 包权限面与 4.0 一致。
 src/storage/tm.ts                 # ★ P0 TM
 src/ocr/packs.ts                  # ★ P0 语言包清单 / 下载 / 删除
 src/ocr/overlay.ts                # P1 原位覆盖
-docs/VALIDATION-4.1.md            # 交付时
+VALIDATION-4.1.md            # 交付时
 PolyPage-4.1.md                   # 本文件
 ```
 

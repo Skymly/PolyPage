@@ -6,7 +6,7 @@
 （2.0 规划）与 `PolyPage-3.0.md`（3.0 规划）制定。
 3.0 已交付并验证（strict TypeScript、163 单元测试、103 项无头浏览器端到端断言、
 28 项 .NET 网关契约测试 + 9 项真实进程 stdio 契约检查全部通过，
-记录见 `docs/VALIDATION-3.0.md`，仓库 `Skymly/PolyPage`）。
+记录见 `VALIDATION-3.0.md`，仓库 `Skymly/PolyPage`）。
 
 4.0 的主题是：
 
@@ -608,7 +608,7 @@ fixture 无字幕 video（短 webm）冒烟：点击转写 → mock transcribe �
    - 有 track 的 3.0 视频夹具回归：ASR 不自动启动；
    - 扫描 PDF 页「识别本页」+ mock vision 或 tesseract 桩；
    - 网关：超 1MB 分块往返 + `translate.image` 小图内联 + 旧 `translate` 回归。
-3. **手动联调清单**（记录入 `docs/VALIDATION-4.0.md`）：
+3. **手动联调清单**（记录入 `VALIDATION-4.0.md`）：
    - 真实 OpenAI-compatible 转写端点（或本地 faster-whisper）转写一段无字幕视频；
    - 真实 Ollama 视觉模型经网关 `translate.image`（若本机有视觉模型）；
    - Firefox 临时加载：翻译 Wikipedia 类页面六模式 + 划词；

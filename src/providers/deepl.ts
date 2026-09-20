@@ -5,6 +5,7 @@
  *  - batch: multiple texts per request
  *  - optional formality parameter.
  */
+import { DEFAULT_BASE_URLS } from '../shared/constants';
 import type { ProviderConfig } from '../shared/types';
 import { toDeepLLanguage } from './langCodes';
 import {
@@ -18,7 +19,6 @@ import {
 } from './provider';
 import type { TranslationContext, TranslationProvider } from './provider';
 
-const DEFAULT_BASE_URL = 'https://api-free.deepl.com';
 
 export class DeepLProvider implements TranslationProvider {
   constructor(public readonly config: ProviderConfig) {}
@@ -38,7 +38,7 @@ export class DeepLProvider implements TranslationProvider {
     }
     const source = toDeepLLanguage(ctx.sourceLanguage);
 
-    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URL);
+    const baseUrl = httpApiBase(this.config.baseUrl.trim() || DEFAULT_BASE_URLS.deepl);
     const url = `${baseUrl}/v2/translate`;
     const body: Record<string, unknown> = {
       text: texts,

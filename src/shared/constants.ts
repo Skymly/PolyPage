@@ -1,4 +1,4 @@
-import type { ProviderConfig, Settings, SiteRule } from './types';
+import type { ProviderConfig, ProviderType, Settings, SiteRule } from './types';
 
 export const SETTINGS_STORAGE_KEY = 'settings';
 export const CACHE_INDEX_KEY = 'cacheIndex';
@@ -154,6 +154,16 @@ export const DEFAULT_TM_MAX_ENTRIES = 5000;
 /** Default tesseract language packs (spec 4.0 §9.3). */
 export const DEFAULT_TESS_LANGS: string[] = ['eng', 'chi_sim'];
 
+/** Official type-level base URLs. Preset-only hosts stay in presets.ts. */
+export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
+  'openai-compatible': 'https://api.openai.com/v1',
+  deepl: 'https://api-free.deepl.com',
+  'azure-translator': 'https://api.cognitive.microsofttranslator.com',
+  'google-translate': 'https://translation.googleapis.com/language/translate/v2',
+  'custom-http': '',
+  'native-host': '',
+};
+
 /** Built-in site rules shipped with the extension (spec 2.0 §6.4 item 5). */
 export const BUILTIN_SITE_RULES: SiteRule[] = [
   {
@@ -183,7 +193,7 @@ export function defaultProvider(): ProviderConfig {
     id: 'default-openai',
     name: 'OpenAI-compatible (default)',
     type: 'openai-compatible',
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: DEFAULT_BASE_URLS['openai-compatible'],
     apiKey: '',
     model: 'gpt-4o-mini',
     sourceLanguage: '',

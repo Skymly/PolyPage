@@ -4,7 +4,7 @@
  * 3.0: rules gain `subtitleSelectors` (pillar G, spec 3.0 §7.2).
  */
 import type { DisplayMode, EffectiveRule, GlossaryEntry, SiteRule } from './types';
-import { DISPLAY_MODES } from './types';
+import { parseDisplayMode } from './types';
 
 /**
  * Match a hostname against a pattern.
@@ -62,7 +62,7 @@ export function matchRulesForHost(hostname: string, rules: SiteRule[]): SiteRule
 }
 
 function normalizeMode(value: unknown): DisplayMode | null {
-  return DISPLAY_MODES.includes(value as DisplayMode) ? (value as DisplayMode) : null;
+  return parseDisplayMode(value);
 }
 
 /**

@@ -8,7 +8,12 @@
  *  - per-provider stats + error log filtering (spec 2.0 §8.3).
  */
 import { sendRuntime } from '../messaging/messages';
-import { DEFAULT_CUSTOM_HTTP_BODY, DEFAULT_NATIVE_HOST_NAME, defaultProvider } from '../shared/constants';
+import {
+  DEFAULT_BASE_URLS,
+  DEFAULT_CUSTOM_HTTP_BODY,
+  DEFAULT_NATIVE_HOST_NAME,
+  defaultProvider,
+} from '../shared/constants';
 import { formatPackMegabytes } from '../ocr/packs';
 import type { PdfLayoutPreset } from '../shared/types';
 import { disableOrRemoveSiteRule, normalizeSiteRule } from '../shared/siteRules';
@@ -451,10 +456,8 @@ function makeProvider(type: ProviderType): ProviderConfig {
     provider.userPromptTemplate = '';
     provider.maxBatchItems = 50;
     provider.maxBatchChars = 20000;
+    provider.baseUrl = DEFAULT_BASE_URLS[type];
   }
-  if (type === 'deepl') provider.baseUrl = 'https://api-free.deepl.com';
-  if (type === 'azure-translator') provider.baseUrl = 'https://api.cognitive.microsofttranslator.com';
-  if (type === 'google-translate') provider.baseUrl = 'https://translation.googleapis.com/language/translate/v2';
   return provider;
 }
 

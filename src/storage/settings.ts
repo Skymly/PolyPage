@@ -34,7 +34,7 @@ import {
   defaultSettings,
   defaultProvider,
 } from '../shared/constants';
-import { DISPLAY_MODES } from '../shared/types';
+import { parseDisplayMode } from '../shared/types';
 import type {
   AsrSettings,
   DisplayMode,
@@ -219,7 +219,7 @@ export function normalizeSettings(raw: unknown): Settings {
 }
 
 function normalizeMode(value: unknown): DisplayMode {
-  return DISPLAY_MODES.includes(value as DisplayMode) ? (value as DisplayMode) : 'bilingual';
+  return parseDisplayMode(value) ?? 'bilingual';
 }
 
 /* --------------------------- 3.0 sub-normalizers ----------------------------- */

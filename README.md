@@ -71,7 +71,7 @@
 ```text
 ├── public/
 │   ├── icons/                  # 构建脚本生成的图标
-│   └── manifest.json           # MV3 清单 4.0.0（可选 webNavigation，无麦克风）
+│   └── manifest.json           # MV3 清单 4.2.0（可选 webNavigation，无麦克风）
 ├── src/
 │   ├── background/             # service-worker + nativePort（队列/failover/OCR/ASR/续译）
 │   ├── content/                # 网页翻译 + 字幕层 + 划词 + 图片按钮 + ASR 采集
@@ -81,20 +81,20 @@
 │   ├── popup/                  # 六模式、PDF/字幕/ASR 入口
 │   ├── options/                # 常规/服务/术语表/站点规则/PDF/图片/字幕/ASR/网关/反馈…
 │   ├── providers/              # 可选 translateStream / translateImage / transcribe
-│   ├── storage/                # settings schema v4 + 迁移 + cache + feedback + taskTable
-│   ├── messaging/messages.ts   # 协议 v4（全量类型化，v1–v3 兼容）
+│   ├── storage/                # settings schema v6 + 迁移 + cache + feedback + taskTable
+│   ├── messaging/messages.ts   # 协议 v6（全量类型化，旧消息兼容）
 │   ├── shared/                 # types/constants/binaryChunk/languageDetect/…
 │   └── styles/
 ├── vendor/                     # pdf.js + tesseract.js + tessdata（构建期 SHA-256 校验）
-├── native-host/                # C#/.NET 网关 4.0.0 / 协议 v2（Ollama / HTTP / Whisper）
+├── native-host/                # C#/.NET 网关 4.2.0 / 协议 v2（Ollama / HTTP / Whisper）
 ├── scripts/
 │   ├── build.mjs               # Chrome/Edge dist/ + Firefox dist-firefox/
 │   ├── manifest-firefox.mjs    # gecko.id + background.scripts 事件页
-│   ├── smoke-test.mjs          # 无头 Edge 端到端冒烟（111 项断言）
+│   ├── smoke-test.mjs          # 无头 Edge 端到端冒烟（见 `npm run smoke` 输出）
 │   ├── gateway-contract-test.mjs
 │   ├── gateway-ollama-check.mjs
 │   └── load-edge-ollama.mjs    # headed Edge + 本地 Ollama 手动联调
-├── tests/                      # vitest 单元测试（188 个）
+├── tests/                      # vitest 单元测试（见 `npm run test` 输出）
 └── docs/                       # VALIDATION-4.2、history/、FIREFOX-MV3、store/
 ```
 
@@ -104,14 +104,14 @@
 npm install
 npm run build        # 产出 dist/ 与 dist-firefox/
 npm run typecheck    # tsc --noEmit（strict）
-npm run test         # vitest 单元测试（233）
+npm run test         # vitest（见命令输出）
 npm run smoke        # 无头 Edge 端到端冒烟（需已构建；含网关安装/卸载）
 npm run verify       # typecheck + test + build
 npm run verify:all   # verify + 网关 xunit + stdio 契约 + smoke
 
 # 网关
 dotnet build native-host/PolyPage.slnx
-dotnet test  native-host/PolyPage.slnx                     # 32 个契约测试
+dotnet test  native-host/PolyPage.slnx                     # 见命令输出
 node scripts/gateway-contract-test.mjs                     # 真实进程 stdio 协议测试
 ```
 
@@ -165,20 +165,16 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
   PDF 阅读器打开后的按页惰性翻译受视口与并发限制。
 - **不破坏原始内容**：不改 PDF 源文件、不改视频源与字幕文件、不写回 SRT/VTT。
   网页翻译的还原是文本/标记结构级可逆（卸掉译文 chrome 与 `data-wt-id`），不是逐字节 DOM 等价；inline 模式用 `cloneNode` 保存原文，还原不恢复事件监听与框架绑定。
-- **消息协议 v4**（`src/messaging/messages.ts`）：在 v3 上增加 ASR / 扫描页 OCR 等命令；
-  旧消息仍可处理。
+- **消息协议 v6**（`src/messaging/messages.ts`）：旧消息仍可处理。
 - **续译**：任务表记录在途网页/PDF 任务；ASR 不入 3.0 续译表。tab 关闭即清理。
 - **敏感信息**：API Key 只存后台或本机网关；无新增必选权限，不申请麦克风。
 
 ## 验证
 
 - `npm run typecheck`：strict TypeScript 零错误；
-- `npm run test`：**233 个单元测试**（4.1 的 214 零回退 + schema v5→v6、卫生层、覆盖重算、ASR 流式能力、表格夹具）；
-  ASR 切段、tesseract 两步法、扫描页缓存键、字幕样式、分块 sha256、
-  openai-compatible `transcribe`、本地 Ollama 403 提示）；
-- `npm run smoke`：无头 Edge 加载真实扩展，**128 项端到端断言**（4.1 的 125 项零回退 + schema 落盘为 v6 + 带 think 的 mock 译文不含 `<think>`）；
-- `dotnet test` + `gateway-contract-test.mjs`：**32 + 扩展后的 stdio 契约**
-  （旧 28+9 原样保留，协议升为 v2）；
+- `npm run test`：见 `npm run test` 输出；
+- `npm run smoke`：见 `npm run smoke` 输出；
+- `dotnet test` + `gateway-contract-test.mjs`：见命令输出；
 - 手动联调清单记录于 `docs/VALIDATION-4.2.md`。
 
 ## 已知限制

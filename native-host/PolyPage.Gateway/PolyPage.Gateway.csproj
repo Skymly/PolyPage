@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>PolyPage.Gateway</AssemblyName>
     <RootNamespace>PolyPage.Gateway</RootNamespace>
-    <Version>4.0.0</Version>
+    <Version>4.2.0</Version>
     <!-- Spec 2.0 §5.4 item 1: PublishSingleFile + SelfContained (x64).
          Publish with: dotnet publish -c Release -r win-x64 -->
     <!-- M-17: ProductVersion carries git HEAD so contract/smoke can refuse a stale exe.

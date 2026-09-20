@@ -6,7 +6,7 @@
 `docs/history/PolyPage-3.0.md`、`docs/history/PolyPage-4.0.md` 与 `docs/history/PolyPage-4.1.md` 制定。
 4.1 已交付并收口（schema v5、消息协议 v5、句子 TM、OCR 语言包、Firefox 安装器键、
 原位覆盖简单版、PDF 版面预设、MiniMax 视觉真机；2026-08-18 记入
-`docs/history/VALIDATION-4.1.md`）。仓库当前主线为 `main` @ 4.1.0。
+`docs/history/VALIDATION-4.1.md`）。仓库当前主线为 `main` @ 4.2.0。
 
 4.2 的主题是：
 

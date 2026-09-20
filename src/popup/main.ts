@@ -9,6 +9,7 @@
 import { MEDIA_COMMAND_FRAME_ID, sendRuntime, sendTabCommand } from '../messaging/messages';
 import type { ExportEntry } from '../messaging/messages';
 import type { DisplayMode, FrameStateEntry, PageState } from '../shared/types';
+import { renderModeItem } from './modeDom';
 
 const MODE_META: Record<DisplayMode, { name: string; desc: string }> = {
   original: { name: '原文', desc: '显示原始内容' },
@@ -176,15 +177,7 @@ function buildModeList(): void {
     'original',
   ];
   for (const mode of order) {
-    const meta = MODE_META[mode];
-    const label = document.createElement('label');
-    label.className = 'mode-item';
-    label.innerHTML = `
-      <input type="radio" name="mode" value="${mode}" />
-      <span>
-        <span class="mode-name">${meta.name}</span><br />
-        <span class="mode-desc">${meta.desc}</span>
-      </span>`;
+    const label = renderModeItem(mode, MODE_META[mode]);
     label.querySelector('input')!.addEventListener('change', () => {
       void applyMode(mode);
     });

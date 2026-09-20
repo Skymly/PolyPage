@@ -33,6 +33,7 @@ import { ensureSelectOption } from './providerTypeSelect';
 import { feedbackToCsv, feedbackToJson } from '../storage/feedback';
 import { minimaxHostHint } from '../shared/sanitize';
 import { renderErrorLogEntry, renderFeedbackLogHead } from './logDom';
+import { renderShortcutRow } from './shortcutDom';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -1261,11 +1262,7 @@ async function renderShortcuts(): Promise<void> {
   try {
     const commands = await chrome.commands.getAll();
     for (const cmd of commands) {
-      const row = document.createElement('div');
-      row.className = 'shortcut-row';
-      const label = cmd.description || cmd.name;
-      row.innerHTML = `<span>${label}</span><kbd>${cmd.shortcut || '未设置'}</kbd>`;
-      box.appendChild(row);
+      box.appendChild(renderShortcutRow(cmd));
     }
   } catch {
     box.textContent = '无法读取快捷键信息';

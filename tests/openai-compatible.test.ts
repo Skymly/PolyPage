@@ -106,6 +106,27 @@ describe('openai-compatible translateTexts', () => {
     await minimax.translateTexts(['Hello'], ctx, new AbortController().signal);
     expect(captured[1].thinking).toEqual({ type: 'disabled' });
   });
+
+  it('rejects non-stream finish_reason=length (M-20)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '截断的译' }, finish_reason: 'length' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }),
+    );
+    const provider = createProvider(config());
+    await expect(
+      provider.translateTexts(['Hello'], ctx, new AbortController().signal),
+    ).rejects.toMatchObject({
+      kind: 'invalid_response',
+      message: expect.stringContaining('finish_reason=length'),
+    });
+  });
 });
 
 describe('openai-compatible translateStream', () => {
@@ -165,6 +186,83 @@ describe('openai-compatible translateStream', () => {
       provider.translateStream!('Hello', ctx, () => undefined, new AbortController().signal),
     ).rejects.toMatchObject({ kind: 'rate_limit' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a stream that ends without [DONE] or finish_reason=stop (M-20)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = sseBody(['data: {"choices":[{"delta":{"content":"你"}}]}\n\n']);
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }),
+    );
+    const provider = createProvider(config());
+    await expect(
+      provider.translateStream!('Hello', ctx, () => undefined, new AbortController().signal),
+    ).rejects.toMatchObject({ kind: 'invalid_response', message: expect.stringContaining('[DONE]') });
+  });
+
+  it('rejects finish_reason=length even when [DONE] follows (M-20)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = sseBody([
+          'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+          'data: [DONE]\n\n',
+        ]);
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }),
+    );
+    const provider = createProvider(config());
+    await expect(
+      provider.translateStream!('Hello', ctx, () => undefined, new AbortController().signal),
+    ).rejects.toMatchObject({
+      kind: 'invalid_response',
+      message: expect.stringContaining('finish_reason=length'),
+    });
+  });
+
+  it('accepts finish_reason=stop without a [DONE] trailer (M-20)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = sseBody([
+          'data: {"choices":[{"delta":{"content":"好"}}]}\n\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        ]);
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }),
+    );
+    const provider = createProvider(config());
+    const full = await provider.translateStream!(
+      'Hello',
+      ctx,
+      () => undefined,
+      new AbortController().signal,
+    );
+    expect(full).toBe('好');
+  });
+
+  it('flushes a trailing [DONE] that lacks the blank-line separator (M-20)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const body = sseBody([
+          'data: {"choices":[{"delta":{"content":"好"}}]}\n\n',
+          'data: [DONE]',
+        ]);
+        return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }),
+    );
+    const provider = createProvider(config());
+    const full = await provider.translateStream!(
+      'Hello',
+      ctx,
+      () => undefined,
+      new AbortController().signal,
+    );
+    expect(full).toBe('好');
   });
 });
 

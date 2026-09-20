@@ -122,26 +122,78 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         if (!res.body) {
           throw new ProviderError('invalid_response', 'API 未返回流式响应体');
         }
-        full = await this.consumeSse(res.body, onDelta, innerSignal);
-        if (full.trim() === '') {
+        const streamed = await this.consumeSse(res.body, onDelta, innerSignal);
+        this.assertStreamComplete(streamed);
+        if (streamed.text.trim() === '') {
           throw new ProviderError('invalid_response', '流式响应未包含任何内容');
         }
+        full = streamed.text;
       },
       { timeoutMs: config.timeoutMs, signal, retries: 0 },
     );
     return full.trim();
   }
 
-  /** Parse an SSE body stream, pushing content deltas; returns full text. */
+  private assertStreamComplete(streamed: {
+    finishReason: string | undefined;
+    sawDone: boolean;
+  }): void {
+    if (streamed.finishReason && streamed.finishReason !== 'stop') {
+      throw new ProviderError(
+        'invalid_response',
+        `流式响应未完整结束（finish_reason=${streamed.finishReason}）`,
+      );
+    }
+    if (!streamed.sawDone && streamed.finishReason !== 'stop') {
+      throw new ProviderError('invalid_response', '流式响应在 [DONE] 之前结束');
+    }
+  }
+
+  /** Parse an SSE body stream, pushing content deltas; returns text plus completion flags. */
   private async consumeSse(
     body: ReadableStream<Uint8Array>,
     onDelta: StreamDeltaHandler,
     signal: AbortSignal,
-  ): Promise<string> {
+  ): Promise<{ text: string; finishReason: string | undefined; sawDone: boolean }> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let full = '';
+    let finishReason: string | undefined;
+    let sawDone = false;
+
+    const consumeEvent = (rawEvent: string): boolean => {
+      const dataLines = rawEvent
+        .split('\n')
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).trimStart());
+      if (dataLines.length === 0) return false;
+      const data = dataLines.join('\n');
+      if (data === '[DONE]') {
+        sawDone = true;
+        return true;
+      }
+      let json: unknown;
+      try {
+        json = JSON.parse(data);
+      } catch {
+        return false; // ignore keep-alive / malformed chunks
+      }
+      const choice = (
+        json as {
+          choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[];
+        }
+      )?.choices?.[0];
+      const reason = choice?.finish_reason;
+      if (typeof reason === 'string' && reason !== '') finishReason = reason;
+      const delta = choice?.delta?.content;
+      if (typeof delta === 'string' && delta !== '') {
+        full += delta;
+        onDelta(delta);
+      }
+      return false;
+    };
+
     try {
       for (;;) {
         if (signal.aborted) throw new ProviderError('aborted', '请求已取消');
@@ -154,27 +206,12 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
           const rawEvent = buffer.slice(0, sep);
           buffer = buffer.slice(sep + 2);
-          const dataLines = rawEvent
-            .split('\n')
-            .filter((l) => l.startsWith('data:'))
-            .map((l) => l.slice(5).trimStart());
-          if (dataLines.length === 0) continue;
-          const data = dataLines.join('\n');
-          if (data === '[DONE]') return full;
-          let json: unknown;
-          try {
-            json = JSON.parse(data);
-          } catch {
-            continue; // ignore keep-alive / malformed chunks
-          }
-          const delta = (json as { choices?: { delta?: { content?: unknown } }[] })
-            ?.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string' && delta !== '') {
-            full += delta;
-            onDelta(delta);
+          if (consumeEvent(rawEvent)) {
+            return { text: full, finishReason, sawDone };
           }
         }
       }
+      if (buffer.trim() !== '') consumeEvent(buffer);
     } finally {
       try {
         reader.releaseLock();
@@ -182,7 +219,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
         /* ignore */
       }
     }
-    return full;
+    return { text: full, finishReason, sawDone };
   }
 
   /**
@@ -312,9 +349,22 @@ export class OpenAICompatibleProvider implements TranslationProvider {
 
   /** Prefer message.content; never treat reasoning_content as the translation. */
   private extractAssistantContent(json: unknown, label: string): string {
-    const message = (json as { choices?: { message?: { content?: unknown; reasoning_content?: unknown } }[] })
-      ?.choices?.[0]?.message;
-    const content = message?.content;
+    const choice = (
+      json as {
+        choices?: {
+          finish_reason?: unknown;
+          message?: { content?: unknown; reasoning_content?: unknown };
+        }[];
+      }
+    )?.choices?.[0];
+    const finishReason = choice?.finish_reason;
+    if (typeof finishReason === 'string' && finishReason !== '' && finishReason !== 'stop') {
+      throw new ProviderError(
+        'invalid_response',
+        `${label}未完整结束（finish_reason=${finishReason}）`,
+      );
+    }
+    const content = choice?.message?.content;
     if (typeof content === 'string' && content.trim() !== '') return content;
     throw new ProviderError('invalid_response', `${label}缺少 choices[0].message.content`);
   }

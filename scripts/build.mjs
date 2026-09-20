@@ -88,7 +88,7 @@ async function buildViewer() {
 /**
  * Verify the locally packaged pdf.js + tesseract.js vendor distribution
  * against pinned SHA-256 hashes (spec 3.0 §13 / 4.0 §7.1), then copy it
- * to dist/vendor (including nested tessdata/).
+ * to dist/vendor (including nested tessdata/). Same-repo hashes are drift detection, not tamper-proofing.
  */
 async function copyVendor() {
   const vendorDir = path.join(root, 'vendor');

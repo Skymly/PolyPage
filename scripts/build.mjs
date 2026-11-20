@@ -37,7 +37,7 @@ async function buildPage(name) {
       ...shared,
       outDir: `dist/${name}`,
       emptyOutDir: false,
-      rollupOptions: {
+      rolldownOptions: {
         input: { [name]: path.join(root, `src/${name}/${name}.html`) },
       },
     },
@@ -72,7 +72,7 @@ async function buildViewer() {
       ...shared,
       outDir: 'dist/viewer',
       emptyOutDir: false,
-      rollupOptions: {
+      rolldownOptions: {
         input: { 'pdf-viewer': path.join(root, 'src/viewer/pdf-viewer.html') },
       },
     },
@@ -135,8 +135,8 @@ async function buildBackground() {
         formats: ['es'],
         fileName: () => 'background.js',
       },
-      rollupOptions: {
-        output: { inlineDynamicImports: true },
+      rolldownOptions: {
+        output: { codeSplitting: false },
       },
     },
   });
@@ -156,8 +156,8 @@ async function buildContent() {
         formats: ['iife'],
         fileName: () => 'content.js',
       },
-      rollupOptions: {
-        output: { inlineDynamicImports: true },
+      rolldownOptions: {
+        output: { codeSplitting: false },
       },
     },
   });

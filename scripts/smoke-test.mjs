@@ -106,10 +106,11 @@ const iframesPage = `<!doctype html>
   <iframe id="cross-origin" src="http://127.0.0.1:${PORT_XORIGIN}/iframe-child.html" width="400" height="200"></iframe>
 </body></html>`;
 
+const selectionText = 'Selecting this sentence should reveal a floating translate button nearby.';
 const selectionPage = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Selection</title></head>
 <body>
-  <p id="sel-p">Selecting this sentence should reveal a floating translate button nearby.</p>
+  <p id="sel-p">${selectionText}</p>
 </body></html>`;
 
 const navPage = `<!doctype html>
@@ -448,6 +449,7 @@ function startMockApi() {
         const full = translations[0];
         // Emit in growing chunks so the smoke test can observe increments.
         const chunks = [full.slice(0, 6), full.slice(6, 20), full.slice(20)];
+        if (texts[0] === selectionText) chunks.unshift('fixture reasoning', '\n</thi', 'nk>');
         for (const chunk of chunks) {
           if (chunk === '') continue;
           res.write(
@@ -1523,17 +1525,41 @@ try {
   }
   check('selection shows floating translate button', selBtnVisible === true);
 
-  // Click the button inside the shadow root; panel must show the translation.
-  await selectionClient.eval(`
-    document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-btn')?.click()`);
+  // Observe the actual panel, then click its button so the request tests the
+  // settings-to-content path as well as the streaming port.
+  const selectionSseBefore = mock.sseCount();
+  await selectionClient.eval(`(() => {
+    const shadow = document.querySelector('.wt-selection-host').shadowRoot;
+    const panel = shadow.querySelector('.wt-sel-panel');
+    const text = panel.querySelector('.wt-sel-text');
+    const updates = [];
+    new MutationObserver(() => {
+      if (panel.getAttribute('aria-busy') === 'true') updates.push(text.textContent);
+    }).observe(text, { childList: true, subtree: true, characterData: true });
+    window.__smokeSelectionUpdates = updates;
+    shadow.querySelector('.wt-sel-btn').click();
+  })()`);
+  const completedSelectionText = `document.querySelector('.wt-selection-host')?.shadowRoot
+    ?.querySelector('.wt-sel-panel[aria-busy="false"] .wt-sel-text')?.textContent ?? ''`;
   let panelText = '';
   for (let i = 0; i < 30; i++) {
-    panelText = await selectionClient.eval(`
-      document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-text')?.textContent ?? ''`);
+    panelText = await selectionClient.eval(completedSelectionText);
     if (panelText.includes('[译]')) break;
     await sleep(400);
   }
-  check('selection panel shows translation', panelText.includes('[译]'), JSON.stringify(panelText));
+  const selectionUpdates = await selectionClient.eval('window.__smokeSelectionUpdates ?? []');
+  check('selection click uses SSE', mock.sseCount() === selectionSseBefore + 1);
+  check('selection panel shows final translation', panelText === `[译] ${selectionText}`, JSON.stringify(panelText));
+  check(
+    'selection panel shows an intermediate translation',
+    selectionUpdates.some((text) => text.startsWith('[译]') && text.length < panelText.length && panelText.startsWith(text)),
+    JSON.stringify(selectionUpdates),
+  );
+  check(
+    'selection panel hides split think tags and the preceding reasoning',
+    selectionUpdates.every((text) => !/fixture reasoning|<\/?thi/i.test(text)),
+    JSON.stringify(selectionUpdates),
+  );
   const panelIsolated = await selectionClient.eval(`
     (() => {
       const host = document.querySelector('.wt-selection-host');
@@ -1839,9 +1865,7 @@ try {
   );
   let repeatPanel = '';
   for (let i = 0; i < 30; i++) {
-    repeatPanel = await repeatClient.eval(
-      `document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-text')?.textContent ?? ''`,
-    );
+    repeatPanel = await repeatClient.eval(completedSelectionText);
     if (repeatPanel.includes('[译]')) break;
     await sleep(400);
   }
@@ -1863,7 +1887,7 @@ try {
     })()`);
   check(
     'repeat-selection replays last panel without a selection',
-    replayed?.display === 'block' && (replayed?.text ?? '').includes('[译]'),
+    replayed?.display === 'block' && replayed.text === repeatPanel,
     JSON.stringify(replayed),
   );
   // Speak button exists (capability probe may disable it in headless).

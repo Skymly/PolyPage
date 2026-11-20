@@ -397,6 +397,25 @@ describe('TranslationPipeline', () => {
     expect(deltas.join('')).not.toContain('secret');
   });
 
+  it('keeps unmarked selection text off the preview until the sanitized final result', async () => {
+    const deltas: string[] = [];
+    const pipeline = makePipeline(settings(), {
+      a: (c) => fake(c, {
+        translateStream: async (_text, onDelta) => {
+          onDelta('你好');
+          onDelta('，世界');
+          return '你好，世界';
+        },
+      }),
+    });
+    const res = await pipeline.translate([{ text: 'Hello, world', key: 'selection' }], {
+      immediate: true,
+      onDelta: (_key, delta) => deltas.push(delta),
+    });
+    expect(deltas).toEqual([]);
+    expect(res.results.selection).toBe('你好，世界');
+  });
+
   it('stream sanitize-empty does not failover', async () => {
     const a = provider('a', 'Alpha');
     const b = provider('b', 'Beta');

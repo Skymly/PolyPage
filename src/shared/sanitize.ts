@@ -49,17 +49,36 @@ export function stripThinkTags(content: string, options?: { holdUnclosed?: boole
   return text.replace(THINK_TAG, '');
 }
 
+/** Hold a trailing fragment that could turn into a think tag on the next delta. */
+function holdThinkTagFragment(text: string): string {
+  const start = text.lastIndexOf('<');
+  if (start < 0) return text;
+  const tail = text.slice(start).toLowerCase();
+  if ('<think>'.startsWith(tail) || '</think>'.startsWith(tail) || /^<\/?think\b[^>]*$/.test(tail)) {
+    return text.slice(0, start);
+  }
+  return text;
+}
+
 /**
- * Incremental filter for streaming deltas (M-60). Unclosed `<think>` is
- * swallowed until a close tag arrives, so tooltips never show think residue.
+ * Append-only preview. Without a separate reasoning channel or an inline close
+ * tag, unmarked text may turn out to be reasoning when an orphan close arrives.
  */
-export function createThinkDeltaFilter(): (delta: string) => string {
+export function createThinkDeltaFilter(allowUnmarkedText: boolean): (delta: string, separatedReasoning?: boolean) => string {
   let acc = '';
   let shown = '';
-  return (delta: string): string => {
+  let answerStarted = allowUnmarkedText;
+  return (delta, separatedReasoning = false) => {
     acc += delta;
-    const cleaned = stripThinkTags(acc, { holdUnclosed: true });
-    const piece = cleaned.startsWith(shown) ? cleaned.slice(shown.length) : cleaned;
+    if (!answerStarted && !separatedReasoning) {
+      const close = THINK_CLOSE.exec(acc);
+      if (!close) return '';
+      acc = acc.slice(close.index + close[0].length);
+    }
+    answerStarted = true;
+    const cleaned = holdThinkTagFragment(stripThinkTags(acc, { holdUnclosed: true }));
+    if (!cleaned.startsWith(shown)) return '';
+    const piece = cleaned.slice(shown.length);
     shown = cleaned;
     return piece;
   };

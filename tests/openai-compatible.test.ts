@@ -130,6 +130,20 @@ describe('openai-compatible translateTexts', () => {
 });
 
 describe('openai-compatible translateStream', () => {
+  it('marks answer deltas when reasoning arrived in a separate SSE field', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sseBody([
+      'data: {"choices":[{"delta":{"reasoning_content":"internal reasoning"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"好"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ]), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })));
+    const provider = createProvider(config());
+    const onDelta = vi.fn();
+    const full = await provider.translateStream!('Hello', ctx, onDelta, new AbortController().signal);
+    expect(onDelta.mock.calls).toEqual([['你', true], ['好', true]]);
+    expect(full).toBe('你好');
+  });
+
   it('concatenates SSE deltas until [DONE]', async () => {
     vi.stubGlobal(
       'fetch',

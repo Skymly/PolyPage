@@ -940,6 +940,29 @@ async function pageFor(urlPrefix) {
   return client;
 }
 
+async function waitForExtensionSettings(client, url, id) {
+  const deadline = Date.now() + 15000;
+  let state;
+  while (Date.now() < deadline) {
+    try {
+      state = await client.eval(`
+        (async () => {
+          const url = location.href;
+          const id = globalThis.chrome?.runtime?.id;
+          const storage = globalThis.chrome?.storage?.local;
+          const ready = url === ${JSON.stringify(url)} && id === ${JSON.stringify(id)} && !!storage;
+          const settings = ready && !!(await storage.get('settings')).settings;
+          return { url, id, settings };
+        })()`, 2000);
+      if (state?.settings) return;
+    } catch {
+      // A navigation can replace the default execution context mid-evaluation.
+    }
+    await sleep(150);
+  }
+  throw new Error(`PolyPage Options settings unavailable: ${JSON.stringify(state ?? null)}`);
+}
+
 async function closePage(browserCdp, urlPrefix) {
   const targets = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
   for (const t of targets.filter((x) => x.type === 'page' && x.url.startsWith(urlPrefix))) {
@@ -978,34 +1001,39 @@ try {
     }
   }
 
-  // Open the extension's options page via the browser-level debugger.
+  // Open Options from PolyPage itself so the navigation has an extension initiator.
   await waitForTarget(PORT_CDP, (t) => t.type === 'page' && t.url === 'about:blank', 'Edge blank tab');
   const version = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json/version`);
   const browserCdp = await CDP.connect(version.webSocketDebuggerUrl);
   const optionsUrl = `${extensionOrigin}/${builtManifest.options_page}`;
-  await openPage(browserCdp, optionsUrl);
+  const worker = await waitForTarget(PORT_CDP, isExtensionWorker, 'PolyPage service worker', 30000);
+  const workerCdp = await CDP.connect(worker.webSocketDebuggerUrl);
+  try {
+    await workerCdp.eval(`
+      (async () => {
+        for (let attempt = 0; attempt < 60; attempt++) {
+          const runtime = globalThis.chrome?.runtime;
+          if (runtime?.id === ${JSON.stringify(extensionId)}) {
+            await runtime.openOptionsPage();
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        throw new Error('PolyPage worker runtime did not become available');
+      })()`);
+  } finally {
+    workerCdp.close();
+  }
+  check('extension loaded (service worker registered)', true);
 
   const optionsTarget = await waitForTarget(
     PORT_CDP,
-    (t) => t.type === 'page' && t.url.startsWith(optionsUrl),
+    (t) => t.type === 'page' && t.url === optionsUrl,
     'options page',
   );
   ext = await CDP.connect(optionsTarget.webSocketDebuggerUrl);
   await ext.send('Runtime.enable');
-  await waitForTarget(PORT_CDP, isExtensionWorker, 'PolyPage service worker', 30000);
-  check('extension loaded (service worker registered)', true);
-
-  // Wait for onInstalled to finish writing defaults, then overwrite through
-  // the real save-settings message (which also refreshes the SW's settings cache).
-  await ext.eval(`
-    (async () => {
-      for (let i = 0; i < 50; i++) {
-        const data = await chrome.storage.local.get('settings');
-        if (data.settings) return 'defaults-written';
-        await new Promise(r => setTimeout(r, 100));
-      }
-      throw new Error('onInstalled never wrote default settings');
-    })()`);
+  await waitForExtensionSettings(ext, optionsUrl, extensionId);
   check('save-settings accepted', await saveSettingsThroughExtension(settingsPayload({})));
 
   // 3.0 (spec §9.3): the v2 payload above must land as schema v3 with the

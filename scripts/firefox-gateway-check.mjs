@@ -139,7 +139,11 @@ const child = spawn(FIREFOX, [
   '--remote-allow-system-access',
   '-profile',
   profile,
-], { stdio: 'ignore' });
+], {
+  stdio: 'ignore',
+  // Recent Firefox releases require this even with --remote-allow-system-access.
+  env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
+});
 
 function kill() {
   try { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* */ }

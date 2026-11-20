@@ -2437,9 +2437,9 @@ try {
   /* ====================== 2.0 native-host gateway + failover ================= */
 
   if (gatewayInstalled) {
-    // host-status probe through the background.
+    // Probe the isolated host installed for this run.
     const hostStatus = await ext.eval(
-      `chrome.runtime.sendMessage({ type: 'host-status' })`,
+      `chrome.runtime.sendMessage({ type: 'host-status', hostName: ${JSON.stringify(HOST_NAME)} })`,
     );
     check(
       'options host-status detects installed gateway',

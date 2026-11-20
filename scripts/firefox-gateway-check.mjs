@@ -17,6 +17,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { firefoxProbeFailure } from './firefox-gateway-probe.mjs';
+import { GECKO_ID } from './manifest-firefox.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const addonDir = path.join(root, 'dist-firefox');
@@ -28,6 +30,8 @@ const CANDIDATES = [
 const FIREFOX = CANDIDATES.find((p) => existsSync(p));
 const MARIONETTE_PORT = Number(process.env.MARIONETTE_PORT || 28288);
 const OVERALL_MS = Number(process.env.FX_CHECK_TIMEOUT_MS || 55000);
+const HOST_NAME = process.env.FX_GATEWAY_HOST_NAME || 'com.skymly.polypage.gateway';
+const EXPECTED_TRANSLATION = process.env.FX_GATEWAY_EXPECTED_TRANSLATION;
 
 function unwrapMarionette(x) {
   let cur = x;
@@ -152,17 +156,17 @@ const result = {
 const overall = setTimeout(() => {
   console.error('FIREFOX GATEWAY CHECK TIMEOUT');
   try { kill(); } catch {}
-  process.exit(result.addonLoaded ? 0 : 1);
+  process.exit(result.addonLoaded ? 3 : 1);
 }, OVERALL_MS);
+let fox;
 try {
   console.log('connecting marionette on', MARIONETTE_PORT);
-  const fox = await Marionette.connect(MARIONETTE_PORT);
+  fox = await Marionette.connect(MARIONETTE_PORT);
   console.log('marionette connected');
   await fox.send('WebDriver:NewSession', { capabilities: { alwaysMatch: { acceptInsecureCerts: true } } }, 15000);
   console.log('session created');
   const installed = unwrapMarionette(await fox.send('Addon:Install', { path: addonDir, temporary: true }));
   console.log('ADDON', JSON.stringify(installed));
-  result.addonLoaded = true;
   await fox.send('Marionette:SetContext', { value: 'chrome' });
   const details = unwrapMarionette(await fox.send('WebDriver:ExecuteAsyncScript', {
     script: `
@@ -191,7 +195,7 @@ try {
   }));
   console.log('ADDON_DETAILS', JSON.stringify(details));
   if (details && details.error) throw new Error(details.error);
-  if (!details || (details.id && details.id !== 'polypage@skymly.com' && details.isActive === false)) {
+  if (details?.id !== GECKO_ID || details.isActive !== true) {
     throw new Error('temporary addon not active');
   }
   result.addonLoaded = true;
@@ -210,6 +214,7 @@ try {
     console.log('current url', JSON.stringify(here));
     const probe = unwrapMarionette(await fox.send('WebDriver:ExecuteAsyncScript', {
       script: `
+        const hostName = arguments[0];
         const cb = arguments[arguments.length - 1];
         (async () => {
           try {
@@ -218,7 +223,7 @@ try {
               cb({ error: 'extension runtime unavailable on options page' });
               return;
             }
-            const status = await api.runtime.sendMessage({ v: 6, type: 'host-status' });
+            const status = await api.runtime.sendMessage({ v: 6, type: 'host-status', hostName });
             let translate = null;
             if (status && status.installed === true) {
               const settings = await api.runtime.sendMessage({ type: 'get-full-settings' });
@@ -242,11 +247,12 @@ try {
                   maxTokens: 256,
                   headers: {},
                   enabled: true,
-                  hostName: 'com.skymly.polypage.gateway',
+                  hostName,
                 };
-                current.providers = [native, ...(current.providers || [])];
+                current.providers = [native];
                 current.activeProviderId = 'fx-native';
-                await api.runtime.sendMessage({ type: 'save-settings', settings: current });
+                const saved = await api.runtime.sendMessage({ type: 'save-settings', settings: current });
+                if (saved?.ok !== true) throw new Error('could not select the native-host Provider');
                 translate = await api.runtime.sendMessage({
                   v: 6,
                   type: 'translate',
@@ -260,32 +266,15 @@ try {
           }
         })();
       `,
-      args: [],
+      args: [HOST_NAME],
     }));
     console.log('PROBE', JSON.stringify(probe));
-    if (probe && probe.error) {
-      result.degraded = probe.error;
-    } else {
-      result.hostStatus = probe && probe.status ? probe.status : null;
-      result.translate = probe && probe.translate ? probe.translate : null;
-      const installed = !!(result.hostStatus && result.hostStatus.installed === true && result.hostStatus.protocol === 2);
-      const translated = !!(result.translate && result.translate.results && result.translate.results.fx1);
-      if (installed && translated) {
-        console.log('FIREFOX GATEWAY CHECK: connectNative ping + translate OK');
-      } else if (result.hostStatus && result.hostStatus.installed === false) {
-        result.degraded = result.hostStatus.reason || result.hostStatus.error || 'connectNative failed; treated as not installed';
-        console.log('DEGRADED', result.degraded);
-      } else if (!installed) {
-        result.degraded = 'host-status did not report protocol 2; failover path remains available';
-        console.log('DEGRADED', result.degraded);
-      } else {
-        result.degraded = 'native-host translate did not return fx1';
-        console.log('DEGRADED', result.degraded);
-      }
-    }
+    result.hostStatus = probe?.status ?? null;
+    result.translate = probe?.translate ?? null;
+    result.degraded = firefoxProbeFailure(probe, EXPECTED_TRANSLATION);
+    if (result.degraded) console.log('DEGRADED', result.degraded);
+    else console.log('FIREFOX GATEWAY CHECK: connectNative ping + translate OK');
   }
-  fox.close();
-  clearTimeout(overall);
   if (result.degraded) {
     console.log('FIREFOX GATEWAY CHECK: DEGRADED');
     process.exitCode = 3;
@@ -294,7 +283,6 @@ try {
     process.exitCode = 0;
   }
 } catch (e) {
-  clearTimeout(overall);
   console.error('FIREFOX GATEWAY CHECK FAILED', e);
   if (result.addonLoaded) {
     result.degraded = String(e && e.message ? e.message : e);
@@ -304,6 +292,8 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  fox?.close();
+  clearTimeout(overall);
   console.log('SUMMARY', JSON.stringify(result));
   kill();
 }

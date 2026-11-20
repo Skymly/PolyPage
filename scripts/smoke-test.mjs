@@ -10,7 +10,7 @@
  *    site rules, selection translate, SSE streaming hover, bilingual export,
  *    the REAL .NET gateway via Native Messaging, and failover chains.
  *
- * Note: branded Chrome ignores --load-extension, so Edge is used.
+ * The DevTools pipe loads the unpacked build and returns its extension ID.
  *
  * Env overrides (M-91): EDGE_PATH, SMOKE_PORT_PAGE / SMOKE_PORT_API /
  * SMOKE_PORT_XORIGIN, SMOKE_CDP_PORT, FFMPEG_PATH.
@@ -597,17 +597,49 @@ async function waitForTarget(port, predicate, label, timeoutMs = 20000) {
   );
 }
 
-/** Locate our extension by finding the SW target that serves background.js. */
-async function findExtensionId(port) {
-  const sw = await waitForTarget(
-    port,
-    (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
-    'our service worker',
-    30000,
-  );
-  const m = sw.url.match(/chrome-extension:\/\/([a-z]+)\//);
-  if (!m) throw new Error(`cannot parse extension id from ${sw.url}`);
-  return m[1];
+/** Use the browser pipe for extension installation, then use target WebSockets. */
+function loadUnpackedExtension(browser, dir) {
+  const input = browser.stdio[3];
+  const output = browser.stdio[4];
+  return new Promise((resolve, reject) => {
+    let buffer = '';
+    const finish = (error, id) => {
+      clearTimeout(timer);
+      output.off('data', onData);
+      browser.off('exit', onExit);
+      browser.off('error', onError);
+      if (error) reject(error);
+      else resolve(id);
+    };
+    const onError = (error) => finish(error);
+    const onExit = () => finish(new Error('Edge exited before the extension was loaded'));
+    const onData = (chunk) => {
+      buffer += chunk;
+      for (let end = buffer.indexOf('\0'); end !== -1; end = buffer.indexOf('\0')) {
+        let message;
+        try {
+          message = JSON.parse(buffer.slice(0, end));
+        } catch {
+          finish(new Error('Edge returned an invalid DevTools pipe response'));
+          return;
+        }
+        buffer = buffer.slice(end + 1);
+        if (message.id !== 1) continue;
+        const id = message.result?.id;
+        if (/^[a-p]{32}$/.test(id ?? '')) finish(null, id);
+        else finish(new Error(message.error?.message ?? 'Edge did not return an extension ID'));
+        return;
+      }
+    };
+    const timer = setTimeout(() => finish(new Error('Timed out loading the unpacked extension')), 20000);
+    browser.once('exit', onExit);
+    browser.once('error', onError);
+    input.on('error', onError);
+    output.on('error', onError);
+    output.setEncoding('utf8');
+    output.on('data', onData);
+    input.write(JSON.stringify({ id: 1, method: 'Extensions.loadUnpacked', params: { path: dir } }) + '\0');
+  });
 }
 /* ----------------------------------- main ------------------------------------ */
 
@@ -786,16 +818,17 @@ const browserArgs = [
   '--no-default-browser-check',
   '--disable-gpu',
   '--disable-sync',
-  '--load-extension=' + distDir,
+  '--remote-debugging-pipe',
+  '--enable-unsafe-extension-debugging',
   `--remote-debugging-port=${PORT_CDP}`,
   '--user-data-dir=' + profileDir,
-  `http://127.0.0.1:${PORT_PAGE}/`,
+  'about:blank',
 ];
 if (!existsSync(BROWSER)) {
   throw new Error(`Edge not found at ${BROWSER}. Set EDGE_PATH to msedge.exe.`);
 }
 const browser = spawn(BROWSER, browserArgs, {
-  stdio: 'ignore',
+  stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
   env: { ...process.env, POLYPAGE_GATEWAY_CONFIG: gatewayConfigPath },
 });
 
@@ -925,9 +958,11 @@ async function saveSettingsThroughExtension(payload) {
 }
 
 try {
-  console.log('Waiting for extension service worker...');
-  extensionId = await findExtensionId(PORT_CDP);
-  check('extension loaded (service worker registered)', true);
+  const builtManifest = JSON.parse(await readFile(path.join(distDir, 'manifest.json'), 'utf8'));
+  extensionId = await loadUnpackedExtension(browser, distDir);
+  const extensionOrigin = `chrome-extension://${extensionId}`;
+  const workerUrl = `${extensionOrigin}/${builtManifest.background.service_worker}`;
+  const isExtensionWorker = (target) => target.type === 'service_worker' && target.url === workerUrl;
 
   // Now that we know the extension id, refresh the host manifest's
   // allowed_origins so connectNative will accept it.
@@ -942,9 +977,10 @@ try {
   }
 
   // Open the extension's options page via the browser-level debugger.
+  await waitForTarget(PORT_CDP, (t) => t.type === 'page' && t.url === 'about:blank', 'Edge blank tab');
   const version = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json/version`);
   const browserCdp = await CDP.connect(version.webSocketDebuggerUrl);
-  const optionsUrl = `chrome-extension://${extensionId}/options/options.html`;
+  const optionsUrl = `${extensionOrigin}/${builtManifest.options_page}`;
   await openPage(browserCdp, optionsUrl);
 
   const optionsTarget = await waitForTarget(
@@ -954,6 +990,8 @@ try {
   );
   ext = await CDP.connect(optionsTarget.webSocketDebuggerUrl);
   await ext.send('Runtime.enable');
+  await waitForTarget(PORT_CDP, isExtensionWorker, 'PolyPage service worker', 30000);
+  check('extension loaded (service worker registered)', true);
 
   // Wait for onInstalled to finish writing defaults, then overwrite through
   // the real save-settings message (which also refreshes the SW's settings cache).
@@ -2246,9 +2284,7 @@ try {
   await sleep(500); // tasks now recorded in-flight against the slow endpoint
 
   const targetsBeforeKill = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
-  const swTarget = targetsBeforeKill.find(
-    (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
-  );
+  const swTarget = targetsBeforeKill.find(isExtensionWorker);
   check('service worker target located for the kill', !!swTarget);
   if (swTarget) {
     await browserCdp.send('Target.closeTarget', { targetId: swTarget.id });
@@ -2305,9 +2341,8 @@ try {
   }
   check('PDF resume: paragraphs in-flight before SW kill', sawPending === true);
   const targetsBeforePdfKill = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
-  const swPdf = targetsBeforePdfKill.find(
-    (t) => t.type === 'service_worker' && t.url.endsWith('/background.js'),
-  );
+  const swPdf = targetsBeforePdfKill.find(isExtensionWorker);
+  check('PDF resume: PolyPage service worker target located for the kill', !!swPdf);
   if (swPdf) {
     await browserCdp.send('Target.closeTarget', { targetId: swPdf.id });
   }
@@ -2497,6 +2532,7 @@ try {
     /* best effort */
   }
   await rm(path.dirname(gatewayConfigPath), { recursive: true, force: true }).catch(() => {});
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
 }
 
 console.log(

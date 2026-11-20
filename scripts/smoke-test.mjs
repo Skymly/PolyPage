@@ -1097,14 +1097,16 @@ try {
   /* ============================ 1.0 baseline suite ============================ */
 
   const pageUrl = `http://127.0.0.1:${PORT_PAGE}/`;
+  await openPage(browserCdp, pageUrl);
   let state = null;
   for (let i = 0; i < 25; i++) {
     try {
       state = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`), 5000);
-      break;
+      if (state?.injected && state.total >= 4) break;
     } catch {
-      await sleep(400);
+      // Navigation and the initial scan can finish after the tab is created.
     }
+    await sleep(400);
   }
   check('content script injected', state?.injected === true, JSON.stringify(state));
   check('scanner found paragraphs', (state?.total ?? 0) >= 4, `total=${state?.total}`);
@@ -1452,7 +1454,7 @@ try {
   let frames = [];
   for (let i = 0; i < 30; i++) {
     const res = await ext.eval(
-      `chrome.runtime.sendMessage({ v: 2, type: 'get-frame-states', tabId: ${iframesTabId} })`,
+      `chrome.runtime.sendMessage({ type: 'get-frame-states', tabId: ${iframesTabId} })`,
     );
     frames = res?.frames ?? [];
     if (frames.length >= 3 && frames.every((f) => f.state.active)) break;
@@ -1499,7 +1501,7 @@ try {
   if (!xoriginOk) {
     for (let i = 0; i < 20; i++) {
       const res = await ext.eval(
-        `chrome.runtime.sendMessage({ v: 2, type: 'get-frame-states', tabId: ${iframesTabId} })`,
+        `chrome.runtime.sendMessage({ type: 'get-frame-states', tabId: ${iframesTabId} })`,
       );
       const xframe = (res?.frames ?? []).find((f) => (f.state.frameUrl ?? '').startsWith(`http://127.0.0.1:${PORT_XORIGIN}`));
       if (xframe && xframe.state.translated >= 2 && xframe.state.failed === 0) {
@@ -1714,7 +1716,7 @@ try {
   let exportEntries = [];
   for (let i = 0; i < 30; i++) {
     const res = await ext.eval(
-      `chrome.runtime.sendMessage({ v: 2, type: 'get-export-payload', tabId: ${mainTabId} })`,
+      `chrome.runtime.sendMessage({ type: 'get-export-payload', tabId: ${mainTabId} })`,
     );
     exportEntries = res?.ok ? res.entries : [];
     if (exportEntries.length >= 4 && exportEntries.every((e) => e.status === 'done')) break;
@@ -2437,7 +2439,7 @@ try {
   if (gatewayInstalled) {
     // host-status probe through the background.
     const hostStatus = await ext.eval(
-      `chrome.runtime.sendMessage({ v: 2, type: 'host-status' })`,
+      `chrome.runtime.sendMessage({ type: 'host-status' })`,
     );
     check(
       'options host-status detects installed gateway',

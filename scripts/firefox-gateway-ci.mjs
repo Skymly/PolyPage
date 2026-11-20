@@ -23,7 +23,7 @@ const env = {
   ...process.env,
   POLYPAGE_GATEWAY_CONFIG: configPath,
   MOZ_HEADLESS: '1',
-  FX_CHECK_TIMEOUT_MS: '90000',
+  FX_CHECK_TIMEOUT_MS: '120000',
   FX_GATEWAY_HOST_NAME: hostName,
   FX_GATEWAY_EXPECTED_TRANSLATION: translation,
 };

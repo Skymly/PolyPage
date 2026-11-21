@@ -81,4 +81,25 @@ describe('SubtitleManager fullscreen reparent (M-32)', () => {
     expect(host.hasAttribute('popover')).toBe(false);
     expect(host.parentElement).toBe(document.documentElement);
   });
+
+  it('restores the original track in native fullscreen when popovers are unavailable', () => {
+    document.body.innerHTML = '<video></video>';
+    const video = document.querySelector('video')!;
+    const track = Object.assign(new EventTarget(), { kind: 'subtitles', mode: 'showing' });
+    Object.defineProperty(video, 'textTracks', { value: [track] });
+    expect(manager.toggle()).toBe('on');
+
+    const host = document.querySelector<HTMLElement>('.wt-subtitle-host')!;
+    Object.defineProperty(host, 'showPopover', { value: undefined });
+    expect(track.mode).toBe('hidden');
+    setFullscreen(video);
+    expect(track.mode).toBe('showing');
+    expect(host.style.display).toBe('none');
+
+    setFullscreen(null);
+    expect(track.mode).toBe('hidden');
+    expect(host.style.display).toBe('');
+    manager.restoreAll();
+    expect(track.mode).toBe('showing');
+  });
 });

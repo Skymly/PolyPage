@@ -1,6 +1,6 @@
 # PolyPage — Web Translator Extension
 
-网页翻译浏览器插件 **4.2.0**（Chrome / Edge 发行主线，Firefox MV3 可加载 MVP；Manifest V3，TypeScript + C#/.NET 本地网关）。
+网页翻译浏览器插件 **4.2.1**（Chrome / Edge 发行主线，Firefox MV3 可加载 MVP；Manifest V3，TypeScript + C#/.NET 本地网关）。
 
 接入你自己的 **LLM / 翻译 API / 本地模型**，在网页、PDF、图片、视频字幕和无字幕音视频上获得翻译：
 
@@ -36,7 +36,7 @@
 | Q Firefox 网关 | 隔离 profile + Marionette 临时加载 `dist-firefox/` 后探测 `host-status` 与一笔 native-host 翻译；失败则明确降级 |
 | R 流式/覆盖/版面 | 有 `transcribeStream` 才真注入 cue；覆盖随滚动重算；PDF 表格夹具 |
 
-设置 `schemaVersion: 6`。消息协议标记 `v: 6`。网关 `4.2.0`，`ProtocolVersion = 2`。
+设置 `schemaVersion: 6`。消息协议标记 `v: 6`。网关 `4.2.1`，`ProtocolVersion = 2`。
 
 ## 4.1 新特性（对照 docs/history/PolyPage-4.1.md）
 
@@ -71,7 +71,7 @@
 ```text
 ├── public/
 │   ├── icons/                  # 构建脚本生成的图标
-│   └── manifest.json           # MV3 清单 4.2.0（可选 webNavigation，无麦克风）
+│   └── manifest.json           # MV3 清单 4.2.1（可选 webNavigation，无麦克风）
 ├── src/
 │   ├── background/             # service-worker + nativePort（队列/failover/OCR/ASR/续译）
 │   ├── content/                # 网页翻译 + 字幕层 + 划词 + 图片按钮 + ASR 采集
@@ -86,7 +86,7 @@
 │   ├── shared/                 # types/constants/binaryChunk/languageDetect/…
 │   └── styles/
 ├── vendor/                     # pdf.js + tesseract.js + tessdata（构建期 SHA-256 校验）
-├── native-host/                # C#/.NET 网关 4.2.0 / 协议 v2（Ollama / HTTP / Whisper）
+├── native-host/                # C#/.NET 网关 4.2.1 / 协议 v2（Ollama / HTTP / Whisper）
 ├── scripts/
 │   ├── build.mjs               # Chrome/Edge dist/ + Firefox dist-firefox/
 │   ├── manifest-firefox.mjs    # gecko.id + background.scripts 事件页

@@ -95,22 +95,19 @@ public sealed class WhisperBackend : IGatewayBackend
     {
         var ext = mime.Contains("mp4", StringComparison.OrdinalIgnoreCase) ? ".mp4" : ".webm";
         var tmp = Path.Combine(Path.GetTempPath(), $"polypage-whisper-{Guid.NewGuid():N}{ext}");
-        await File.WriteAllBytesAsync(tmp, audio, ct);
         try
         {
+            await File.WriteAllBytesAsync(tmp, audio, ct);
             var command = _config.Command!.Replace("{input}", tmp).Replace("{model}", _config.Model);
             var psi = WhisperCli.CreateStartInfo(command);
             var (exit, stdout, stderr) = await WhisperCli.RunAsync(psi, _config.TimeoutMs, ct);
             if (exit != 0)
                 throw new GatewayBackendException(RpcCodes.Server, $"whisper.cpp 退出码 {exit}: {stderr}");
-            try
-            {
-                return ParseVerboseJson(stdout);
-            }
-            catch (GatewayBackendException)
-            {
-                return new TranscriptResult(stdout.Trim(), null);
-            }
+            // whisper.cpp writes a plain transcript to stdout. Wrappers can return verbose JSON.
+            var text = stdout.Trim();
+            if (text.Length == 0)
+                throw new GatewayBackendException(RpcCodes.InvalidResponse, "Whisper 返回了空内容");
+            return text.StartsWith('{') ? ParseVerboseJson(text) : new TranscriptResult(text, null);
         }
         finally
         {

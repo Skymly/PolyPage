@@ -69,6 +69,10 @@ export function queryAllSafeSelectors(root: ParentNode, selectors: string[]): El
 
 const SUB_CSS = `
 :host { all: initial; }
+:host([popover]) {
+  position: fixed; inset: 0; margin: 0; padding: 0; border: 0;
+  width: 0; height: 0; background: transparent; overflow: visible; pointer-events: none;
+}
 .wt-sub-box {
   position: fixed; z-index: 2147483646; pointer-events: none;
   display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -209,19 +213,32 @@ class VideoSubtitleController {
     this.cueHost = { host, box };
   }
 
-  syncLayerParent(): void {
+  syncPresentation(): void {
     if (!this.cueHost) return;
-    const parent = subtitleLayerParent();
-    if (this.cueHost.host.parentElement !== parent) parent.appendChild(this.cueHost.host);
-  }
+    const { host } = this.cueHost;
+    const fullscreen = subtitleLayerParent();
+    const videoFullscreen = fullscreen instanceof HTMLVideoElement;
+    const ownsFullscreenVideo = videoFullscreen && fullscreen === this.media;
+    const pip = document.pictureInPictureElement === this.media;
+    const supportsPopover = typeof host.showPopover === 'function';
+    const parent = videoFullscreen ? document.documentElement : fullscreen;
+    // PiP and older browsers without popovers can still show the original track.
+    const useNativeTrack = pip || (ownsFullscreenVideo && !supportsPopover);
 
-  /** PiP cannot show our overlay; restore native tracks while the video is in PiP. */
-  setPictureInPicture(active: boolean): void {
-    if (this.savedModes.length === 0) return;
-    for (const { track, mode } of this.savedModes) {
-      track.mode = active ? (mode === 'hidden' || mode === 'disabled' ? 'showing' : mode) : 'hidden';
+    if (host.parentElement !== parent) parent.appendChild(host);
+    host.style.display = useNativeTrack ? 'none' : '';
+    if (ownsFullscreenVideo && supportsPopover && !pip) {
+      // A video is a replaced element. Use the top layer to paint above it.
+      host.setAttribute('popover', 'manual');
+      if (!host.matches(':popover-open')) host.showPopover();
+    } else if (host.hasAttribute('popover')) {
+      if (host.matches(':popover-open')) host.hidePopover();
+      host.removeAttribute('popover');
     }
-    if (this.cueHost) this.cueHost.host.style.display = active ? 'none' : '';
+
+    for (const { track } of this.savedModes) {
+      track.mode = useNativeTrack ? 'showing' : 'hidden';
+    }
   }
 
   /** Position the fixed layer over the video's bottom area. */
@@ -403,11 +420,9 @@ export class SubtitleManager {
   syncPresentation(): void {
     this.wireInteraction();
     for (const controller of this.controllers.values()) {
-      controller.syncLayerParent();
+      controller.syncPresentation();
     }
     for (const video of this.videos()) {
-      const pip = document.pictureInPictureElement === video;
-      this.controllerFor(video).setPictureInPicture(pip);
       if (!this.pipWired.has(video)) {
         this.pipWired.add(video);
         video.addEventListener('enterpictureinpicture', this.onPipChange);
@@ -513,12 +528,10 @@ export class SubtitleManager {
   restoreAll(): void {
     this.asrTarget = null;
     this.activeVideo = null;
-    for (const [media, controller] of this.controllers) {
-      controller.restore();
-      if (media instanceof HTMLVideoElement && this.pipWired.has(media)) {
-        media.removeEventListener('enterpictureinpicture', this.onPipChange);
-        media.removeEventListener('leavepictureinpicture', this.onPipChange);
-      }
+    for (const controller of this.controllers.values()) controller.restore();
+    for (const video of this.pipWired) {
+      video.removeEventListener('enterpictureinpicture', this.onPipChange);
+      video.removeEventListener('leavepictureinpicture', this.onPipChange);
     }
     this.controllers.clear();
     this.pipWired.clear();

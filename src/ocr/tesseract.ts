@@ -133,7 +133,8 @@ const defaultPool = new TessWorkerPool(async (lang) => {
     langPath: vendor('tessdata'),
     workerBlobURL: false,
     gzip: false,
-    cacheMethod: 'none',
+    // Extra languages are hash-verified and seeded by the background.
+    cacheMethod: 'readOnly',
     errorHandler: (err) => {
       tessGlobal.__ppTessErr = err instanceof Error ? err.message : String(err);
     },

@@ -2,8 +2,13 @@
  * Subtitle layer follows native fullscreen (M-32).
  */
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SubtitleManager, subtitleLayerParent } from '../src/content/media';
+
+function setFullscreen(element: Element | null): void {
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => element });
+  document.dispatchEvent(new Event('fullscreenchange'));
+}
 
 describe('subtitleLayerParent (M-32)', () => {
   it('uses documentElement when nothing is fullscreen', () => {
@@ -26,12 +31,19 @@ describe('subtitleLayerParent (M-32)', () => {
 });
 
 describe('SubtitleManager fullscreen reparent (M-32)', () => {
+  const manager = new SubtitleManager();
+
+  afterEach(() => {
+    manager.restoreAll();
+    setFullscreen(null);
+    document.body.replaceChildren();
+  });
+
   it('moves the subtitle host into the fullscreen element', () => {
     document.body.innerHTML = '<div id="player"><video id="v"></video></div>';
     const player = document.getElementById('player') as HTMLDivElement;
     const video = document.getElementById('v') as HTMLVideoElement;
     Object.defineProperty(video, 'currentTime', { configurable: true, value: 1 });
-    const manager = new SubtitleManager();
     manager.applyMemoryCues(video, [{ startTime: 0, endTime: 2, text: 'hi', translation: '你好' }]);
     const host = document.querySelector('.wt-subtitle-host');
     expect(host?.parentElement).toBe(document.documentElement);
@@ -47,5 +59,26 @@ describe('SubtitleManager fullscreen reparent (M-32)', () => {
     });
     manager.syncPresentation();
     expect(host?.parentElement).toBe(document.documentElement);
+  });
+
+  it('opens the active video overlay above native fullscreen and clears the popover on exit', () => {
+    document.body.innerHTML = '<video></video>';
+    const video = document.querySelector('video')!;
+    manager.applyMemoryCues(video, [{ startTime: 0, endTime: 2, text: 'hi', translation: '你好' }]);
+    const host = document.querySelector<HTMLElement>('.wt-subtitle-host')!;
+    let open = false;
+    host.showPopover = vi.fn(() => { open = true; });
+    host.hidePopover = vi.fn(() => { open = false; });
+    vi.spyOn(host, 'matches').mockImplementation((selector) => selector === ':popover-open' && open);
+
+    setFullscreen(video);
+    expect(host.parentElement).toBe(document.documentElement);
+    expect(host.getAttribute('popover')).toBe('manual');
+    expect(host.showPopover).toHaveBeenCalledOnce();
+
+    setFullscreen(null);
+    expect(host.hidePopover).toHaveBeenCalledOnce();
+    expect(host.hasAttribute('popover')).toBe(false);
+    expect(host.parentElement).toBe(document.documentElement);
   });
 });

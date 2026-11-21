@@ -106,10 +106,11 @@ const iframesPage = `<!doctype html>
   <iframe id="cross-origin" src="http://127.0.0.1:${PORT_XORIGIN}/iframe-child.html" width="400" height="200"></iframe>
 </body></html>`;
 
+const selectionText = 'Selecting this sentence should reveal a floating translate button nearby.';
 const selectionPage = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Selection</title></head>
 <body>
-  <p id="sel-p">Selecting this sentence should reveal a floating translate button nearby.</p>
+  <p id="sel-p">${selectionText}</p>
 </body></html>`;
 
 const navPage = `<!doctype html>
@@ -448,6 +449,7 @@ function startMockApi() {
         const full = translations[0];
         // Emit in growing chunks so the smoke test can observe increments.
         const chunks = [full.slice(0, 6), full.slice(6, 20), full.slice(20)];
+        if (texts[0] === selectionText) chunks.unshift('fixture reasoning', '\n</thi', 'nk>');
         for (const chunk of chunks) {
           if (chunk === '') continue;
           res.write(
@@ -938,6 +940,29 @@ async function pageFor(urlPrefix) {
   return client;
 }
 
+async function waitForExtensionSettings(client, url, id) {
+  const deadline = Date.now() + 15000;
+  let state;
+  while (Date.now() < deadline) {
+    try {
+      state = await client.eval(`
+        (async () => {
+          const url = location.href;
+          const id = globalThis.chrome?.runtime?.id;
+          const storage = globalThis.chrome?.storage?.local;
+          const ready = url === ${JSON.stringify(url)} && id === ${JSON.stringify(id)} && !!storage;
+          const settings = ready && !!(await storage.get('settings')).settings;
+          return { url, id, settings };
+        })()`, 2000);
+      if (state?.settings) return;
+    } catch {
+      // A navigation can replace the default execution context mid-evaluation.
+    }
+    await sleep(150);
+  }
+  throw new Error(`PolyPage Options settings unavailable: ${JSON.stringify(state ?? null)}`);
+}
+
 async function closePage(browserCdp, urlPrefix) {
   const targets = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json`);
   for (const t of targets.filter((x) => x.type === 'page' && x.url.startsWith(urlPrefix))) {
@@ -976,34 +1001,39 @@ try {
     }
   }
 
-  // Open the extension's options page via the browser-level debugger.
+  // Open Options from PolyPage itself so the navigation has an extension initiator.
   await waitForTarget(PORT_CDP, (t) => t.type === 'page' && t.url === 'about:blank', 'Edge blank tab');
   const version = await fetchJson(`http://127.0.0.1:${PORT_CDP}/json/version`);
   const browserCdp = await CDP.connect(version.webSocketDebuggerUrl);
   const optionsUrl = `${extensionOrigin}/${builtManifest.options_page}`;
-  await openPage(browserCdp, optionsUrl);
+  const worker = await waitForTarget(PORT_CDP, isExtensionWorker, 'PolyPage service worker', 30000);
+  const workerCdp = await CDP.connect(worker.webSocketDebuggerUrl);
+  try {
+    await workerCdp.eval(`
+      (async () => {
+        for (let attempt = 0; attempt < 60; attempt++) {
+          const runtime = globalThis.chrome?.runtime;
+          if (runtime?.id === ${JSON.stringify(extensionId)}) {
+            await runtime.openOptionsPage();
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        throw new Error('PolyPage worker runtime did not become available');
+      })()`);
+  } finally {
+    workerCdp.close();
+  }
+  check('extension loaded (service worker registered)', true);
 
   const optionsTarget = await waitForTarget(
     PORT_CDP,
-    (t) => t.type === 'page' && t.url.startsWith(optionsUrl),
+    (t) => t.type === 'page' && t.url === optionsUrl,
     'options page',
   );
   ext = await CDP.connect(optionsTarget.webSocketDebuggerUrl);
   await ext.send('Runtime.enable');
-  await waitForTarget(PORT_CDP, isExtensionWorker, 'PolyPage service worker', 30000);
-  check('extension loaded (service worker registered)', true);
-
-  // Wait for onInstalled to finish writing defaults, then overwrite through
-  // the real save-settings message (which also refreshes the SW's settings cache).
-  await ext.eval(`
-    (async () => {
-      for (let i = 0; i < 50; i++) {
-        const data = await chrome.storage.local.get('settings');
-        if (data.settings) return 'defaults-written';
-        await new Promise(r => setTimeout(r, 100));
-      }
-      throw new Error('onInstalled never wrote default settings');
-    })()`);
+  await waitForExtensionSettings(ext, optionsUrl, extensionId);
   check('save-settings accepted', await saveSettingsThroughExtension(settingsPayload({})));
 
   // 3.0 (spec §9.3): the v2 payload above must land as schema v3 with the
@@ -1067,14 +1097,16 @@ try {
   /* ============================ 1.0 baseline suite ============================ */
 
   const pageUrl = `http://127.0.0.1:${PORT_PAGE}/`;
+  await openPage(browserCdp, pageUrl);
   let state = null;
   for (let i = 0; i < 25; i++) {
     try {
       state = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`), 5000);
-      break;
+      if (state?.injected && state.total >= 4) break;
     } catch {
-      await sleep(400);
+      // Navigation and the initial scan can finish after the tab is created.
     }
+    await sleep(400);
   }
   check('content script injected', state?.injected === true, JSON.stringify(state));
   check('scanner found paragraphs', (state?.total ?? 0) >= 4, `total=${state?.total}`);
@@ -1422,7 +1454,7 @@ try {
   let frames = [];
   for (let i = 0; i < 30; i++) {
     const res = await ext.eval(
-      `chrome.runtime.sendMessage({ v: 2, type: 'get-frame-states', tabId: ${iframesTabId} })`,
+      `chrome.runtime.sendMessage({ type: 'get-frame-states', tabId: ${iframesTabId} })`,
     );
     frames = res?.frames ?? [];
     if (frames.length >= 3 && frames.every((f) => f.state.active)) break;
@@ -1469,7 +1501,7 @@ try {
   if (!xoriginOk) {
     for (let i = 0; i < 20; i++) {
       const res = await ext.eval(
-        `chrome.runtime.sendMessage({ v: 2, type: 'get-frame-states', tabId: ${iframesTabId} })`,
+        `chrome.runtime.sendMessage({ type: 'get-frame-states', tabId: ${iframesTabId} })`,
       );
       const xframe = (res?.frames ?? []).find((f) => (f.state.frameUrl ?? '').startsWith(`http://127.0.0.1:${PORT_XORIGIN}`));
       if (xframe && xframe.state.translated >= 2 && xframe.state.failed === 0) {
@@ -1523,17 +1555,41 @@ try {
   }
   check('selection shows floating translate button', selBtnVisible === true);
 
-  // Click the button inside the shadow root; panel must show the translation.
-  await selectionClient.eval(`
-    document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-btn')?.click()`);
+  // Observe the actual panel, then click its button so the request tests the
+  // settings-to-content path as well as the streaming port.
+  const selectionSseBefore = mock.sseCount();
+  await selectionClient.eval(`(() => {
+    const shadow = document.querySelector('.wt-selection-host').shadowRoot;
+    const panel = shadow.querySelector('.wt-sel-panel');
+    const text = panel.querySelector('.wt-sel-text');
+    const updates = [];
+    new MutationObserver(() => {
+      if (panel.getAttribute('aria-busy') === 'true') updates.push(text.textContent);
+    }).observe(text, { childList: true, subtree: true, characterData: true });
+    window.__smokeSelectionUpdates = updates;
+    shadow.querySelector('.wt-sel-btn').click();
+  })()`);
+  const completedSelectionText = `document.querySelector('.wt-selection-host')?.shadowRoot
+    ?.querySelector('.wt-sel-panel[aria-busy="false"] .wt-sel-text')?.textContent ?? ''`;
   let panelText = '';
   for (let i = 0; i < 30; i++) {
-    panelText = await selectionClient.eval(`
-      document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-text')?.textContent ?? ''`);
+    panelText = await selectionClient.eval(completedSelectionText);
     if (panelText.includes('[译]')) break;
     await sleep(400);
   }
-  check('selection panel shows translation', panelText.includes('[译]'), JSON.stringify(panelText));
+  const selectionUpdates = await selectionClient.eval('window.__smokeSelectionUpdates ?? []');
+  check('selection click uses SSE', mock.sseCount() === selectionSseBefore + 1);
+  check('selection panel shows final translation', panelText === `[译] ${selectionText}`, JSON.stringify(panelText));
+  check(
+    'selection panel shows an intermediate translation',
+    selectionUpdates.some((text) => text.startsWith('[译]') && text.length < panelText.length && panelText.startsWith(text)),
+    JSON.stringify(selectionUpdates),
+  );
+  check(
+    'selection panel hides split think tags and the preceding reasoning',
+    selectionUpdates.every((text) => !/fixture reasoning|<\/?thi/i.test(text)),
+    JSON.stringify(selectionUpdates),
+  );
   const panelIsolated = await selectionClient.eval(`
     (() => {
       const host = document.querySelector('.wt-selection-host');
@@ -1660,7 +1716,7 @@ try {
   let exportEntries = [];
   for (let i = 0; i < 30; i++) {
     const res = await ext.eval(
-      `chrome.runtime.sendMessage({ v: 2, type: 'get-export-payload', tabId: ${mainTabId} })`,
+      `chrome.runtime.sendMessage({ type: 'get-export-payload', tabId: ${mainTabId} })`,
     );
     exportEntries = res?.ok ? res.entries : [];
     if (exportEntries.length >= 4 && exportEntries.every((e) => e.status === 'done')) break;
@@ -1839,9 +1895,7 @@ try {
   );
   let repeatPanel = '';
   for (let i = 0; i < 30; i++) {
-    repeatPanel = await repeatClient.eval(
-      `document.querySelector('.wt-selection-host')?.shadowRoot?.querySelector('.wt-sel-text')?.textContent ?? ''`,
-    );
+    repeatPanel = await repeatClient.eval(completedSelectionText);
     if (repeatPanel.includes('[译]')) break;
     await sleep(400);
   }
@@ -1863,7 +1917,7 @@ try {
     })()`);
   check(
     'repeat-selection replays last panel without a selection',
-    replayed?.display === 'block' && (replayed?.text ?? '').includes('[译]'),
+    replayed?.display === 'block' && replayed.text === repeatPanel,
     JSON.stringify(replayed),
   );
   // Speak button exists (capability probe may disable it in headless).
@@ -2383,9 +2437,9 @@ try {
   /* ====================== 2.0 native-host gateway + failover ================= */
 
   if (gatewayInstalled) {
-    // host-status probe through the background.
+    // Probe the isolated host installed for this run.
     const hostStatus = await ext.eval(
-      `chrome.runtime.sendMessage({ v: 2, type: 'host-status' })`,
+      `chrome.runtime.sendMessage({ type: 'host-status', hostName: ${JSON.stringify(HOST_NAME)} })`,
     );
     check(
       'options host-status detects installed gateway',

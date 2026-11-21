@@ -161,6 +161,7 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     let full = '';
     let finishReason: string | undefined;
     let sawDone = false;
+    let separatedReasoning = false;
 
     const consumeEvent = (rawEvent: string): boolean => {
       const dataLines = rawEvent
@@ -181,15 +182,22 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       }
       const choice = (
         json as {
-          choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[];
+        choices?: {
+          delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown };
+          finish_reason?: unknown;
+        }[];
         }
       )?.choices?.[0];
       const reason = choice?.finish_reason;
       if (typeof reason === 'string' && reason !== '') finishReason = reason;
+      if (full === '') {
+        separatedReasoning ||= typeof choice?.delta?.reasoning_content === 'string' ||
+          typeof choice?.delta?.reasoning === 'string';
+      }
       const delta = choice?.delta?.content;
       if (typeof delta === 'string' && delta !== '') {
         full += delta;
-        onDelta(delta);
+        onDelta(delta, separatedReasoning);
       }
       return false;
     };

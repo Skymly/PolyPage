@@ -1,5 +1,5 @@
 /**
- * chrome.runtime adapter for 网页翻译. Stream port stays here; NodeEntry does not.
+ * chrome.runtime adapter for content-script translations.
  */
 import { sendRuntime } from '../messaging/messages';
 import { STREAM_PORT_NAME } from '../messaging/messages';
@@ -12,13 +12,14 @@ export type TranslateItemsFn = (
     onDelta?: (key: string, delta: string) => void;
     pageLanguage?: string | null;
     domain?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<TranslateResults>;
 
 export const defaultRuntimeTranslateItems: TranslateItemsFn = async (items, opts) => {
   const domain = opts?.domain ?? (typeof location !== 'undefined' ? location.hostname : undefined);
   if (opts?.onDelta) {
-    return streamViaPort(items, opts.onDelta, domain);
+    return streamViaPort(items, opts.onDelta, domain, opts.signal);
   }
   return sendRuntime({
     type: 'translate',
@@ -32,28 +33,33 @@ function streamViaPort(
   items: TranslationItem[],
   onDelta: (key: string, delta: string) => void,
   domain?: string,
+  signal?: AbortSignal,
 ): Promise<TranslateResults> {
   return new Promise((resolve, reject) => {
-    let port: chrome.runtime.Port;
-    try {
-      port = chrome.runtime.connect({ name: STREAM_PORT_NAME });
-    } catch (e) {
-      reject(e instanceof Error ? e : new Error(String(e)));
-      return;
-    }
+    signal?.throwIfAborted();
+    const port = chrome.runtime.connect({ name: STREAM_PORT_NAME });
     const results: TranslateResults = { results: {}, errors: {} };
     let settled = false;
-    const finish = (): void => {
-      if (settled) return;
+    const close = (): boolean => {
+      if (settled) return false;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       try {
         port.disconnect();
       } catch {
         /* already closed */
       }
-      resolve(results);
+      return true;
     };
+    const finish = (): void => {
+      if (close()) resolve(results);
+    };
+    const abort = (): void => {
+      if (close()) reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     port.onMessage.addListener((raw: unknown) => {
+      if (settled) return;
       const msg = raw as StreamPortMessage;
       if (msg.type === 'delta') onDelta(msg.key, msg.delta);
       else if (msg.type === 'done') results.results[msg.key] = msg.text;
@@ -62,6 +68,7 @@ function streamViaPort(
       } else if (msg.type === 'finished') finish();
     });
     port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
       if (settled) return;
       for (const item of items) {
         if (results.results[item.key] === undefined && results.errors[item.key] === undefined) {
@@ -71,6 +78,10 @@ function streamViaPort(
       finish();
     });
     const init: StreamPortInit = { items, domain };
-    port.postMessage(init);
+    try {
+      port.postMessage(init);
+    } catch (error) {
+      if (close()) reject(error);
+    }
   });
 }

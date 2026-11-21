@@ -100,19 +100,22 @@
 
 ## 开发
 
+推荐 Node.js 24（支持范围见 `package.json` 的 `engines`）。运行完整网关验证需要 Windows、
+.NET 10 SDK 与 .NET 8 运行时（网关测试目标为 `net8.0`）。
+
 ```bash
-npm install
+npm ci
 npm run build        # 产出 dist/ 与 dist-firefox/
 npm run typecheck    # tsc --noEmit（strict）
 npm run test         # vitest（见命令输出）
 npm run smoke        # 无头 Edge 端到端冒烟（需已构建；含网关安装/卸载）
-npm run verify       # typecheck + test + build
-npm run verify:all   # verify + 网关 xunit + stdio 契约 + smoke
+npm run verify       # typecheck + test + build + 网关 xUnit
+npm run test:contract # 当前提交的网关 stdio 契约
+npm run verify:all   # verify + stdio 契约 + Edge smoke（不含 Firefox）
 
 # 网关
 dotnet build native-host/PolyPage.slnx
 dotnet test  native-host/PolyPage.slnx                     # 见命令输出
-node scripts/gateway-contract-test.mjs                     # 真实进程 stdio 协议测试
 ```
 
 加载扩展：
@@ -171,20 +174,33 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 
 ## 验证
 
-- `npm run typecheck`：strict TypeScript 零错误；
-- `npm run test`：见 `npm run test` 输出；
-- `npm run smoke`：见 `npm run smoke` 输出；
-- `dotnet test` + `gateway-contract-test.mjs`：见命令输出；
-- 手动联调清单记录于 `docs/VALIDATION-4.2.md`。
+- 常规 CI 在 Windows 跑 `npm ci`、`npm run verify` 和 `npm run test:contract`。
+- 发布前在 GitHub Actions 手动运行 [Browser validation](.github/workflows/browser-validation.yml)。
+  核对两个任务都运行在待发布提交：Edge 跑完整冒烟，Firefox 临时加载扩展，并通过同一提交编译的网关完成一次本地桩翻译。
+  两个任务各用独立托管 runner，不需要真实 Provider、密钥或 Whisper 权重。
+- 本机 `npm run smoke` 会临时注册和卸载测试网关；完整 Windows 浏览器验证优先放在上述托管 runner。
+- 历史发布验证与已知缺口见 [4.2 收口记录](docs/VALIDATION-4.2.md)。
 
 ## 已知限制
 
 - PDF 双栏 / 表格聚类仍为启发式，不承诺完美版面；
-- ASR 仅当后端声明 `transcribeStream` 且设置开启时边转写边出 cue；否则一次转写结束后再出。关闭即丢内存 cue，不导出 SRT/VTT；
+- 目前没有 Provider 实现 `transcribeStream`，ASR 在转写结束后一次性注入字幕；关闭即丢内存 cue，不导出 SRT/VTT；
 - DRM / 无法 `captureStream` 时报错并拒绝下载整段文件；不按 DRM 预先置灰入口，也不申请 tabCapture 或麦克风；
 - `subtitleSelectors` 为规则驱动，站点改版即失效（内置 YouTube 规则随版本更新）；
 - tesseract 默认只打包 `eng` + `chi_sim`；附加语言包可在 Options 下载；
 - 「译文模式」段落整体替换为纯文本（双语/段内模式保留标记结构）；
 - closed Shadow DOM 无法进入（浏览器限制）；
-- Firefox 可临时加载：网页六模式 + 划词必须可用；Native Host 4.1 做真联调，失败则降级。
-  Safari / 移动端 / AMO 上架不在 4.0 范围。
+- Firefox 可临时加载，Native Host 不可用时降级。Safari、移动端和 AMO 上架不在 4.2 范围。
+
+## 4.3 候选路线
+
+先通过 4.2 发布验证，再按下列顺序推进。以下均为待实施事项，不是 4.2 的交付承诺。
+
+| 顺序 | 范围 | 验收条件 |
+|---|---|---|
+| 1 | 真实 Whisper 联调 | 使用固定短音频、用户自装权重和 Windows 网关；记录后端、模型版本和命令，用真实转写验证时间戳、双语 cue 与关闭后的清理。无权重时明确标记未验证，不能用桩替代。 |
+| 2 | 纯 `<audio>` 字幕条 | 复用现有 cue 调度；覆盖播放、跳转、关闭和切换音源，并验证已有视频字幕不回退。 |
+| 3 | SRT 导出 | 仅导出用户主动触发的当前 cue；验证时间顺序、Unicode 与格式，不改写媒体或源字幕。 |
+| 4 | PDF 复杂版面 | 先补真实表格与双栏夹具；验证不跨单元格串段，并保留按行回退。 |
+
+流式 ASR 等实际后端提供 `transcribeStream` 后再立项；继续保留用户触发、不申请麦克风、不随扩展分发 Whisper 权重的约束。

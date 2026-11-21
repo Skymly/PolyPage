@@ -36,8 +36,8 @@ export interface TranslationContext {
   glossary?: string;
 }
 
-/** Incremental streaming callback. */
-export type StreamDeltaHandler = (delta: string) => void;
+/** `separatedReasoning` indicates the response uses a distinct reasoning channel. */
+export type StreamDeltaHandler = (delta: string, separatedReasoning?: boolean) => void;
 
 export interface TranslationProvider {
   readonly config: ProviderConfig;

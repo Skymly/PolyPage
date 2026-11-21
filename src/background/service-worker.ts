@@ -171,6 +171,7 @@ function activeProviderCapabilities(settings: Settings) {
 function buildContentSettings(s: Settings, tabUrl?: string): ContentSettings {
   const caps = activeProviderCapabilities(s);
   const vision = caps.vision;
+  const provider = s.providers.find((p) => p.id === s.activeProviderId);
   return {
     defaultDisplayMode: s.defaultDisplayMode,
     autoTranslate: s.autoTranslate,
@@ -183,6 +184,7 @@ function buildContentSettings(s: Settings, tabUrl?: string): ContentSettings {
     defaultTargetLanguage: s.defaultTargetLanguage,
     languageDetection: s.languageDetection,
     selectionSpeak: s.selectionSpeak,
+    selectionTargetLanguage: provider ? effectiveLanguages(s, provider).target : s.defaultTargetLanguage,
     imageTranslateEnabled: s.imageTranslate.enabled,
     imageTranslateTrigger: s.imageTranslate.trigger,
     visionSupported: vision,

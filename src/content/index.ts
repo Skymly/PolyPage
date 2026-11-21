@@ -401,6 +401,7 @@ function applyLoadedSettings(cs: ContentSettings): boolean {
   translator.blacklisted = blacklisted;
   selectionTranslator.setMode(cs.selectionTranslate);
   selectionTranslator.setSpeak(cs.selectionSpeak);
+  selectionTranslator.setStreamingTarget(cs.streamingSupported ? cs.selectionTargetLanguage : null);
   if (!blacklisted) {
     const ocrAvailable = cs.ocrAvailable ?? cs.visionSupported;
     imageController.configure({

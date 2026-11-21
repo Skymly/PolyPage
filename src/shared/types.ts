@@ -442,6 +442,7 @@ export interface ContentSettings {
   defaultTargetLanguage: string;
   languageDetection: LanguageDetectionMode;
   selectionSpeak: boolean;
+  selectionTargetLanguage: string;
   imageTranslateEnabled: boolean;
   imageTranslateTrigger: ImageTranslateTrigger;
   /** Active provider supports vision; image entries grey out otherwise. */
@@ -464,7 +465,7 @@ export interface ContentSettings {
   imageOverlayEnabled: boolean;
   /** 4.1: stream ASR cues when the backend supports it. */
   asrStreaming: boolean;
-  /** Active provider can stream text translation (hover). */
+  /** Active provider can stream text translation. */
   streamingSupported: boolean;
   /** Top-level tab hostname from sender.tab.url (M-51 cross-origin blacklist). */
   tabHostname?: string;

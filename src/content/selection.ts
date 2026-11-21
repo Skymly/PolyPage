@@ -13,6 +13,9 @@
 import { sendRuntime } from '../messaging/messages';
 import { SELECTION_MAX_LEN, SELECTION_MIN_LEN } from '../shared/constants';
 import type { SelectionTranslateMode } from '../shared/types';
+import { defaultRuntimeTranslateItems } from './runtimeTranslate';
+
+type PanelStatus = 'pending' | 'done' | 'error';
 
 const SEL_CSS = `
   .wt-sel-btn {
@@ -61,6 +64,7 @@ export class SelectionTranslator {
   private textEl: HTMLElement | null = null;
   private speakBtn: HTMLButtonElement | null = null;
   private markBtn: HTMLButtonElement | null = null;
+  private copyBtn: HTMLButtonElement | null = null;
   private mode: SelectionTranslateMode = 'always';
   private currentSelectionText = '';
   /** Last completed result, replayed by Alt+Q (spec 3.0 §8.3 item 2). */
@@ -69,6 +73,9 @@ export class SelectionTranslator {
   private lastPanelPos: { x: number; y: number } | null = null;
   private speakEnabled = false;
   private targetLanguage: string | null = null;
+  private streamingTarget: string | null = null;
+  private panelStatus: PanelStatus = 'pending';
+  private request: AbortController | null = null;
 
   setMode(mode: SelectionTranslateMode): void {
     this.mode = mode;
@@ -78,7 +85,11 @@ export class SelectionTranslator {
   /** 3.0: speak availability comes from settings + capability probe. */
   setSpeak(enabled: boolean): void {
     this.speakEnabled = enabled && typeof window.speechSynthesis !== 'undefined';
-    if (this.speakBtn) this.speakBtn.disabled = !this.speakEnabled;
+    if (this.speakBtn) this.speakBtn.disabled = !this.speakEnabled || this.panelStatus !== 'done';
+  }
+
+  setStreamingTarget(target: string | null): void {
+    this.streamingTarget = target;
   }
 
   start(): void {
@@ -91,6 +102,7 @@ export class SelectionTranslator {
   }
 
   destroy(): void {
+    this.cancelTranslation();
     document.removeEventListener('mouseup', this.onMouseUp, true);
     document.removeEventListener('keyup', this.onKeyUp, true);
     document.removeEventListener('mousedown', this.onMouseDown, true);
@@ -146,7 +158,6 @@ export class SelectionTranslator {
     this.currentSelectionText = text;
     this.ensureHost();
     this.positionAtSelection();
-    this.showPanel('翻译中…', false);
     void this.translate(text);
     return true;
   }
@@ -160,17 +171,21 @@ export class SelectionTranslator {
     const text = this.readSelection();
     if (text) return this.translateCurrentSelection();
     if (!this.lastResult) return false;
+    this.cancelTranslation();
     this.ensureHost();
     if (this.lastPanelPos && this.host) {
       this.host.style.transform = `translate(${this.lastPanelPos.x}px, ${this.lastPanelPos.y}px)`;
     } else {
       this.host!.style.transform = `translate(${Math.round(window.innerWidth / 2 - 160)}px, 90px)`;
     }
-    this.showPanel(this.lastResult.translated, false);
+    this.currentSelectionText = this.lastResult.source;
+    this.targetLanguage = this.lastResult.language;
+    this.showPanel(this.lastResult.translated, 'done');
     return true;
   }
 
   private checkSelection(): void {
+    if (this.mode === 'off') return;
     const text = this.readSelection();
     if (!text) {
       this.hideAll();
@@ -226,7 +241,6 @@ export class SelectionTranslator {
 
     button.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.showPanel('翻译中…', false);
       void this.translate(this.currentSelectionText);
     });
     copyBtn.addEventListener('click', (e) => {
@@ -252,8 +266,8 @@ export class SelectionTranslator {
     });
     markBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const translated = textEl.classList.contains('error') ? '' : (textEl.textContent ?? '');
-      if (translated === '' || translated === '翻译中…') return;
+      const translated = textEl.textContent ?? '';
+      if (this.panelStatus !== 'done' || translated === '') return;
       void sendRuntime({
         type: 'mark-feedback',
         source: this.currentSelectionText,
@@ -272,6 +286,7 @@ export class SelectionTranslator {
     this.textEl = textEl;
     this.speakBtn = speakBtn;
     this.markBtn = markBtn;
+    this.copyBtn = copyBtn;
   }
 
   private positionAtSelection(): void {
@@ -288,27 +303,32 @@ export class SelectionTranslator {
   }
 
   private showButton(): void {
+    this.cancelTranslation();
     if (!this.button || !this.panel) return;
     this.panel.style.display = 'none';
     this.button.style.display = 'block';
     this.button.style.transform = 'translate(-28px, 0)';
   }
 
-  private showPanel(text: string, isError: boolean): void {
+  private showPanel(text: string, status: PanelStatus): void {
     if (!this.button || !this.panel || !this.textEl) return;
+    this.panelStatus = status;
     this.button.style.display = 'none';
     this.panel.style.display = 'block';
     this.panel.style.transform = 'translate(-100%, 0)';
+    this.panel.setAttribute('aria-busy', String(status === 'pending'));
     this.textEl.textContent = text;
-    this.textEl.classList.toggle('error', isError);
-    if (this.markBtn) this.markBtn.style.display = isError ? 'none' : '';
-    if (this.speakBtn) {
-      const speakable = !isError && text !== '翻译中…';
-      this.speakBtn.disabled = !this.speakEnabled || !speakable;
+    this.textEl.classList.toggle('error', status === 'error');
+    if (this.markBtn) {
+      this.markBtn.style.display = status === 'error' ? 'none' : '';
+      this.markBtn.disabled = status !== 'done';
     }
+    if (this.copyBtn) this.copyBtn.disabled = status === 'pending';
+    if (this.speakBtn) this.speakBtn.disabled = !this.speakEnabled || status !== 'done';
   }
 
   private hideAll(): void {
+    this.cancelTranslation();
     if (this.button) this.button.style.display = 'none';
     if (this.panel) this.panel.style.display = 'none';
     try {
@@ -342,22 +362,52 @@ export class SelectionTranslator {
 
   /* -------------------------------- translation ------------------------------- */
 
+  private cancelTranslation(): void {
+    this.request?.abort();
+    this.request = null;
+  }
+
   private async translate(text: string): Promise<void> {
+    this.cancelTranslation();
+    const request = new AbortController();
+    this.request = request;
+    this.showPanel('翻译中…', 'pending');
     try {
-      const res = await sendRuntime({
-        type: 'translate-selection',
-        text,
-        domain: location.hostname,
-      });
-      if (res?.ok && res.translated !== undefined) {
-        this.targetLanguage = res.language ?? null;
-        this.lastResult = { source: text, translated: res.translated, language: res.language ?? null };
-        this.showPanel(res.translated, false);
-      } else {
-        this.showPanel(`翻译失败：${res?.error ?? '未知错误'}`, true);
-      }
+      const result = await this.requestTranslation(text, request.signal);
+      if (request.signal.aborted) return;
+      this.targetLanguage = result.language;
+      this.lastResult = { source: text, ...result };
+      this.showPanel(result.translated, 'done');
     } catch (e) {
-      this.showPanel(`翻译失败：${e instanceof Error ? e.message : String(e)}`, true);
+      if (!request.signal.aborted) {
+        this.showPanel(`翻译失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+      }
+    } finally {
+      if (this.request === request) this.request = null;
     }
+  }
+
+  private async requestTranslation(text: string, signal: AbortSignal): Promise<{
+    translated: string;
+    language: string | null;
+  }> {
+    const language = this.streamingTarget;
+    if (language !== null) {
+      const key = 'selection';
+      let partial = '';
+      const { results, errors } = await defaultRuntimeTranslateItems([{ key, text }], {
+        signal,
+        onDelta: (deltaKey, delta) => {
+          if (deltaKey !== key || !this.textEl) return;
+          partial += delta;
+          this.textEl.textContent = partial;
+        },
+      });
+      if (results[key] === undefined) throw new Error(errors[key]?.message ?? '未知错误');
+      return { translated: results[key], language };
+    }
+    const res = await sendRuntime({ type: 'translate-selection', text, domain: location.hostname });
+    if (!res?.ok || res.translated === undefined) throw new Error(res?.error ?? '未知错误');
+    return { translated: res.translated, language: res.language ?? null };
   }
 }

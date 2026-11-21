@@ -29,7 +29,7 @@ const CANDIDATES = [
 ].filter(Boolean);
 const FIREFOX = CANDIDATES.find((p) => existsSync(p));
 const MARIONETTE_PORT = Number(process.env.MARIONETTE_PORT || 28288);
-const OVERALL_MS = Number(process.env.FX_CHECK_TIMEOUT_MS || 55000);
+const OVERALL_MS = Number(process.env.FX_CHECK_TIMEOUT_MS || 90000);
 const HOST_NAME = process.env.FX_GATEWAY_HOST_NAME || 'com.skymly.polypage.gateway';
 const EXPECTED_TRANSLATION = process.env.FX_GATEWAY_EXPECTED_TRANSLATION;
 
@@ -130,7 +130,15 @@ if (!existsSync(path.join(addonDir, 'manifest.json'))) {
 const profile = mkdtempSync(path.join(tmpdir(), 'polypage-fx-'));
 writeFileSync(
   path.join(profile, 'user.js'),
-  `user_pref("marionette.enabled", true);\nuser_pref("marionette.port", ${MARIONETTE_PORT});\nuser_pref("xpinstall.signatures.required", false);\nuser_pref("extensions.autoDisableScopes", 0);\n`,
+  [
+    'user_pref("marionette.enabled", true);',
+    `user_pref("marionette.port", ${MARIONETTE_PORT});`,
+    'user_pref("xpinstall.signatures.required", false);',
+    'user_pref("extensions.autoDisableScopes", 0);',
+    'user_pref("termsofuse.bypassNotification", true);',
+    'user_pref("browser.shell.checkDefaultBrowser", false);',
+    '',
+  ].join('\n'),
 );
 const child = spawn(FIREFOX, [
   '--marionette',
@@ -139,7 +147,12 @@ const child = spawn(FIREFOX, [
   '--remote-allow-system-access',
   '-profile',
   profile,
-], { stdio: 'ignore' });
+  'about:blank',
+], {
+  stdio: 'ignore',
+  // Recent Firefox releases require this even with --remote-allow-system-access.
+  env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
+});
 
 function kill() {
   try { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* */ }
@@ -163,7 +176,7 @@ try {
   console.log('connecting marionette on', MARIONETTE_PORT);
   fox = await Marionette.connect(MARIONETTE_PORT);
   console.log('marionette connected');
-  await fox.send('WebDriver:NewSession', { capabilities: { alwaysMatch: { acceptInsecureCerts: true } } }, 15000);
+  await fox.send('WebDriver:NewSession', { capabilities: { alwaysMatch: { acceptInsecureCerts: true } } }, 45000);
   console.log('session created');
   const installed = unwrapMarionette(await fox.send('Addon:Install', { path: addonDir, temporary: true }));
   console.log('ADDON', JSON.stringify(installed));

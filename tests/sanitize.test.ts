@@ -102,15 +102,33 @@ describe('minimaxHostHint', () => {
 
 describe('createThinkDeltaFilter (M-60)', () => {
   it('holds back unclosed think and emits the visible suffix after close', () => {
-    const filter = createThinkDeltaFilter();
+    const filter = createThinkDeltaFilter(false);
     expect(filter('<think>secret')).toBe('');
     expect(filter(' more')).toBe('');
     expect(filter('</think>开源')).toBe('开源');
   });
 
   it('forwards plain text immediately', () => {
-    const filter = createThinkDeltaFilter();
+    const filter = createThinkDeltaFilter(true);
     expect(filter('hello ')).toBe('hello ');
     expect(filter('world')).toBe('world');
+  });
+
+  it.each([false, true])('holds a think tag across deltas (unmarked preview: %s)', (allowUnmarkedText) => {
+    const filter = createThinkDeltaFilter(allowUnmarkedText);
+    expect(['<', 'TH', 'INK id="a"', '>secret', '</th', 'ink>译'].map((chunk) => filter(chunk)))
+      .toEqual(['', '', '', '', '', '译']);
+  });
+
+  it('holds an unmarked prefix until the orphan closing tag is complete', () => {
+    const filter = createThinkDeltaFilter(false);
+    expect(['internal', ' reasoning\n', '</th', 'ink>你', '好'].map((chunk) => filter(chunk)))
+      .toEqual(['', '', '', '你', '好']);
+  });
+
+  it('allows immediate answer text on a separated reasoning stream', () => {
+    const filter = createThinkDeltaFilter(false);
+    expect(filter('你', true)).toBe('你');
+    expect(filter('好')).toBe('好');
   });
 });

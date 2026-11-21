@@ -684,19 +684,19 @@ export class TranslationPipeline {
       const fingerprint = cacheFingerprint(providerConfig);
       let full: string;
       const streaming = providerSupportsStreaming(instance);
-      const deltaFilter = emitDeltas ? createThinkDeltaFilter() : null;
-      const pushDelta = (delta: string): void => {
+      // Selection previews wait for a known answer boundary. The existing
+      // hover path also holds incomplete tags and never emits a corrective append.
+      const deltaFilter = emitDeltas ? createThinkDeltaFilter(item.key !== 'selection') : null;
+      const pushDelta = (delta: string, separatedReasoning?: boolean): void => {
         if (!deltaFilter) return;
-        const piece = deltaFilter(delta);
+        const piece = deltaFilter(delta, separatedReasoning);
         if (piece) item.onDelta?.(piece);
       };
       if (streaming && typeof instance.translateStream === 'function') {
         full = await instance.translateStream(
           item.text,
           ctx,
-          (delta) => {
-            pushDelta(delta);
-          },
+          pushDelta,
           controller.signal,
         );
       } else {

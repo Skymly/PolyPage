@@ -47,6 +47,24 @@ public class WhisperBackendTests : IDisposable
     }
 
     [Fact]
+    public async Task AcceptsPlainWhisperTranscriptOnStdout()
+    {
+        var backend = Cli("transcribe.mjs", "process.stdout.write('  Ask not what your country can do for you.\\n');");
+        var result = await backend.TranscribeAsync(new byte[] { 1 }, "audio/webm", new TranslateContext("en", "zh"), CancellationToken.None);
+        Assert.Equal("Ask not what your country can do for you.", result?.Text);
+        Assert.Null(result?.Segments);
+    }
+
+    [Fact]
+    public async Task EmptyStdoutIsAnInvalidResponse()
+    {
+        var backend = Cli("empty.mjs", "process.stdout.write('  \\n');");
+        var error = await Assert.ThrowsAsync<GatewayBackendException>(
+            () => backend.TranscribeAsync(new byte[] { 1 }, "audio/webm", new TranslateContext("en", "zh"), CancellationToken.None));
+        Assert.Equal(RpcCodes.InvalidResponse, error.RpcCode);
+    }
+
+    [Fact]
     public async Task ConcurrentStderrFloodDoesNotDeadlock()
     {
         var backend = Cli(

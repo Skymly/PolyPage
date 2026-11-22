@@ -10,6 +10,7 @@ import {
   DEFAULT_NATIVE_HOST_NAME,
   DEFAULT_SYSTEM_PROMPT,
   DEFAULT_USER_PROMPT,
+  OPENCODE_GO_DEFAULT_MODEL,
 } from '../shared/constants';
 import type { ProviderConfig, ProviderType } from '../shared/types';
 import { defaultProvider } from '../shared/constants';
@@ -51,6 +52,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     type: 'openai-compatible',
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
+    needsApiKey: true,
+  },
+  {
+    id: 'preset-opencode-go',
+    name: 'OpenCode Go',
+    description: '订阅 API，支持模型列表和额度查询',
+    type: 'opencode-go',
+    baseUrl: DEFAULT_BASE_URLS['opencode-go'],
+    model: OPENCODE_GO_DEFAULT_MODEL,
     needsApiKey: true,
   },
   {
@@ -162,6 +172,7 @@ export function presetToProvider(preset: ProviderPreset, id: string, name?: stri
     provider.systemPrompt = preset.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     provider.userPromptTemplate = preset.userPromptTemplate ?? DEFAULT_USER_PROMPT;
   }
+  if (preset.type === 'opencode-go') provider.autoRefreshQuota = true;
   if (preset.type === 'custom-http') {
     provider.method = 'POST';
     provider.bodyTemplate = preset.bodyTemplate ?? '';

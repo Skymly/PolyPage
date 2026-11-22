@@ -47,6 +47,7 @@ import type {
   OcrSegment,
   PageState,
   ProviderConfig,
+  ProviderModel,
   ProviderStats,
   Settings,
   SettingsSummary,
@@ -54,6 +55,7 @@ import type {
   TranslationItem,
   ViewerSettings,
 } from '../shared/types';
+import type { OpenCodeGoQuotaStatus } from '../providers/opencode-go';
 
 export const PROTOCOL_VERSION = 6;
 
@@ -88,6 +90,8 @@ export type RuntimeMessage =
   | { type: 'set-selection-translate'; v?: number; enabled: boolean }
   | { type: 'get-viewer-settings'; v?: number }
   | { type: 'test-provider'; v?: number; provider: ProviderConfig }
+  | { type: 'list-provider-models'; v?: number; provider: ProviderConfig }
+  | { type: 'opencode-go-quota'; v?: number; providerId: string; apiKey: string; refresh?: boolean }
   | { type: 'get-cache-stats'; v?: number }
   | { type: 'clear-cache'; v?: number }
   | { type: 'get-error-log'; v?: number }
@@ -152,6 +156,8 @@ export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'set-selection-translate' } ? { ok: boolean; error?: string } :
   M extends { type: 'get-viewer-settings' } ? ViewerSettings :
   M extends { type: 'test-provider' } ? { ok: boolean; result?: string; latencyMs?: number; error?: string } :
+  M extends { type: 'list-provider-models' } ? { ok: true; models: ProviderModel[] } | { ok: false; error: string } :
+  M extends { type: 'opencode-go-quota' } ? { ok: true; status: OpenCodeGoQuotaStatus | null } | { ok: false; error: string } :
   M extends { type: 'get-cache-stats' } ? { entries: number } :
   M extends { type: 'clear-cache' } ? { ok: true } :
   M extends { type: 'get-error-log' } ? { entries: ErrorLogEntry[] } :

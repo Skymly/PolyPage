@@ -42,6 +42,7 @@ export function buildContext(
 export function isProviderConfigured(provider: ProviderConfig): boolean {
   if (!provider.enabled) return false;
   if (provider.type === 'native-host') return (provider.hostName ?? '').trim() !== '';
+  if (provider.type === 'opencode-go') return provider.apiKey.trim() !== '' && provider.model.trim() !== '';
   return provider.baseUrl.trim() !== '';
 }
 

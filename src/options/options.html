@@ -120,113 +120,45 @@
         </section>
 
         <section id="providers" class="card">
-          <h2>翻译服务（Provider）</h2>
-          <p class="hint">
-            支持 OpenAI-compatible / DeepL / Azure / Google / 自定义 HTTP / 本地网关。翻译请求由后台统一发出，API
-            Key 不会暴露给页面脚本。
-          </p>
-          <div class="btn-row">
-            <label for="preset-select">从预设创建：</label>
-            <select id="preset-select"></select>
-            <button id="add-from-preset" class="btn">+ 创建</button>
+          <div class="provider-heading">
+            <h2>翻译服务</h2>
+            <button id="add-provider" type="button" class="btn btn-primary" aria-expanded="false" aria-controls="provider-presets">+ 添加服务</button>
+          </div>
+          <div id="provider-presets" class="provider-presets hidden">
+            <div id="provider-preset-list" class="provider-preset-list"></div>
+            <div class="provider-custom-actions">
+              <button id="add-openai" type="button" class="btn">自定义 OpenAI 兼容接口</button>
+              <button id="add-custom" type="button" class="btn">自定义 HTTP API</button>
+            </div>
           </div>
           <div id="provider-list" class="provider-list"></div>
-          <div class="btn-row">
-            <button id="add-openai" class="btn">+ OpenAI-compatible</button>
-            <button id="add-custom" class="btn">+ 自定义 HTTP API</button>
-            <button id="add-native" class="btn">+ 本地网关 (native-host)</button>
-          </div>
 
           <div id="editor" class="editor hidden">
-            <h3 id="editor-title">编辑 Provider</h3>
-            <div class="grid">
-              <div class="field">
-                <label>名称</label>
-                <input id="f-name" type="text" />
-              </div>
-              <div class="field">
-                <label>类型</label>
-                <select id="f-type">
-                  <option value="openai-compatible">openai-compatible</option>
-                  <option value="custom-http">custom-http</option>
-                  <option value="deepl">deepl</option>
-                  <option value="azure-translator">azure-translator</option>
-                  <option value="google-translate">google-translate</option>
-                  <option value="native-host">native-host</option>
-                </select>
-              </div>
+            <h3 id="editor-title" tabindex="-1"></h3>
+            <div class="grid provider-essentials">
               <div class="field" id="field-baseurl">
-                <label>Base URL</label>
+                <label for="f-baseurl">Base URL</label>
                 <input id="f-baseurl" type="text" placeholder="https://api.openai.com/v1" />
-                <p class="hint">
-                  直连本地 Ollama 时浏览器会带上 chrome-extension Origin。若测试返回 HTTP 403，请设置环境变量
-                  OLLAMA_ORIGINS=* 后从托盘退出并重启 Ollama。本地端点无需 API Key，自定义请求头请留空。
+                <p id="ollama-origin-hint" class="hint" hidden>
+                  Ollama 若返回 HTTP 403，请设置 <code>OLLAMA_ORIGINS=*</code> 后重启 Ollama。
                 </p>
                 <p id="minimax-host-hint" class="hint" hidden></p>
               </div>
               <div class="field" id="field-apikey">
-                <label>API Key</label>
-                <input id="f-apikey" type="password" placeholder="sk-..." />
+                <label for="f-apikey">API Key</label>
+                <input id="f-apikey" type="password" placeholder="粘贴 API Key" autocomplete="off" />
               </div>
               <div class="field" id="field-model">
-                <label>模型</label>
-                <input id="f-model" type="text" placeholder="gpt-4o-mini" />
-              </div>
-              <div class="field">
-                <label>源语言（留空用默认）</label>
-                <input id="f-source" type="text" placeholder="auto" />
-              </div>
-              <div class="field">
-                <label>目标语言（留空用默认）</label>
-                <input id="f-target" type="text" placeholder="简体中文" />
-              </div>
-              <div class="field">
-                <label>超时（毫秒）</label>
-                <input id="f-timeout" type="number" min="1000" max="600000" step="1000" />
-              </div>
-              <div class="field">
-                <label>单批最大条数</label>
-                <input id="f-batch-items" type="number" min="1" max="100" step="1" />
-              </div>
-              <div class="field">
-                <label>单批最大字符数</label>
-                <input id="f-batch-chars" type="number" min="100" max="100000" step="100" />
-              </div>
-            </div>
-
-            <div class="field" id="field-system-prompt">
-              <label>System Prompt（可用变量：{{sourceLanguage}} {{targetLanguage}} {{domain}} {{glossary}}）</label>
-              <textarea id="f-system-prompt" rows="6"></textarea>
-            </div>
-            <div class="field" id="field-user-prompt">
-              <label>User Prompt 模板（变量：{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}}）</label>
-              <textarea id="f-user-prompt" rows="4"></textarea>
-            </div>
-            <div class="grid">
-              <div class="field" id="field-temperature">
-                <label>Temperature</label>
-                <input id="f-temperature" type="number" min="0" max="2" step="0.1" />
-              </div>
-              <div class="field" id="field-maxtokens">
-                <label>Max Tokens</label>
-                <input id="f-maxtokens" type="number" min="1" max="200000" step="1" />
-              </div>
-            </div>
-            <div class="field">
-              <label>自定义请求头（JSON，可选）</label>
-              <textarea id="f-headers" rows="2" placeholder='{"X-Custom-Header": "value"}'></textarea>
-              <div id="headers-error" class="field-error hidden"></div>
-            </div>
-            <div class="field-row">
-              <label class="checkbox"><input type="checkbox" id="f-enabled" /> 启用</label>
-            </div>
-            <div id="openai-capability-fields" class="hidden">
-              <h4>能力（openai-compatible）</h4>
-              <p class="hint">类上始终有方法。入口是否亮起以这里为准。纯文本端点请保持视觉/转写关闭。</p>
-              <div class="field-row">
-                <label class="checkbox"><input type="checkbox" id="f-supports-streaming" /> 流式翻译（SSE）</label>
-                <label class="checkbox"><input type="checkbox" id="f-supports-vision" /> 视觉翻译</label>
-                <label class="checkbox"><input type="checkbox" id="f-supports-asr" /> 转写</label>
+                <div class="provider-heading">
+                  <label id="provider-model-label" for="f-model">模型</label>
+                  <div id="provider-model-actions" class="provider-model-actions hidden">
+                    <button id="provider-model-fetch" type="button" class="btn">获取模型列表</button>
+                    <button id="provider-model-mode" type="button" class="text-btn">手动输入</button>
+                  </div>
+                </div>
+                <input id="f-model" type="text" placeholder="gpt-4o-mini" spellcheck="false" />
+                <select id="provider-model-select" class="hidden"></select>
+                <p id="provider-model-status" class="hint" role="status"></p>
               </div>
             </div>
 
@@ -311,10 +243,102 @@
               <p class="hint">网关凭据保存在本机网关进程中，浏览器侧不保存任何后端密钥。</p>
             </div>
 
-            <div class="btn-row">
-              <button id="test-provider" class="btn">测试连接</button>
-              <span id="test-result" class="test-result"></span>
+            <div class="provider-actions">
+              <button id="test-provider" type="button" class="btn">测试连接</button>
+              <button id="save-provider" type="button" class="btn btn-primary">保存设置并使用</button>
             </div>
+            <p id="test-result" class="test-result provider-result" role="status"></p>
+            <section id="opencode-go-quota" class="hidden" aria-labelledby="opencode-go-quota-heading">
+              <div class="provider-heading">
+                <h4 id="opencode-go-quota-heading">订阅额度</h4>
+                <button id="opencode-go-quota-refresh" type="button" class="btn">立即查询</button>
+              </div>
+              <dl id="opencode-go-quota-windows" class="opencode-go-quota-windows" hidden></dl>
+              <div class="provider-quota-footer">
+                <p id="opencode-go-quota-status" class="hint" role="status"></p>
+                <label><input type="checkbox" id="f-auto-refresh-quota" /> 每 <span id="opencode-go-quota-minutes"></span> 分钟刷新</label>
+              </div>
+            </section>
+
+            <details id="provider-advanced" class="provider-advanced">
+              <summary>高级设置</summary>
+              <div class="provider-advanced-fields">
+                <div class="grid">
+                  <div class="field">
+                    <label for="f-name">名称</label>
+                    <input id="f-name" type="text" />
+                  </div>
+                  <div class="field">
+                    <label for="f-type">类型</label>
+                    <select id="f-type">
+                      <option value="openai-compatible">openai-compatible</option>
+                      <option value="opencode-go">OpenCode Go</option>
+                      <option value="custom-http">custom-http</option>
+                      <option value="deepl">deepl</option>
+                      <option value="azure-translator">azure-translator</option>
+                      <option value="google-translate">google-translate</option>
+                      <option value="native-host">native-host</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>源语言（留空用默认）</label>
+                    <input id="f-source" type="text" placeholder="auto" />
+                  </div>
+                  <div class="field">
+                    <label>目标语言（留空用默认）</label>
+                    <input id="f-target" type="text" placeholder="简体中文" />
+                  </div>
+                  <div class="field">
+                    <label>超时（毫秒）</label>
+                    <input id="f-timeout" type="number" min="1000" max="600000" step="1000" />
+                  </div>
+                  <div class="field">
+                    <label>单批最大条数</label>
+                    <input id="f-batch-items" type="number" min="1" max="100" step="1" />
+                  </div>
+                  <div class="field">
+                    <label>单批最大字符数</label>
+                    <input id="f-batch-chars" type="number" min="100" max="100000" step="100" />
+                  </div>
+                </div>
+
+                <div class="field" id="field-system-prompt">
+                  <label>System Prompt（可用变量：{{sourceLanguage}} {{targetLanguage}} {{domain}} {{glossary}}）</label>
+                  <textarea id="f-system-prompt" rows="6"></textarea>
+                </div>
+                <div class="field" id="field-user-prompt">
+                  <label>User Prompt 模板（变量：{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}}）</label>
+                  <textarea id="f-user-prompt" rows="4"></textarea>
+                </div>
+                <div class="grid">
+                  <div class="field" id="field-temperature">
+                    <label>Temperature</label>
+                    <input id="f-temperature" type="number" min="0" max="2" step="0.1" />
+                  </div>
+                  <div class="field" id="field-maxtokens">
+                    <label>Max Tokens</label>
+                    <input id="f-maxtokens" type="number" min="1" max="200000" step="1" />
+                  </div>
+                </div>
+                <div class="field" id="field-headers">
+                  <label>自定义请求头（JSON，可选）</label>
+                  <textarea id="f-headers" rows="2" placeholder='{"X-Custom-Header": "value"}'></textarea>
+                  <div id="headers-error" class="field-error hidden"></div>
+                </div>
+                <div class="field-row">
+                  <label class="checkbox"><input type="checkbox" id="f-enabled" /> 启用</label>
+                </div>
+                <div id="openai-capability-fields" class="hidden">
+                  <h4>翻译能力</h4>
+                  <p id="openai-capability-hint" class="hint">纯文本端点请保持视觉和转写关闭。</p>
+                  <div class="field-row">
+                    <label class="checkbox"><input type="checkbox" id="f-supports-streaming" /> 流式翻译（SSE）</label>
+                    <label id="field-supports-vision" class="checkbox"><input type="checkbox" id="f-supports-vision" /> 视觉翻译</label>
+                    <label id="field-supports-asr" class="checkbox"><input type="checkbox" id="f-supports-asr" /> 转写</label>
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
         </section>
 

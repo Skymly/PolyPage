@@ -131,12 +131,12 @@ dotnet test  native-host/PolyPage.slnx                     # 见命令输出
 
 ## 配置翻译服务
 
-设置页 → 「翻译服务」。**从预设创建**后通常只需填 API Key。多个 Provider 可共存，
-单选当前生效；另可配置**故障转移链**。
+设置页 → 「翻译服务」→ 「添加服务」，选择预设会自动填入服务地址。支持模型列表的服务可填入 API Key 后点「获取模型列表」，再选模型并保存。也可手动输入模型 ID，或添加自定义 OpenAI 兼容接口。多个 Provider 可共存，可选择当前服务并配置**故障转移链**。
 
 - **openai-compatible**：`POST {baseUrl}/chat/completions`，支持 SSE 流式、MiniMax Token Plan（`api.minimax.chat` / MiniMax-M3 视觉）、
 
   **视觉翻译（image_url）** 与 **`/audio/transcriptions` 转写**；本地端点免 API Key。
+- **OpenCode Go** 使用已订阅工作区的个人 API Key。订阅额度显示 5 小时、每周和每月的剩余百分比及重置时间，可立即查询，也可在浏览器运行期间每 15 分钟自动刷新。OpenCode Go 官方主要面向编程客户端，翻译请求的可用性以连接测试为准。[OpenCode Go 官方说明](https://opencode.ai/docs/console/go/#where-can-i-use-it)
 - **deepl / azure-translator / google-translate**：各自官方端点与鉴权。
 - **custom-http**：Body 模板 + 响应路径。
 - **native-host**：经本地 .NET 网关路由到 Ollama / HTTP / Whisper。协议 1 旧网关

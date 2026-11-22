@@ -21,6 +21,7 @@ import {
   BUILTIN_SITE_RULES,
   DEFAULT_ASR_MAX_SECONDS,
   DEFAULT_ASR_MAX_UPLOAD_MB,
+  DEFAULT_BASE_URLS,
   DEFAULT_IMAGE_MAX_EDGE_PX,
   DEFAULT_INLINE_BUDGET,
   DEFAULT_NATIVE_HOST_NAME,
@@ -93,6 +94,7 @@ export function applyFullSettingsSave(
 
 const PROVIDER_TYPES: ProviderType[] = [
   'openai-compatible',
+  'opencode-go',
   'custom-http',
   'deepl',
   'azure-translator',
@@ -425,6 +427,14 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
     provider.supportsVision = r.supportsVision === true;
     provider.supportsAsr = r.supportsAsr === true;
     provider.supportsStreaming = r.supportsStreaming !== false;
+  }
+  if (type === 'opencode-go') {
+    provider.baseUrl = DEFAULT_BASE_URLS['opencode-go'];
+    provider.apiKey = provider.apiKey.trim();
+    provider.model = provider.model.trim().replace(/^opencode-go\//, '');
+    provider.headers = {};
+    provider.supportsStreaming = r.supportsStreaming !== false;
+    provider.autoRefreshQuota = r.autoRefreshQuota !== false;
   }
   return provider;
 }

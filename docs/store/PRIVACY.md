@@ -16,6 +16,7 @@ PolyPage **不运营账号、不同步云端配置、不把页面内容发到开
    存在浏览器 `chrome.storage`（本机）。API Key 明文存在扩展后台存储，不出现在内容脚本、Popup 或 PDF 阅读器。Options 导出 JSON 默认抹掉 `apiKey` 与自定义 `headers`。
 3. **可选本机网关**  
    若用户安装 Native Messaging 网关，音频 / 图片经本机进程转发到用户配置的后端（Ollama、whisper.cpp、HTTP Whisper 等）。网关不内嵌、不分发模型权重。
+4. **模型列表与订阅额度**。获取模型列表时，扩展向所选服务的模型目录发送请求，并按接口要求使用该服务的 API Key。手动或定期查询 OpenCode Go 额度时，个人 API Key 发给 OpenCode Go 的额度接口，查询结果保存在本机。
 
 ## 我们不收集
 

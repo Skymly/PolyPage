@@ -4,9 +4,11 @@
  */
 import { kindedFailure, protocolVersionOk, sendTabCommand } from '../messaging/messages';
 import type { RuntimeMessage } from '../messaging/messages';
+import { listProviderModels } from '../providers/modelCatalog';
 import { toProviderError } from '../providers/provider';
 // Register provider factories before handling browser events.
 import '../providers/openai-compatible';
+import '../providers/opencode-go';
 import '../providers/custom-http';
 import '../providers/deepl';
 import '../providers/azure-translator';
@@ -23,13 +25,14 @@ import {
   loadFeedbackLog,
   sanitizeFeedbackPageUrl,
 } from '../storage/feedback';
-import { applyFullSettingsSave, normalizeSettings, saveSettings } from '../storage/settings';
+import { applyFullSettingsSave, normalizeProvider, normalizeSettings, saveSettings } from '../storage/settings';
 import { effectiveLanguages, isProviderConfigured } from '../translation/context';
 import { cancelAsr, handleAsrStart } from './asrRequests';
 import { registerContextMenus, setupContextMenus } from './contextMenus';
 import { logError, snapshotStats } from './diagnostics';
 import { activeProviderCapabilities, ensureGatewayProbed, hostStatus } from './gatewayStatus';
 import { cancelOcr, downloadOcrPack, handleOcrRequest, ocrPackStatus, removeOcrPack } from './ocrRequests';
+import { openCodeGoQuotaStatus, startOpenCodeGoQuotaMonitor } from './opencodeGoQuota';
 import { handlePdfOpen, pdfProgressByTab, registerPdfAutoOpen } from './pdfRequests';
 import { PRIVILEGED_SETTINGS_DENIED, extensionOriginOf, isExtensionPageSender } from './privilegedSender';
 import { tabIdForTranslate } from './recoverInflight';
@@ -50,6 +53,7 @@ registerTabCleanup(cancelTranslations);
 registerTranslationPort();
 registerContextMenus();
 registerPdfAutoOpen();
+startOpenCodeGoQuotaMonitor();
 
 chrome.runtime.onMessage.addListener(
   (message: RuntimeMessage, sender: chrome.runtime.MessageSender, sendResponse) => {
@@ -186,6 +190,28 @@ chrome.runtime.onMessage.addListener(
             }
             sendResponse(await handleTestProvider(message.provider));
             break;
+          case 'list-provider-models': {
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
+            const provider = normalizeProvider(message.provider);
+            if (!provider) {
+              sendResponse(kindedFailure('config', '翻译服务配置无效'));
+              break;
+            }
+            sendResponse({ ok: true, models: await listProviderModels(provider) });
+            break;
+          }
+          case 'opencode-go-quota': {
+            if (!isExtensionPageSender(sender, extensionOrigin)) {
+              sendResponse({ ok: false, error: PRIVILEGED_SETTINGS_DENIED });
+              break;
+            }
+            const status = await openCodeGoQuotaStatus(message.providerId, message.apiKey, message.refresh === true);
+            sendResponse({ ok: true, status });
+            break;
+          }
           case 'get-cache-stats':
             sendResponse(await cacheStats());
             break;

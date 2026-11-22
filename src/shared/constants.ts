@@ -154,9 +154,15 @@ export const DEFAULT_TM_MAX_ENTRIES = 5000;
 /** Default tesseract language packs (spec 4.0 §9.3). */
 export const DEFAULT_TESS_LANGS: string[] = ['eng', 'chi_sim'];
 
+export const OPENCODE_GO_URL = 'https://opencode.ai/inference/go';
+export const OPENCODE_GO_DEFAULT_MODEL = 'glm-5.3-flash';
+export const OPENCODE_GO_QUOTA_MINUTES = 15;
+export const OPENCODE_GO_QUOTA_STORAGE_PREFIX = 'opencode-go-quota:';
+
 /** Official type-level base URLs. Preset-only hosts stay in presets.ts. */
 export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'openai-compatible': 'https://api.openai.com/v1',
+  'opencode-go': `${OPENCODE_GO_URL}/openai/v1`,
   deepl: 'https://api-free.deepl.com',
   'azure-translator': 'https://api.cognitive.microsofttranslator.com',
   'google-translate': 'https://translation.googleapis.com/language/translate/v2',

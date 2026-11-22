@@ -12,6 +12,7 @@
 | `nativeMessaging` | 可选连接本机 PolyPage 网关（JSON-RPC）。未安装网关时功能走云端 Provider 或置灰。 |
 | `contextMenus` | 右键：翻译选区、翻译图片、转写并翻译无字幕视频/音频。 |
 | `offscreen` | Chrome/Edge：在 Service Worker 无法 `new Worker` 时，用 offscreen 文档跑本地 tesseract.js。Firefox 事件页不使用该 API。 |
+| `alarms` | 定期刷新已配置并开启自动查询的 OpenCode Go 订阅额度。 |
 
 ## 主机权限
 

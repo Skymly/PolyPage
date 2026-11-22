@@ -40,6 +40,7 @@ export function parseDisplayMode(value: unknown): DisplayMode | null {
  */
 export type ProviderType =
   | 'openai-compatible'
+  | 'opencode-go'
   | 'custom-http'
   | 'deepl'
   | 'azure-translator'
@@ -234,12 +235,22 @@ export interface ProviderConfig {
   /** native-host only: fallback provider id when the gateway is unavailable. */
   fallbackProviderId?: string;
   /**
-   * openai-compatible only (M-34). Declared extras; method presence is not
-   * a capability. Streaming defaults on; vision/ASR default off.
+   * OpenAI-compatible capabilities. Streaming also applies to OpenCode Go.
    */
   supportsVision?: boolean;
   supportsAsr?: boolean;
   supportsStreaming?: boolean;
+  /** OpenCode Go only. Refresh subscription usage in the background by default. */
+  autoRefreshQuota?: boolean;
+}
+
+export interface ProviderModel {
+  id: string;
+  name: string;
+}
+
+export function supportsProviderModelList(type: ProviderType): boolean {
+  return type === 'openai-compatible' || type === 'opencode-go';
 }
 
 /** Global settings stored in chrome.storage.local (schema v6). */

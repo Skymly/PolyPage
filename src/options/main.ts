@@ -12,10 +12,11 @@ import {
   DEFAULT_BASE_URLS,
   DEFAULT_CUSTOM_HTTP_BODY,
   DEFAULT_NATIVE_HOST_NAME,
+  OPENCODE_GO_DEFAULT_MODEL,
   defaultProvider,
 } from '../shared/constants';
 import { formatPackMegabytes } from '../ocr/packs';
-import type { PdfLayoutPreset } from '../shared/types';
+import { supportsProviderModelList, type PdfLayoutPreset } from '../shared/types';
 import { disableOrRemoveSiteRule, normalizeSiteRule } from '../shared/siteRules';
 import type {
   DisplayMode,
@@ -30,8 +31,10 @@ import type {
 import { PROVIDER_PRESETS, findPreset, presetToProvider } from '../providers/presets';
 import { normalizeSettings, redactSettings, validateImportedSettings } from '../storage/settings';
 import { ensureSelectOption } from './providerTypeSelect';
+import { setupOpenCodeGoQuota } from './opencodeGoQuotaDom';
+import { setupProviderModelEditor } from './providerModelEditor';
 import { feedbackToCsv, feedbackToJson } from '../storage/feedback';
-import { minimaxHostHint } from '../shared/sanitize';
+import { hostnameOfUrl, minimaxHostHint } from '../shared/sanitize';
 import { renderErrorLogEntry, renderFeedbackLogHead } from './logDom';
 import { renderShortcutRow } from './shortcutDom';
 
@@ -43,8 +46,13 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 let draft: Settings | null = null;
 let selectedId: string | null = null;
+let savedActiveProviderId: string | null = null;
+let settingsSaving = false;
 let editingRuleId: string | null = null;
 let logFilterProvider = '';
+let renderProviderModels = () => {};
+let renderOpenCodeGoQuota = () => {};
+let providerTestRevision = 0;
 
 /* --------------------------------- helpers ---------------------------------- */
 
@@ -346,28 +354,39 @@ function renderProviderList(): void {
     radio.type = 'radio';
     radio.name = 'active-provider';
     radio.checked = provider.id === draft.activeProviderId;
-    radio.title = '设为当前使用的翻译服务';
+    radio.title = '下次保存时使用此服务';
+    radio.setAttribute('aria-label', `下次保存时使用 ${provider.name}`);
     radio.addEventListener('click', (e) => e.stopPropagation());
     radio.addEventListener('change', () => {
       if (!draft) return;
       draft.activeProviderId = provider.id;
       markDirty();
       renderProviderList();
+      renderProviderActions();
+      list.querySelector<HTMLInputElement>('input:checked')?.focus({ preventScroll: true });
     });
 
-    const name = document.createElement('span');
+    const name = document.createElement('button');
+    name.type = 'button';
     name.className = 'name';
+    name.setAttribute('aria-pressed', String(provider.id === selectedId));
+    name.setAttribute('aria-controls', 'editor');
     name.textContent = `${provider.name}${provider.enabled ? '' : '（已禁用）'}`;
 
-    const badge = document.createElement('span');
-    badge.className = 'type-badge';
-    badge.textContent = provider.type;
+    row.append(radio, name);
+    const typeLabel = provider.type === 'opencode-go' ? 'OpenCode Go' : provider.type;
+    if (!provider.name.toLowerCase().includes(typeLabel.toLowerCase())) {
+      const badge = document.createElement('span');
+      badge.className = 'type-badge';
+      badge.textContent = typeLabel;
+      row.append(badge);
+    }
 
-    row.append(radio, name, badge);
-    if (provider.id === draft.activeProviderId) {
+    if (provider.id === savedActiveProviderId || provider.id === draft.activeProviderId) {
+      const saved = provider.id === savedActiveProviderId;
       const active = document.createElement('span');
-      active.className = 'active-badge';
-      active.textContent = '使用中';
+      active.className = saved ? 'active-badge' : 'active-badge pending-badge';
+      active.textContent = saved ? '当前服务' : '保存后使用';
       row.appendChild(active);
     }
 
@@ -383,8 +402,10 @@ function renderProviderList(): void {
     }
 
     const del = document.createElement('button');
+    del.type = 'button';
     del.className = 'icon-btn';
-    del.title = '删除';
+    del.title = `删除 ${provider.name}`;
+    del.setAttribute('aria-label', del.title);
     del.textContent = '✕';
     del.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -393,9 +414,12 @@ function renderProviderList(): void {
     row.appendChild(del);
 
     row.addEventListener('click', () => {
+      if (selectedId === provider.id || !collectEditor()) return;
       selectedId = provider.id;
+      $<HTMLDetailsElement>('provider-advanced').open = false;
       renderProviderList();
       renderEditor();
+      $('editor-title').focus({ preventScroll: true });
     });
     list.appendChild(row);
   }
@@ -403,6 +427,7 @@ function renderProviderList(): void {
 
 function removeProvider(id: string): void {
   if (!draft) return;
+  if (selectedId !== id && !collectEditor()) return;
   draft.providers = draft.providers.filter((p) => p.id !== id);
   draft.failoverChain = draft.failoverChain.filter((fid) => fid !== id);
   for (const p of draft.providers) {
@@ -463,26 +488,38 @@ function makeProvider(type: ProviderType): ProviderConfig {
 }
 
 function addProvider(type: ProviderType): void {
-  if (!draft) return;
+  if (!draft || !collectEditor()) return;
   const provider = makeProvider(type);
-  draft.providers.push(provider);
-  selectedId = provider.id;
-  markDirty();
-  renderProviderList();
-  renderEditor();
+  if (type === 'openai-compatible') {
+    provider.baseUrl = '';
+    provider.model = '';
+    provider.name = '自定义 OpenAI 兼容接口';
+  }
+  appendProviderDraft(draft, provider, 'f-baseurl');
 }
 
 function addProviderFromPreset(presetId: string): void {
-  if (!draft) return;
+  if (!draft || !collectEditor()) return;
   const preset = findPreset(presetId);
   if (!preset) return;
-  const provider = presetToProvider(preset, newProviderId());
-  draft.providers.push(provider);
+  appendProviderDraft(draft, presetToProvider(preset, newProviderId()), preset.needsApiKey ? 'f-apikey' : 'editor-title');
+}
+
+function setProviderPickerOpen(open: boolean): void {
+  $('add-provider').setAttribute('aria-expanded', String(open));
+  $('provider-presets').classList.toggle('hidden', !open);
+  if (open) $('provider-preset-list').querySelector('button')?.focus();
+}
+
+function appendProviderDraft(settings: Settings, provider: ProviderConfig, focusTarget: string): void {
+  settings.providers.push(provider);
   selectedId = provider.id;
+  setProviderPickerOpen(false);
+  $<HTMLDetailsElement>('provider-advanced').open = false;
   markDirty();
   renderProviderList();
   renderEditor();
-  toast(`已从预设「${preset.name}」创建${preset.needsApiKey ? '，请填写 API Key 后保存' : ''}`);
+  $(focusTarget).focus();
 }
 
 /* ------------------------------ provider editor ------------------------------ */
@@ -521,6 +558,7 @@ function renderEditor(): void {
   $<HTMLInputElement>('f-supports-streaming').checked = provider.supportsStreaming !== false;
   $<HTMLInputElement>('f-supports-vision').checked = provider.supportsVision === true;
   $<HTMLInputElement>('f-supports-asr').checked = provider.supportsAsr === true;
+  $<HTMLInputElement>('f-auto-refresh-quota').checked = provider.autoRefreshQuota !== false;
 
   $<HTMLSelectElement>('f-method').value = provider.method ?? 'POST';
   $<HTMLSelectElement>('f-key-placement').value = provider.apiKeyPlacement ?? 'header';
@@ -552,33 +590,38 @@ function renderEditor(): void {
 
   applyTypeVisibility(provider.type);
   $<HTMLDivElement>('headers-error').classList.add('hidden');
-  $<HTMLElement>('test-result').textContent = '';
-  refreshMinimaxHint();
+  resetProviderTest();
+  refreshEndpointHints();
+  renderProviderModels();
+  renderOpenCodeGoQuota();
+  renderProviderActions();
 }
 
-function refreshMinimaxHint(): void {
-  const el = document.getElementById('minimax-host-hint');
-  if (!el) return;
+function refreshEndpointHints(): void {
+  const el = $('minimax-host-hint');
   const baseUrl = $<HTMLInputElement>('f-baseurl').value;
   const apiKey = $<HTMLInputElement>('f-apikey').value;
   const hint = minimaxHostHint(baseUrl, apiKey);
-  if (hint) {
-    el.hidden = false;
-    el.textContent = hint;
-  } else {
-    el.hidden = true;
-    el.textContent = '';
-  }
+  el.hidden = !hint;
+  el.textContent = hint ?? '';
+  const host = hostnameOfUrl(baseUrl);
+  $('ollama-origin-hint').hidden = !host ||
+    !['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(host) ||
+    new URL(baseUrl.trim()).port !== '11434';
 }
 
 function applyTypeVisibility(type: ProviderType): void {
-  const isLLM = type === 'openai-compatible';
+  const isOpenCodeGo = type === 'opencode-go';
+  const isOpenAI = type === 'openai-compatible';
+  const isLLM = isOpenAI || isOpenCodeGo;
   const isHttpApi = type === 'deepl' || type === 'azure-translator' || type === 'google-translate';
   const isNative = type === 'native-host';
   for (const id of ['field-system-prompt', 'field-user-prompt', 'field-temperature', 'field-maxtokens']) {
     $<HTMLElement>(id).classList.toggle('hidden', !isLLM);
   }
   $<HTMLElement>('field-baseurl').classList.toggle('hidden', isNative);
+  $<HTMLInputElement>('f-baseurl').readOnly = isOpenCodeGo;
+  $<HTMLElement>('field-headers').classList.toggle('hidden', isOpenCodeGo);
   $<HTMLElement>('field-apikey').classList.toggle('hidden', isNative);
   $<HTMLElement>('field-model').classList.toggle('hidden', isHttpApi || isNative);
   $<HTMLElement>('custom-http-fields').classList.toggle('hidden', type !== 'custom-http');
@@ -586,6 +629,10 @@ function applyTypeVisibility(type: ProviderType): void {
   $<HTMLElement>('azure-fields').classList.toggle('hidden', type !== 'azure-translator');
   $<HTMLElement>('native-host-fields').classList.toggle('hidden', !isNative);
   $<HTMLElement>('openai-capability-fields').classList.toggle('hidden', !isLLM);
+  for (const id of ['openai-capability-hint', 'field-supports-vision', 'field-supports-asr']) {
+    $<HTMLElement>(id).classList.toggle('hidden', !isOpenAI);
+  }
+  $('opencode-go-quota').classList.toggle('hidden', !isOpenCodeGo);
 }
 
 function collectEditor(): boolean {
@@ -612,10 +659,14 @@ function collectEditor(): boolean {
     provider.supportsVision = $<HTMLInputElement>('f-supports-vision').checked;
     provider.supportsAsr = $<HTMLInputElement>('f-supports-asr').checked;
   }
+  if (provider.type === 'opencode-go') {
+    provider.supportsStreaming = $<HTMLInputElement>('f-supports-streaming').checked;
+    provider.autoRefreshQuota = $<HTMLInputElement>('f-auto-refresh-quota').checked;
+  }
 
   const headersError = $<HTMLDivElement>('headers-error');
   const headersRaw = $<HTMLTextAreaElement>('f-headers').value.trim();
-  if (headersRaw === '') {
+  if (provider.type === 'opencode-go' || headersRaw === '') {
     provider.headers = {};
     headersError.classList.add('hidden');
   } else {
@@ -633,6 +684,7 @@ function collectEditor(): boolean {
     } catch (e) {
       headersError.textContent = `请求头 JSON 无效：${e instanceof Error ? e.message : String(e)}`;
       headersError.classList.remove('hidden');
+      $<HTMLDetailsElement>('provider-advanced').open = true;
       return false;
     }
   }
@@ -652,6 +704,36 @@ function collectEditor(): boolean {
 
   applyTypeVisibility(provider.type);
   return true;
+}
+
+function changeProviderType(): void {
+  const provider = selectedProvider();
+  if (!provider) return;
+  const previousType = provider.type;
+  const previousUrl = $<HTMLInputElement>('f-baseurl').value.trim();
+  if (!collectEditor()) {
+    provider.type = previousType;
+    $<HTMLSelectElement>('f-type').value = previousType;
+    return;
+  }
+  if (provider.type === 'opencode-go' && previousType !== 'opencode-go') {
+    const existingGoEndpoint = previousType === 'openai-compatible' &&
+      /^https:\/\/opencode\.ai\/(?:inference|zen)\/go(?:\/(?:openai\/)?v1)?\/?$/.test(previousUrl);
+    provider.baseUrl = DEFAULT_BASE_URLS['opencode-go'];
+    if (!existingGoEndpoint) {
+      provider.apiKey = '';
+      provider.model = OPENCODE_GO_DEFAULT_MODEL;
+    }
+    if (!provider.model) provider.model = OPENCODE_GO_DEFAULT_MODEL;
+    if (provider.name === defaultProvider().name || provider.name === 'OpenAI-compatible') provider.name = 'OpenCode Go';
+  } else if (previousType === 'opencode-go' && provider.type !== 'opencode-go') {
+    provider.baseUrl = DEFAULT_BASE_URLS[provider.type] ?? '';
+    provider.apiKey = '';
+    provider.model = provider.type === 'openai-compatible' ? defaultProvider().model : '';
+  }
+  renderProviderList();
+  renderEditor();
+  markDirty();
 }
 /* -------------------------------- failover ----------------------------------- */
 
@@ -1090,17 +1172,63 @@ async function renderOcrPacks(): Promise<void> {
 
 /* --------------------------------- actions ----------------------------------- */
 
-async function persist(): Promise<boolean> {
-  if (!draft) return false;
+function shouldUseSelectedProvider(provider: ProviderConfig): boolean {
+  return provider.id !== savedActiveProviderId || provider.id !== draft?.activeProviderId;
+}
+
+function renderProviderActions(): void {
+  const provider = selectedProvider();
+  const button = $<HTMLButtonElement>('save-provider');
+  const activate = provider && shouldUseSelectedProvider(provider);
+  button.disabled = settingsSaving;
+  button.textContent = activate ? '保存设置并使用' : '保存设置';
+  button.title = activate ? '保存全部设置，并使用所选翻译服务' : '保存全部设置';
+}
+
+function validateProviderConnection(provider: ProviderConfig): boolean {
+  if (!supportsProviderModelList(provider.type)) return true;
+  let message: string;
+  if (provider.type === 'opencode-go' && !provider.apiKey) {
+    message = '请填写 API Key';
+    $('f-apikey').focus();
+  } else if (!provider.model.replace(/^opencode-go\//, '').trim()) {
+    message = '请选择模型或手动填写模型 ID';
+    const picker = $<HTMLSelectElement>('provider-model-select');
+    const model = $('f-model');
+    if (!model.classList.contains('hidden')) model.focus();
+    else if (!picker.disabled) picker.focus();
+    else $('provider-model-mode').click();
+  } else {
+    return true;
+  }
+  const result = $('test-result');
+  result.className = 'test-result provider-result bad';
+  result.textContent = message;
+  return false;
+}
+
+async function persist(useSelected = false): Promise<boolean> {
+  if (!draft || settingsSaving) return false;
   collectGeneral();
   collectMediaSections();
   if (!collectEditor()) {
     toast('请修正表单中的错误', true);
     return false;
   }
+  const provider = useSelected ? selectedProvider() : null;
+  const activate = !!provider && shouldUseSelectedProvider(provider);
+  if (provider && (activate || provider.enabled) && !validateProviderConnection(provider)) return false;
   // Drop glossary rows that are still empty.
   draft.glossary = draft.glossary.filter((g) => g.source.trim() !== '' && g.target.trim() !== '');
   const normalized = normalizeSettings(draft);
+  if (provider && activate) {
+    normalized.activeProviderId = provider.id;
+    const current = normalized.providers.find((item) => item.id === provider.id);
+    if (current) current.enabled = true;
+  }
+  settingsSaving = true;
+  $<HTMLButtonElement>('save').disabled = true;
+  renderProviderActions();
   try {
     const res = await sendRuntime({ type: 'save-settings', settings: normalized });
     if (!res?.ok) {
@@ -1111,25 +1239,40 @@ async function persist(): Promise<boolean> {
   } catch (e) {
     toast(`保存失败：${e instanceof Error ? e.message : String(e)}`, true);
     return false;
+  } finally {
+    settingsSaving = false;
+    $<HTMLButtonElement>('save').disabled = false;
+    renderProviderActions();
   }
+  savedActiveProviderId = draft.activeProviderId;
   selectedId = draft.providers.some((p) => p.id === selectedId)
     ? selectedId
     : draft.activeProviderId;
   clearDirty();
   renderAll();
-  toast('设置已保存');
+  toast(activate && provider ? `已保存并使用 ${provider.name}` : '设置已保存');
   return true;
+}
+
+function resetProviderTest(): void {
+  providerTestRevision++;
+  $<HTMLElement>('test-result').textContent = '';
+  $<HTMLButtonElement>('test-provider').disabled = false;
 }
 
 async function testProvider(): Promise<void> {
   if (!collectEditor()) return;
   const provider = selectedProvider();
-  if (!provider) return;
+  if (!provider || !validateProviderConnection(provider)) return;
+  const revision = ++providerTestRevision;
+  const button = $<HTMLButtonElement>('test-provider');
   const resultEl = $<HTMLElement>('test-result');
-  resultEl.className = 'test-result';
+  button.disabled = true;
+  resultEl.className = 'test-result provider-result';
   resultEl.textContent = '测试中…';
   try {
     const res = await sendRuntime({ type: 'test-provider', provider });
+    if (revision !== providerTestRevision) return;
     if (res?.ok) {
       const latency = typeof res.latencyMs === 'number' ? `（${res.latencyMs}ms）` : '';
       resultEl.textContent = `✓ 连接成功${latency}，示例译文：${res.result}`;
@@ -1141,8 +1284,11 @@ async function testProvider(): Promise<void> {
       resultEl.classList.add('bad');
     }
   } catch (e) {
+    if (revision !== providerTestRevision) return;
     resultEl.textContent = `✗ ${e instanceof Error ? e.message : String(e)}`;
     resultEl.classList.add('bad');
+  } finally {
+    if (revision === providerTestRevision) button.disabled = false;
   }
 }
 
@@ -1246,9 +1392,15 @@ async function importSettings(file: File): Promise<void> {
       toast('导入失败：文件格式无效或缺少必要配置', true);
       return;
     }
-    await sendRuntime({ type: 'save-settings', settings: normalized, replaceAll: true });
-    draft = normalized;
-    selectedId = normalized.activeProviderId;
+    const res = await sendRuntime({ type: 'save-settings', settings: normalized, replaceAll: true });
+    if (!res?.ok) {
+      toast(`导入失败：${res?.error ?? '无法保存设置'}`, true);
+      return;
+    }
+    draft = res.settings ? normalizeSettings(res.settings) : normalized;
+    savedActiveProviderId = draft.activeProviderId;
+    selectedId = draft.activeProviderId;
+    clearDirty();
     renderAll();
     toast('配置已导入（旧版本配置会自动迁移；不含 TM 表）');
   } catch {
@@ -1270,13 +1422,15 @@ async function renderShortcuts(): Promise<void> {
 }
 
 function renderPresets(): void {
-  const select = $<HTMLSelectElement>('preset-select');
-  select.textContent = '';
+  const list = $('provider-preset-list');
   for (const preset of PROVIDER_PRESETS) {
-    const opt = document.createElement('option');
-    opt.value = preset.id;
-    opt.textContent = `${preset.name} — ${preset.description}`;
-    select.appendChild(opt);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn';
+    button.textContent = preset.name;
+    button.title = preset.description;
+    button.addEventListener('click', () => addProviderFromPreset(preset.id));
+    list.append(button);
   }
 }
 
@@ -1302,8 +1456,11 @@ async function init(): Promise<void> {
     toast('无法加载设置（后台未就绪），请刷新重试', true);
     return;
   }
+  savedActiveProviderId = draft.activeProviderId;
   selectedId = draft.activeProviderId;
   renderPresets();
+  renderProviderModels = setupProviderModelEditor($, selectedProvider, collectEditor);
+  renderOpenCodeGoQuota = setupOpenCodeGoQuota($, selectedProvider);
   await refreshStats();
   renderAll();
   void refreshCacheStats();
@@ -1311,18 +1468,19 @@ async function init(): Promise<void> {
   void renderShortcuts();
 
   $<HTMLButtonElement>('save').addEventListener('click', () => void persist());
+  $<HTMLButtonElement>('save-provider').addEventListener('click', () => void persist(true));
+  $('add-provider').addEventListener('click', () =>
+    setProviderPickerOpen($('provider-presets').classList.contains('hidden')),
+  );
+  $('provider-presets').addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    setProviderPickerOpen(false);
+    $('add-provider').focus();
+  });
   $<HTMLButtonElement>('add-openai').addEventListener('click', () => addProvider('openai-compatible'));
   $<HTMLButtonElement>('add-custom').addEventListener('click', () => addProvider('custom-http'));
-  $<HTMLButtonElement>('add-native').addEventListener('click', () => addProvider('native-host'));
-  $<HTMLButtonElement>('add-from-preset').addEventListener('click', () =>
-    addProviderFromPreset($<HTMLSelectElement>('preset-select').value),
-  );
   $<HTMLButtonElement>('test-provider').addEventListener('click', () => void testProvider());
-  $<HTMLSelectElement>('f-type').addEventListener('change', () => {
-    collectEditor();
-    renderEditor();
-    markDirty();
-  });
+  $<HTMLSelectElement>('f-type').addEventListener('change', changeProviderType);
   $<HTMLButtonElement>('failover-add').addEventListener('click', addToFailover);
   $<HTMLButtonElement>('glossary-add').addEventListener('click', addGlossaryEntry);
   $<HTMLButtonElement>('glossary-import').addEventListener('click', importPastedGlossary);
@@ -1389,8 +1547,11 @@ async function init(): Promise<void> {
 
   // Any field edit marks the draft dirty.
   document.querySelector('.content')?.addEventListener('input', markDirty);
-  $('f-baseurl').addEventListener('input', refreshMinimaxHint);
-  $('f-apikey').addEventListener('input', refreshMinimaxHint);
+  $('f-baseurl').addEventListener('input', refreshEndpointHints);
+  $('f-apikey').addEventListener('input', refreshEndpointHints);
+  for (const id of ['f-baseurl', 'f-apikey', 'f-model']) {
+    $(id).addEventListener('input', resetProviderTest);
+  }
 }
 
 void init();

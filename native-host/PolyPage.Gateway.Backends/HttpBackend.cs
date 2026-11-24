@@ -134,16 +134,18 @@ public sealed class HttpBackend : IGatewayBackend
         // {{texts}}/{{text}} are JSON values (quoted arrays/strings). Language and
         // apiKey sit inside JSON string literals in the documented templates, so
         // they must be escaped, not spliced (M-71).
-        var rendered = _config.BodyTemplate
-            .Replace("{{texts}}", JsonSerializer.Serialize(texts))
-            .Replace("{{text}}", JsonSerializer.Serialize(texts.Count > 0 ? texts[0] : ""));
         var stringVars = new Dictionary<string, string>
         {
+            ["texts"] = JsonSerializer.Serialize(texts),
+            ["text"] = JsonSerializer.Serialize(texts.Count > 0 ? texts[0] : ""),
             ["sourceLanguage"] = TemplateHelper.EscapeForJson(ctx.Source),
             ["targetLanguage"] = TemplateHelper.EscapeForJson(ctx.Target),
+            ["documentTitle"] = TemplateHelper.EscapeForJson(ctx.DocumentTitle),
+            ["section"] = TemplateHelper.EscapeForJson(ctx.Section),
+            ["glossary"] = TemplateHelper.EscapeForJson(ctx.Glossary),
             ["apiKey"] = TemplateHelper.EscapeForJson(_config.ApiKey),
         };
-        rendered = TemplateHelper.Render(rendered, stringVars);
+        var rendered = TemplateHelper.Render(_config.BodyTemplate, stringVars);
         try
         {
             using var _ = JsonDocument.Parse(rendered);

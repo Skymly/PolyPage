@@ -11,7 +11,7 @@
  * zero API calls (spec 3.0 §11 M5 exit criteria).
  */
 import { sendRuntime, VIEWER_RESUME_TYPE } from '../messaging/messages';
-import { PDF_FETCH_TIMEOUT_MS, PDF_MAX_BYTES, PDF_PARAGRAPH_BUDGET } from '../shared/constants';
+import { PDF_FETCH_TIMEOUT_MS, PDF_MAX_BYTES } from '../shared/constants';
 import type { PdfViewerMode } from '../shared/types';
 import { openPdfDocument } from './pdf/loader';
 import type { PdfDocumentLike, PdfPageLike } from './pdf/loader';
@@ -22,13 +22,14 @@ import {
   releaseOffscreenPage,
 } from './pdf/pageLifecycle';
 import {
-  clusterPageFromLines,
   clusterOptionsForPreset,
-  collectRepeatingLines,
   extractLines,
 } from './pdf/segment';
-import type { PdfLine, TextItemLike } from './pdf/segment';
+import type { PdfLayoutPreset, TextItemLike } from './pdf/segment';
+import { bookmarkSections, pageParagraphs, sampleHeaders } from './pdf/sections';
+import type { ExtractedPage } from './pdf/sections';
 import { chooseFingerprint, pdfCacheScope } from './pdf/fingerprint';
+import { bilingualPdfHtml } from './pdf/htmlExport';
 import { matchPdfResumeTasks, pdfParagraphKey } from './resume';
 import {
   assignPdfDstRetryClick,
@@ -54,7 +55,10 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const docEl = $<HTMLElement>('document');
 const titleEl = $<HTMLElement>('doc-title');
 const progressEl = $<HTMLElement>('progress');
-const budgetHint = $<HTMLElement>('budget-hint');
+const pageNumberEl = $<HTMLInputElement>('page-number');
+const localFile = $<HTMLInputElement>('local-file');
+const exportBtn = $<HTMLButtonElement>('export-btn');
+const pageLayout = $<HTMLSelectElement>('page-layout');
 const modeSelect = $<HTMLSelectElement>('mode-select');
 const retryBtn = $<HTMLButtonElement>('retry-btn');
 const fatalEl = $<HTMLElement>('fatal');
@@ -71,6 +75,10 @@ type ViewerMode = PdfViewerMode | 'original';
 
 interface ParaState {
   text: string;
+  bounds?: [number, number, number, number];
+  section?: string;
+  requestVersion?: number;
+  replayedAfterDisconnect?: boolean;
   status: 'idle' | 'pending' | 'done' | 'error';
   translated: string | null;
   error: string | null;
@@ -80,8 +88,7 @@ interface ParaState {
 interface PageState {
   index: number; // 1-based pdf.js page number
   pdfPage: PdfPageLike | null;
-  pageHeight: number;
-  lines: PdfLine[];
+  loaded: boolean;
   paragraphs: ParaState[];
   scanned: boolean;
   container: HTMLElement;
@@ -89,41 +96,32 @@ interface PageState {
   rendered: boolean;
   workStarted: boolean;
   renderGen: number;
+  busy: boolean;
+  wanted: boolean;
+  lastLocalSection?: string;
+  layout?: PdfLayoutPreset;
+  viewport?: ReturnType<PdfPageLike['getViewport']>;
 }
 
 let mode: ViewerMode = 'bilingual';
-let pages: PageState[] = [];
+const pages: PageState[] = [];
+const pagesByNumber = new Map<number, PageState>();
 /** Kept so off-screen pages can re-getPage after cleanup (M-65). */
 let pdfDoc: PdfDocumentLike | null = null;
 let fingerprint = '';
-let degradedViewport = false;
+let documentTitle = '';
+let currentPage = 1;
 let maxConcurrentPages = 3;
 let skipHeadersFooters = true;
-let translateWork = new AbortController();
+const translateWork = new AbortController();
 let scannedPageOcr = true;
 let layoutPreset: 'auto' | 'single' | 'columns' | 'table' = 'auto';
 let maxEdgePx = 4096;
 let ocrEngineId = 'llm-vision';
 let scannedOcrCount = 0;
 let activeCount = 0;
-const waiters: (() => void)[] = [];
 /** Set after chrome.tabs.getCurrent so resume broadcasts can filter this tab. */
 let viewerTabId: number | undefined;
-
-async function acquirePageSlot(): Promise<void> {
-  if (activeCount < maxConcurrentPages) {
-    activeCount++;
-    return;
-  }
-  await new Promise<void>((resolve) => waiters.push(resolve));
-  activeCount++;
-}
-
-function releasePageSlot(): void {
-  activeCount--;
-  const next = waiters.shift();
-  if (next) next();
-}
 
 /* --------------------------------- bootstrap ---------------------------------- */
 
@@ -182,25 +180,23 @@ async function headerHash(bytes: ArrayBuffer): Promise<string> {
   }
 }
 
-async function main(): Promise<void> {
+async function main(file?: File): Promise<void> {
   const url = sourceUrl();
-  if (!url) {
-    fatal('缺少 src 参数：请从 Popup 或右键菜单「用 PolyPage 打开」进入阅读器。');
+  if (!url && !file) {
+    docEl.setAttribute('aria-busy', 'false');
     return;
   }
+  fatalEl.classList.add('hidden');
+  docEl.setAttribute('aria-busy', 'true');
   try {
     viewerTabId = (await chrome.tabs.getCurrent())?.id;
   } catch {
     viewerTabId = undefined;
   }
-  let fileName = decodeURIComponent(url.split('/').pop() ?? 'document.pdf');
-  try {
-    fileName = fileName.split('?')[0] || 'document.pdf';
-  } catch {
-    /* keep */
-  }
+  let fileName = file?.name ?? (url && new URL(url).pathname.split('/').pop()) ?? 'document.pdf';
+  if (!file) { try { fileName = decodeURIComponent(fileName); } catch { /* keep the URL filename */ } }
   titleEl.textContent = fileName;
-  titleEl.title = url;
+  titleEl.title = file?.name ?? url ?? fileName;
 
   const settings = await sendRuntime({ type: 'get-viewer-settings' });
   maxConcurrentPages = settings.pdfViewer.maxConcurrentPages;
@@ -215,7 +211,12 @@ async function main(): Promise<void> {
   let doc: PdfDocumentLike;
   let fetched: { bytes: ArrayBuffer; etag: string | null; lastModified: string | null };
   try {
-    fetched = await fetchPdf(url);
+    if (file) {
+      if (!file.size || file.size > PDF_MAX_BYTES) throw new Error('请选择大小不超过 50 MB 的非空 PDF 文件。');
+      fetched = { bytes: await file.arrayBuffer(), etag: null, lastModified: null };
+    } else {
+      fetched = await fetchPdf(url!);
+    }
   } catch (e) {
     fatal(e instanceof Error ? e.message : String(e));
     return;
@@ -238,9 +239,19 @@ async function main(): Promise<void> {
     headerHash: hh,
   });
   pdfDoc = doc;
+  documentTitle = fileName;
+  const metadata = doc.getMetadata().then(({ info }) => {
+    if (typeof info?.Title === 'string' && info.Title.trim()) documentTitle = info.Title.trim();
+  }).catch(() => undefined);
+  localFile.closest('label')?.classList.add('hidden');
+  $<HTMLElement>('open-another').classList.remove('hidden');
+  pageNumberEl.max = String(doc.numPages);
+  $<HTMLElement>('page-total').textContent = `/ ${doc.numPages}`;
+  $<HTMLElement>('page-jump').classList.remove('hidden');
+  exportBtn.disabled = false;
 
   try {
-    await buildPages(doc);
+    await buildPages(doc, metadata);
   } catch (e) {
     fatal(`读取 PDF 页面失败：${e instanceof Error ? e.message : String(e)}`);
     return;
@@ -265,126 +276,222 @@ async function main(): Promise<void> {
 
 /* ------------------------------ extraction pass ------------------------------- */
 
-async function buildPages(doc: PdfDocumentLike): Promise<void> {
-  const allLines: PdfLine[][] = [];
-  const pageHeights: number[] = [];
-  const clusterOpts = clusterOptionsForPreset(layoutPreset);
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const { lines, pageHeight } = await extractPageTextThenCleanup(page, (items) =>
-      extractLines(items as TextItemLike[], clusterOpts),
-    );
-    allLines.push(lines);
-    pageHeights.push(pageHeight);
-  }
+let sample = new Map<number, Promise<ExtractedPage>>();
+let headerSignatures: Promise<Set<string>> = Promise.resolve(new Set());
+let bookmarks: ReturnType<typeof bookmarkSections> | undefined;
+const candidates = new Set<PageState>();
+const translating = new Set<PageState>();
 
-  const repeating = skipHeadersFooters ? collectRepeatingLines(allLines) : new Set<string>();
-  const cluster = clusterOptionsForPreset(layoutPreset);
-
-  const totalBudgetCheck = { paragraphs: 0 };
-  pages = allLines.map((lines, i) => {
-    const result = clusterPageFromLines(lines, {
-      skipHeadersFooters,
-      headerFooterSet: repeating,
-      cluster,
-      pageHeight: pageHeights[i],
-    });
-    const paragraphs: ParaState[] = result.paragraphs.map((p) => ({
-      text: p.text,
-      status: 'idle',
-      translated: null,
-      error: null,
-      el: null,
-    }));
-    totalBudgetCheck.paragraphs += paragraphs.length;
-    return {
-      index: i + 1,
-      pdfPage: null,
-      pageHeight: pageHeights[i],
-      lines,
-      paragraphs,
-      scanned: result.scanned,
-      container: buildPageDom(i + 1),
-      canvas: null as unknown as HTMLCanvasElement,
-      rendered: false,
-      workStarted: false,
-      renderGen: 0,
-    };
-  });
-  // Wire canvases after DOM insertion.
-  for (const page of pages) {
-    page.canvas = page.container.querySelector('canvas') as HTMLCanvasElement;
-  }
-
-  if (totalBudgetCheck.paragraphs > PDF_PARAGRAPH_BUDGET) {
-    degradedViewport = true;
-    budgetHint.textContent = `待翻译段落 ${totalBudgetCheck.paragraphs} 条，超过预算 ${PDF_PARAGRAPH_BUDGET}：已降级为仅翻译视口 ±1 页`;
-    budgetHint.classList.remove('hidden');
-  }
-
-  observePages();
-}
-
-function buildPageDom(pageNumber: number): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'page';
-  wrap.dataset.page = String(pageNumber);
-  const canvas = document.createElement('canvas');
-  wrap.appendChild(canvas);
-  docEl.appendChild(wrap);
-  return wrap;
-}
-
-/* ------------------------------- lazy rendering ------------------------------- */
-
-let io: IntersectionObserver | null = null;
-
-function observePages(): void {
-  io?.disconnect();
-  io = new IntersectionObserver(
-    (records) => {
-      for (const rec of records) {
-        const target = rec.target as HTMLElement;
-        const pageNumber = Number(target.dataset.page ?? '0');
-        const page = pages[pageNumber - 1];
-        if (!page) continue;
-        if (!rec.isIntersecting) {
-          releaseOffscreenPage(page);
-          continue;
-        }
-        if (page.workStarted && page.rendered) continue;
-        void workPage(page);
-      }
-    },
-    {
-      // Degraded mode: viewport +/- one screen; normal: small prefetch margin.
-      rootMargin: degradedViewport ? '100% 0px 100% 0px' : '600px 0px 600px 0px',
-    },
+async function extractPage(doc: PdfDocumentLike, index: number, layout = layoutPreset): Promise<ExtractedPage> {
+  const pdfPage = await doc.getPage(index);
+  return extractPageTextThenCleanup(pdfPage, (items) =>
+    extractLines(items as TextItemLike[], clusterOptionsForPreset(layout)),
   );
-  for (const page of pages) io.observe(page.container);
+}
+
+async function loadParagraphs(page: PageState): Promise<void> {
+  if (!pdfDoc || page.loaded) return;
+  const [raw, repeating] = await Promise.all([
+    page.layout ? extractPage(pdfDoc, page.index, page.layout) : sample.get(page.index) ?? extractPage(pdfDoc, page.index),
+    headerSignatures,
+  ]);
+  const cluster = clusterOptionsForPreset(page.layout ?? layoutPreset);
+  const { paragraphs, scanned } = pageParagraphs(raw, repeating, cluster);
+  page.lastLocalSection = paragraphs.at(-1)?.section;
+  let inherited: string | undefined;
+  if (paragraphs.length && !paragraphs[0].section) {
+    bookmarks ??= bookmarkSections(pdfDoc).catch(() => []);
+    inherited = (await bookmarks).filter((s) => s.page <= page.index).at(-1)?.title;
+    if (!inherited && page.index > 1) {
+      const previous = pagesByNumber.get(page.index - 1);
+      if (previous?.loaded) inherited = previous.lastLocalSection;
+      else {
+        try {
+          const rawPrevious = await (sample.get(page.index - 1) ?? extractPage(pdfDoc, page.index - 1));
+          inherited = pageParagraphs(rawPrevious, repeating, cluster).paragraphs.at(-1)?.section;
+        } catch { /* a damaged previous page must not block this page */ }
+      }
+    }
+  }
+  page.paragraphs = paragraphs.map((p) => {
+    return { ...p, section: p.section ?? inherited, status: 'idle', translated: null, error: null, el: null };
+  });
+  page.scanned = scanned;
+  page.loaded = true;
+  placeSourceLinks(page);
+}
+
+async function buildPages(doc: PdfDocumentLike, metadata: Promise<void>): Promise<void> {
+  const io = new IntersectionObserver((records) => {
+    for (const rec of records) {
+      const page = pagesByNumber.get(Number((rec.target as HTMLElement).dataset.page))!;
+      page.wanted = rec.isIntersecting;
+      if (page.wanted) candidates.add(page);
+      else {
+        candidates.delete(page);
+        releaseOffscreenPage(page);
+      }
+    }
+    scheduleVisible();
+  }, { rootMargin: '400px 0px' });
+
+  function appendShell(index: number, parent: HTMLElement): PageState {
+    const container = document.createElement('section');
+    container.className = 'page';
+    container.dataset.page = String(index);
+    container.setAttribute('aria-label', `第 ${index} 页`);
+    const sheet = document.createElement('div');
+    sheet.className = 'sheet';
+    const typical = pages[0]?.viewport;
+    if (typical) {
+      sheet.style.width = `${typical.width}px`;
+      sheet.style.aspectRatio = `${typical.width} / ${typical.height}`;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 0;
+    canvas.height = 0;
+    sheet.appendChild(canvas);
+    container.appendChild(sheet);
+    parent.appendChild(container);
+    const page: PageState = {
+      index, loaded: false, pdfPage: null, paragraphs: [], scanned: false,
+      canvas, container, rendered: false, workStarted: false, renderGen: 0, busy: false, wanted: false,
+    };
+    pages.push(page);
+    pagesByNumber.set(index, page);
+    io.observe(container);
+    return page;
+  }
+
+  const first = appendShell(1, docEl);
+  first.wanted = true;
+  first.busy = true;
+  if (skipHeadersFooters) {
+    // Use a fixed sample so revisiting pages in a different order preserves paragraph IDs and cache hits.
+    const sampled = sampleHeaders(doc.numPages, (i) => extractPage(doc, i));
+    sample = sampled.pages;
+    headerSignatures = sampled.signatures;
+  }
+  try { await renderPage(first); } catch { /* extracted text can still be read */ }
+  await metadata;
+  first.busy = false;
+  candidates.add(first);
+  scheduleVisible();
+  // Let the first canvas paint before allocating the remaining scroll placeholders.
+  const groupSize = 16;
+  const groups = new Map<number, HTMLElement>();
+  function expandGroup(start: number): void {
+    const group = groups.get(start);
+    if (!group || group.hasChildNodes()) return;
+    groupObserver.unobserve(group);
+    for (let i = start; i <= Math.min(doc.numPages, start + groupSize - 1); i++) appendShell(i, group);
+    group.style.height = '';
+  }
+  const groupObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) expandGroup(Number((entry.target as HTMLElement).dataset.start));
+    }
+  }, { rootMargin: '500px 0px' });
+  function installGroups(): void {
+    if (groups.size) return;
+    const height = first.container.getBoundingClientRect().height + 18;
+    const fragment = document.createDocumentFragment();
+    for (let start = 2; start <= doc.numPages; start += groupSize) {
+      const group = document.createElement('div');
+      group.dataset.start = String(start);
+      group.style.height = `${height * Math.min(groupSize, doc.numPages - start + 1)}px`;
+      groups.set(start, group);
+      fragment.appendChild(group);
+      groupObserver.observe(group);
+    }
+    docEl.appendChild(fragment);
+  }
+  let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(installGroups); });
+  window.addEventListener('pagehide', () => {
+    cancelAnimationFrame(frame); io.disconnect(); groupObserver.disconnect();
+  }, { once: true });
+
+  $('page-jump').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const number = pageNumberEl.valueAsNumber;
+    if (!Number.isInteger(number) || number < 1 || number > doc.numPages) return;
+    if (!pagesByNumber.has(number)) {
+      installGroups();
+      expandGroup(2 + Math.floor((number - 2) / groupSize) * groupSize);
+    }
+    const page = pagesByNumber.get(number)!;
+    currentPage = number;
+    page.container.scrollIntoView({ block: 'start' });
+    page.wanted = true;
+    candidates.add(page);
+    scheduleVisible();
+  });
+}
+
+function updateCurrentPage(): void {
+  const belowToolbar = $('toolbar').getBoundingClientRect().bottom + 25;
+  const visible = [...candidates].filter((p) => p.container.getBoundingClientRect().bottom >= belowToolbar);
+  visible.sort((a, b) => a.index - b.index);
+  if (visible.length) currentPage = visible[0].index;
+  if (document.activeElement !== pageNumberEl) pageNumberEl.value = String(currentPage);
+  syncLayoutControl();
+}
+
+function syncLayoutControl(): void {
+  const page = pagesByNumber.get(currentPage);
+  pageLayout.value = page?.layout ?? layoutPreset;
+  pageLayout.disabled = !page?.loaded || !page.paragraphs.some((p) => p.bounds);
+}
+
+function scheduleVisible(): void {
+  if (translateWork.signal.aborted) return;
+  const pending = [...candidates].filter((p) => p.wanted && !p.busy && (!p.rendered || !p.workStarted));
+  pending.sort((a, b) => Math.abs(a.index - currentPage) - Math.abs(b.index - currentPage));
+  for (const page of pending) {
+    if (activeCount >= maxConcurrentPages) break;
+    activeCount++;
+    page.busy = true;
+    void workPage(page).catch((error: unknown) => {
+      let notice = page.container.querySelector<HTMLButtonElement>('.page-error');
+      if (!notice) {
+        notice = document.createElement('button');
+        notice.className = 'page-error';
+        page.container.appendChild(notice);
+      }
+      notice.textContent = `页面读取失败，点击重试（${error instanceof Error ? error.message : error}）`;
+      notice.onclick = () => { notice.remove(); candidates.add(page); scheduleVisible(); };
+      candidates.delete(page);
+    }).finally(() => {
+      activeCount--;
+      page.busy = false;
+      scheduleVisible();
+    });
+  }
+  if (mode === 'original') return;
+  const needingTranslation = [...candidates].filter((p) =>
+    p.wanted && p.workStarted && !translating.has(p) && p.paragraphs.some((para) => para.status === 'idle'));
+  needingTranslation.sort((a, b) => Math.abs(a.index - currentPage) - Math.abs(b.index - currentPage));
+  for (const page of needingTranslation) {
+    if (translating.size >= maxConcurrentPages) break;
+    translating.add(page);
+    void translatePage(page).finally(() => { translating.delete(page); scheduleVisible(); });
+  }
 }
 
 async function workPage(page: PageState): Promise<void> {
-  await acquirePageSlot();
-  try {
-    if (!page.rendered) {
-      try {
-        await renderPage(page);
-      } catch {
-        /* render failure does not block text translation */
-      }
+  if (!page.rendered) {
+    try { await renderPage(page); } catch {
+      // Keep an extracted-text fallback and avoid repeated render attempts while visible.
+      page.rendered = true;
     }
-    if (!page.workStarted) {
-      page.workStarted = true;
-      if (mode !== 'original') {
-        await translatePage(page);
-      }
-      ensureParasDom(page);
-      renderPageParas(page);
-    }
-  } finally {
-    releasePageSlot();
   }
+  if (!page.wanted || page.workStarted) return;
+  await loadParagraphs(page);
+  if (!page.wanted) return;
+  page.workStarted = true;
+  ensureParasDom(page);
+  renderPageParas(page);
+  updateProgress();
 }
 
 async function renderPage(page: PageState): Promise<void> {
@@ -397,13 +504,17 @@ async function renderPage(page: PageState): Promise<void> {
     const available = Math.max(docEl.clientWidth - 60, 320);
     const scale = Math.min(2.2, Math.max(0.6, available / base.width));
     const viewport = pdfPage.getViewport({ scale });
+    page.viewport = viewport;
+    const sheet = page.canvas.parentElement!;
+    sheet.style.width = `${viewport.width}px`;
+    sheet.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     page.canvas.width = Math.floor(viewport.width * dpr);
     page.canvas.height = Math.floor(viewport.height * dpr);
     page.canvas.style.width = `${Math.floor(viewport.width)}px`;
     page.canvas.style.height = `${Math.floor(viewport.height)}px`;
     const ctx = page.canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) throw new Error('无法初始化 PDF 画布');
     ctx.scale(dpr, dpr);
     await pdfPage.render({ canvasContext: ctx, viewport }).promise;
     if (page.renderGen !== gen) {
@@ -411,6 +522,7 @@ async function renderPage(page: PageState): Promise<void> {
       return;
     }
     page.rendered = true;
+    if (page.loaded) placeSourceLinks(page);
   } finally {
     cleanupPdfPage(pdfPage);
     page.pdfPage = null;
@@ -421,29 +533,35 @@ async function renderPage(page: PageState): Promise<void> {
 
 const CHUNK = 8;
 
-async function translatePage(page: PageState): Promise<void> {
+async function translatePage(page: PageState, includeOffscreen = false, subset = page.paragraphs): Promise<void> {
+  const paragraphs = page.paragraphs;
   if (page.scanned) {
     showScannedHint(page);
     return;
   }
-  const todo = page.paragraphs.filter((p) => p.status === 'idle' || p.status === 'error');
+  const todo = subset.filter((p) => p.status === 'idle' || p.status === 'error');
   if (todo.length === 0) return;
-  for (const para of todo) {
-    para.status = 'pending';
-    para.error = null;
-  }
   ensureParasDom(page);
   renderPageParas(page);
 
   for (let i = 0; i < todo.length; i += CHUNK) {
-    if (pdfTranslateAborted(translateWork.signal)) return;
+    if (page.paragraphs !== paragraphs || pdfTranslateAborted(translateWork.signal)) return;
+    if ((!page.wanted || mode === 'original') && !includeOffscreen) return;
     const chunk = todo.slice(i, i + CHUNK);
-    const items = chunk.map((para) => {
+    const ready = chunk.filter((p) => p.status === 'idle' || p.status === 'error');
+    if (!ready.length) continue;
+    const versions = ready.map((para) => {
+      para.status = 'pending';
+      para.error = null;
+      return para.requestVersion = (para.requestVersion ?? 0) + 1;
+    });
+    const items = ready.map((para) => {
       const paraIndex = page.paragraphs.indexOf(para);
       return {
         key: pdfParagraphKey(page.index, paraIndex),
         text: para.text,
         cacheScope: pdfCacheScope(fingerprint, page.index, paraIndex),
+        documentContext: { title: documentTitle, section: para.section },
       };
     });
     try {
@@ -453,7 +571,9 @@ async function translatePage(page: PageState): Promise<void> {
         domain: 'pdf-viewer',
         tabId: viewerTabId,
       });
-      chunk.forEach((para) => {
+      if (page.paragraphs !== paragraphs) return;
+      ready.forEach((para, index) => {
+        if (para.requestVersion !== versions[index]) return;
         const key = pdfParagraphKey(page.index, page.paragraphs.indexOf(para));
         const translated = res.results[key];
         if (translated !== undefined) {
@@ -465,13 +585,24 @@ async function translatePage(page: PageState): Promise<void> {
         }
       });
     } catch (e) {
+      if (page.paragraphs !== paragraphs) return;
       const message = e instanceof Error ? e.message : String(e);
-      for (const para of chunk) {
+      ready.forEach((para, index) => {
+        if (para.requestVersion !== versions[index]) return;
         para.status = 'error';
         para.error = message;
-      }
+      });
       if (/channel closed|Receiving end does not exist|message port closed/i.test(message)) {
         scheduleInflightPull();
+        // A worker can terminate before its in-flight record is durable.
+        // Replay once if the restart broadcast missed this interrupted batch.
+        window.setTimeout(() => {
+          if (translateWork.signal.aborted || page.paragraphs !== paragraphs) return;
+          const missed = ready.filter((p, index) =>
+            p.requestVersion === versions[index] && p.status === 'error' && !p.replayedAfterDisconnect);
+          for (const p of missed) { p.replayedAfterDisconnect = true; p.status = 'idle'; }
+          if (missed.length) void translatePage(page, true, missed);
+        }, 800);
       }
     }
     renderPageParas(page);
@@ -491,7 +622,7 @@ async function resumePdfInflight(tasks: Array<{ key: string; textHash: string }>
   }
   for (const page of pageSet) {
     page.workStarted = true;
-    void translatePage(page);
+    void translatePage(page, true);
   }
   return true;
 }
@@ -533,6 +664,43 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 
 /* --------------------------------- rendering ---------------------------------- */
 
+function selectParagraph(page: PageState, index: number, target: 'source' | 'translation'): void {
+  const scope = page.container;
+  scope.querySelectorAll('.selected').forEach((el) => el.classList.remove('selected'));
+  const hit = scope.querySelector<HTMLElement>(`.source-hit[data-index="${index}"]`);
+  const para = page.paragraphs[index]?.el;
+  hit?.classList.add('selected');
+  para?.classList.add('selected');
+  const destination = target === 'source' ? hit ?? page.canvas : para;
+  destination?.scrollIntoView({ block: 'center' });
+  destination?.focus({ preventScroll: true });
+}
+
+function placeSourceLinks(page: PageState): void {
+  const viewport = page.viewport;
+  if (!viewport) return;
+  const sheet = page.canvas.parentElement!;
+  if (sheet.querySelector('.source-links')) return;
+  const layer = document.createElement('div');
+  layer.className = 'source-links';
+  page.paragraphs.forEach((para, index) => {
+    if (!para.bounds) return;
+    const [x0, y0, x1, y1] = viewport.convertToViewportRectangle(para.bounds);
+    const hit = document.createElement('button');
+    hit.className = 'source-hit';
+    hit.dataset.index = String(index);
+    hit.title = `查看第 ${index + 1} 段译文`;
+    hit.setAttribute('aria-label', hit.title);
+    hit.style.left = `${100 * Math.min(x0, x1) / viewport.width}%`;
+    hit.style.top = `${100 * Math.min(y0, y1) / viewport.height}%`;
+    hit.style.width = `${100 * Math.abs(x1 - x0) / viewport.width}%`;
+    hit.style.height = `${100 * Math.abs(y1 - y0) / viewport.height}%`;
+    hit.onclick = () => selectParagraph(page, index, 'translation');
+    layer.appendChild(hit);
+  });
+  sheet.appendChild(layer);
+}
+
 function ensureParasDom(page: PageState): void {
   const existing = page.container.querySelector('.paras');
   if (keepExistingParas(existing, page.scanned, page.paragraphs)) return;
@@ -545,9 +713,10 @@ function ensureParasDom(page: PageState): void {
     showScannedHint(page);
     return;
   }
-  page.paragraphs.forEach((para) => {
+  page.paragraphs.forEach((para, index) => {
     const el = document.createElement('div');
     el.className = 'para';
+    el.tabIndex = -1;
     const src = document.createElement('div');
     src.className = 'src';
     const dst = document.createElement('div');
@@ -573,7 +742,11 @@ function ensureParasDom(page: PageState): void {
       el.addEventListener('mouseenter', () => showTooltip(el, para.text));
       el.addEventListener('mouseleave', hideTooltip);
     }
-    el.append(src, dst, mark);
+    const locate = document.createElement('button');
+    locate.className = 'source-location';
+    locate.textContent = para.bounds ? `定位原文 · 第 ${index + 1} 段` : '定位扫描页';
+    locate.onclick = () => selectParagraph(page, index, 'source');
+    el.append(locate, src, dst, mark);
     paras.appendChild(el);
     para.el = el;
   });
@@ -755,9 +928,10 @@ function progressCounts(): { done: number; total: number; failed: number } {
 }
 
 function updateProgress(): void {
+  syncLayoutControl();
   const { done, total, failed } = progressCounts();
   const scannedPages = pages.filter((p) => p.scanned).length;
-  let text = total > 0 ? `已译 ${done}/${total}` : '—';
+  let text = total > 0 ? `已读段落：已译 ${done}/${total}` : '—';
   if (failed > 0) text += `，失败 ${failed}`;
   if (scannedPages > 0) text += `，扫描页 ${scannedPages}`;
   progressEl.textContent = text;
@@ -777,28 +951,66 @@ function updateProgress(): void {
 
 /* ----------------------------------- events ----------------------------------- */
 
+pageLayout.addEventListener('change', () => {
+  const page = pagesByNumber.get(currentPage);
+  if (!page?.loaded) return;
+  page.layout = pageLayout.value as PdfLayoutPreset;
+  page.loaded = false;
+  page.workStarted = false;
+  page.paragraphs = [];
+  page.container.querySelector('.paras')?.remove();
+  page.container.querySelector('.source-links')?.remove();
+  pageLayout.disabled = true;
+  scheduleVisible();
+});
+
 modeSelect.addEventListener('change', () => {
   const next = modeSelect.value as ViewerMode;
   mode = next;
   hideTooltip();
   rerenderAll();
-  if (next !== 'original') {
-    for (const page of pages) {
-      if (page.workStarted && page.paragraphs.some((p) => p.status === 'idle')) {
-        void translatePage(page);
-      }
-    }
-  }
+  scheduleVisible();
 });
 
 retryBtn.addEventListener('click', () => {
   for (const page of pages) {
     if (page.paragraphs.some((p) => p.status === 'error')) {
-      void translatePage(page);
+      void translatePage(page, true);
     }
   }
 });
 
+let scrollFrame = 0;
+window.addEventListener('scroll', () => {
+  if (scrollFrame) return;
+  scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; updateCurrentPage(); });
+}, { passive: true });
+
+exportBtn.addEventListener('click', () => {
+  if (!pdfDoc) return;
+  const onlyCurrent = $<HTMLSelectElement>('export-range').value === 'page';
+  const first = onlyCurrent ? currentPage : 1;
+  const last = onlyCurrent ? currentPage : pdfDoc.numPages;
+  const html = bilingualPdfHtml(documentTitle, first, last, (n) => pagesByNumber.get(n));
+  const anchor = document.createElement('a');
+  const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  anchor.href = blobUrl;
+  const base = (titleEl.textContent ?? 'document').replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]/g, '_');
+  anchor.download = `${base}.${onlyCurrent ? `p${first}.` : ''}bilingual.html`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+});
+
+localFile.addEventListener('change', () => {
+  const file = localFile.files?.[0];
+  if (!file) return;
+  localFile.disabled = true;
+  void main(file).catch((e: unknown) => fatal(String(e))).finally(() => {
+    localFile.value = ''; localFile.disabled = false;
+  });
+});
+
+localFile.disabled = sourceUrl() !== null;
 main().catch((e: unknown) => {
   fatal(`阅读器发生未预期错误：${e instanceof Error ? e.message : String(e)}`);
-});
+}).finally(() => { localFile.disabled = false; });

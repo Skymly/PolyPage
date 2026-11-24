@@ -45,6 +45,7 @@ import {
   handleTranslate,
   handleTranslateCue,
   registerTranslationPort,
+  translateDraft,
   translateSelection,
   translationMemoryStats,
 } from './translationRequests';
@@ -79,6 +80,9 @@ chrome.runtime.onMessage.addListener(
           case 'cancel-translations':
             if (sender.tab?.id !== undefined) cancelTranslations(sender.tab.id);
             sendResponse({ ok: true });
+            break;
+          case 'translate-draft':
+            sendResponse(await translateDraft(message.texts, message.domain, sender.tab?.id, sender.frameId));
             break;
           case 'translate-selection':
             sendResponse(await translateSelection(message.text, message.domain, sender.tab?.id, sender.frameId));

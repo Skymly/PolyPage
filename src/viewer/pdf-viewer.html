@@ -8,17 +8,30 @@
   <body>
     <header id="toolbar">
       <span class="brand">PolyPage 双语阅读器</span>
-      <span id="doc-title" class="title" title="">加载中…</span>
+      <label class="file-picker">打开本地 PDF<input type="file" id="local-file" accept="application/pdf,.pdf"></label>
+      <a id="open-another" class="hidden" href="./pdf-viewer.html" target="_blank" rel="noopener">打开其他 PDF</a>
+      <span id="doc-title" class="title" title="">请选择 PDF</span>
       <span id="progress" class="progress"></span>
-      <span id="budget-hint" class="hint hidden"></span>
       <span class="spacer"></span>
+      <form id="page-jump" class="hidden">
+        <label>页码 <input id="page-number" type="number" value="1" min="1" required></label>
+        <span id="page-total"></span>
+        <button>跳转</button>
+      </form>
       <select id="mode-select" title="显示模式">
         <option value="bilingual">双语对照</option>
         <option value="translated_hover_original">译文 + 悬停原文</option>
         <option value="original">仅原文</option>
       </select>
       <button id="retry-btn" disabled>重试失败</button>
+      <label>本页版式 <select id="page-layout" disabled>
+        <option value="auto">自动</option><option value="single">单栏</option>
+        <option value="columns">双栏</option><option value="table">表格</option>
+      </select></label>
+      <label>导出范围 <select id="export-range"><option value="all">全文</option><option value="page">当前页</option></select></label>
+      <button id="export-btn" disabled aria-describedby="export-hint">导出双语 HTML</button>
     </header>
+    <div id="export-hint">导出已读取的原文和已有译文，未读取、未翻译或待识别的位置会标明。</div>
     <main id="document" aria-busy="true"></main>
     <div id="fatal" class="fatal hidden"></div>
     <script type="module" src="./main.ts"></script>

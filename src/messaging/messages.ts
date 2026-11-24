@@ -81,6 +81,7 @@ export function kindedFailure(kind: ErrorKind, error: string): { ok: false; kind
 export type RuntimeMessage =
   | { type: 'translate'; v?: number; items: TranslationItem[]; domain?: string; pageLanguage?: string | null; tabId?: number }
   | { type: 'translate-selection'; v?: number; text: string; domain?: string }
+  | { type: 'translate-draft'; v?: number; texts: string[]; domain?: string }
   /** 3.0: low-latency single-text path for subtitle cues (no batch window). */
   | { type: 'translate-cue'; v?: number; text: string; domain?: string }
   | { type: 'get-content-settings'; v?: number }
@@ -142,11 +143,12 @@ export type RuntimeMessage =
   | { type: 'get-inflight'; v?: number; tabId?: number };
 
 export type OcrResponse =
-  | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string }
+  | { ok: true; segments: OcrSegment[]; cached: boolean; engine: string; recognitionOnly?: boolean }
   | { ok: false; kind: ErrorKind; error: string };
 
 export type RuntimeResponseFor<M extends RuntimeMessage> =
   M extends { type: 'translate' } ? TranslateResults :
+  M extends { type: 'translate-draft' } ? TranslateResults :
   M extends { type: 'translate-selection' } ? { ok: boolean; translated?: string; language?: string; error?: string; kind?: ErrorKind } :
   M extends { type: 'translate-cue' } ? { ok: boolean; translated?: string; error?: string; kind?: ErrorKind } :
   M extends { type: 'get-content-settings' } ? ContentSettings :
@@ -220,7 +222,7 @@ export function sendRuntime<M extends RuntimeMessage>(
 
 export const STREAM_PORT_NAME = 'wt-stream';
 
-export type StreamPortInit = { items: TranslationItem[]; domain?: string };
+export type StreamPortInit = { items: TranslationItem[]; domain?: string; pageLanguage?: string | null };
 export type StreamPortMessage =
   | { type: 'delta'; key: string; delta: string }
   | { type: 'done'; key: string; text: string }
@@ -249,6 +251,7 @@ export type TabCommand =
   | { type: 'wt:translate-image'; v?: number; url: string }
   /** 3.0 (pillar G): toggle the subtitle layer on the active video. */
   | { type: 'wt:toggle-subtitles'; v?: number }
+  | { type: 'wt:export-srt'; v?: number }
   /** 3.0 (pillar H): repeat the last selection translation (Alt+Q). */
   | { type: 'wt:repeat-selection'; v?: number }
   /** 3.0 (pillar H): re-submit persisted in-flight tasks after SW restart. */
@@ -261,6 +264,7 @@ export type TabCommand =
 export type TabCommandResponse<C extends TabCommand> =
   C extends { type: 'wt:get-state' } ? PageState :
   C extends { type: 'wt:collect-export' } ? { entries: ExportEntry[]; title: string } :
+  C extends { type: 'wt:export-srt' } ? { srt: string; title: string } :
   C extends { type: 'wt:open-pdf-viewer' } ? { ok: true; url: string } :
   C extends { type: 'wt:transcribe-media' } ? { ok: boolean; skipped?: string; error?: string } :
   { ok: true };

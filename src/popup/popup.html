@@ -51,6 +51,8 @@
         <div class="actions actions-secondary">
           <button id="btn-open-pdf" class="btn btn-small hidden">打开双语阅读器</button>
           <button id="btn-toggle-subtitles" class="btn btn-small hidden">字幕翻译</button>
+          <button id="btn-export-srt" class="btn btn-small hidden" title="导出当前媒体已翻译的字幕。自绘字幕使用实际观看期间的播放时间。">导出已译字幕 (.srt)</button>
+          <span id="srt-status" role="status"></span>
           <button id="btn-transcribe" class="btn btn-small hidden">转写并翻译</button>
         </div>
         <div id="media-hint" class="info-hints hidden"></div>
@@ -69,6 +71,7 @@
     </main>
 
     <footer class="footer">
+      <a href="../viewer/pdf-viewer.html" target="_blank" rel="noopener" id="open-local-pdf">阅读本地 PDF</a>
       <a href="#" id="open-options">打开设置</a>
       <span class="version">v4.0.0</span>
     </footer>

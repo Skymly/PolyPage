@@ -30,3 +30,12 @@ it('queries a keyless local endpoint and reports that a missing catalog can be b
   expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:11434/v1/models');
   expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('Authorization')).toBe(false);
 });
+
+it('offers DeepSeek catalog levels and the API’s option to turn thinking off', async () => {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [
+    { id: 'deepseek-flash', effort: { supported_levels: ['low', 'high', 'max'] } },
+  ] })));
+  await expect(listProviderModels({ ...defaultProvider(), baseUrl: 'https://api.deepseek.com/v1' })).resolves.toEqual([
+    { id: 'deepseek-flash', name: 'deepseek-flash', reasoningEfforts: ['none', 'low', 'high', 'max'] },
+  ]);
+});

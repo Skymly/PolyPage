@@ -198,6 +198,9 @@ export class SelectionTranslator {
   }
 
   private readSelection(): string | null {
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    if (focused instanceof HTMLInputElement && focused.type === 'password') return null;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
     const text = selection.toString().trim();

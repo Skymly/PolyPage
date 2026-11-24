@@ -54,14 +54,19 @@ describe('OpenCode Go provider', () => {
       headers: { authorization: 'wrong-key', 'x-opencode-session': 'wrong-session' },
       apiKey: ' test-key ',
       model: 'opencode-go/claude-haiku-5-5',
+      thinkingLevel: 'low' as const,
     };
     const provider = createProvider(config);
     const signal = new AbortController().signal;
-    expect(await provider.translateTexts(['Hello'], context, signal)).toEqual(['你好']);
-    expect(await provider.translateStream?.('Hello', context, vi.fn(), signal)).toBe('你好');
+    const scoped = { ...context, documentContext: { title: 'Manual', section: 'TCP' }, glossary: 'port = 端口' };
+    expect(await provider.translateTexts(['Hello'], scoped, signal)).toEqual(['你好']);
+    expect(await provider.translateStream?.('Hello', scoped, vi.fn(), signal)).toBe('你好');
     for (const [url, init] of fetchMock.mock.calls) {
       expect(url).toBe('https://opencode.ai/inference/go/openai/v1/chat/completions');
-      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'claude-haiku-5-5' });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'claude-haiku-5-5', reasoning_effort: 'low' });
+      const { messages } = JSON.parse(String(init?.body));
+      expect(messages[0].content).toContain('port = 端口');
+      expect(messages[1].content).toContain('"section":"TCP"');
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer test-key');
     }
     const session = new Headers(fetchMock.mock.calls[0][1]?.headers).get('x-opencode-session');
@@ -73,15 +78,20 @@ describe('OpenCode Go provider', () => {
 
   it('loads the live catalog shape without credentials and keeps text models with native protocols', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [
-      { id: 'kimi-k3', name: 'Kimi K3' },
-      { id: 'claude-haiku-5-5', name: 'Claude Haiku', api: { messages: {} } },
+      { id: 'kimi-k3', name: 'Kimi K3', capabilities: { reasoning: { supported: true, effort: ['max', 'default', 1] } } },
+      {
+        id: 'claude-haiku-5-5', name: 'Claude Haiku', api: { messages: {} },
+        capabilities: { reasoning: { supported: true, toggle: true, effort: ['high', 'none'] } },
+      },
+      { id: 'unconfigurable-model', capabilities: { reasoning: { supported: true } } },
       { id: 'kimi-k3', name: 'Duplicate' },
       { id: 'image-model', type: 'image' },
     ] }));
     vi.stubGlobal('fetch', fetchMock);
     await expect(listProviderModels({ ...defaultProvider(), type: 'opencode-go', apiKey: 'go-test-key' })).resolves.toEqual([
-      { id: 'claude-haiku-5-5', name: 'Claude Haiku' },
-      { id: 'kimi-k3', name: 'Kimi K3' },
+      { id: 'claude-haiku-5-5', name: 'Claude Haiku', reasoningEfforts: ['none', 'high'] },
+      { id: 'kimi-k3', name: 'Kimi K3', reasoningEfforts: ['max'] },
+      { id: 'unconfigurable-model', name: 'unconfigurable-model', reasoningEfforts: [] },
     ]);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('https://opencode.ai/inference/go/v1/models');

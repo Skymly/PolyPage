@@ -16,8 +16,8 @@ export const TM_MAX_CHARS = 240;
 export const TM_DB_NAME = 'polypage-tm';
 export const TM_STORE_NAME = 'tm';
 
-/** Unicode punctuation / symbols stripped from both ends after whitespace fold. */
-const EDGE_PUNCT_RE = /^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu;
+/** Preserve meaningful boundary symbols in .NET, C#, C++, and similar terms. */
+const EDGE_PUNCT_RE = /^["'\p{Pi}「『]+|["'\p{Pf}」』.!。…]+$/gu;
 
 export interface TmEntry {
   hash: string;
@@ -56,8 +56,12 @@ export function tmEntryHash(
   normalizedSource: string,
   langPair: string,
   glossaryVersion = 0,
+  contextScope = '',
 ): string {
-  return hashText(`${langPair}\u0000g${glossaryVersion}\u0000${normalizedSource}`);
+  const scope = contextScope ? '\u0000c' + contextScope : '';
+  // Older entries kept only the normalized string. We cannot tell whether
+  // an old "using C" row originally referred to C, C# or C++.
+  return hashText(`tm2\u0000${langPair}\u0000g${glossaryVersion}${scope}\u0000${normalizedSource}`);
 }
 
 export function isTmEligible(text: string): boolean {
@@ -214,14 +218,16 @@ export class TranslationMemory {
     items: TmLookupItem[],
     langPair: string,
     glossaryVersion = 0,
+    contextScope = '',
   ): Promise<Map<string, string>> {
-    return this.withLock(() => this.lookupUnlocked(items, langPair, glossaryVersion));
+    return this.withLock(() => this.lookupUnlocked(items, langPair, glossaryVersion, contextScope));
   }
 
   private async lookupUnlocked(
     items: TmLookupItem[],
     langPair: string,
     glossaryVersion: number,
+    contextScope: string,
   ): Promise<Map<string, string>> {
     const hits = new Map<string, string>();
     if (items.length === 0) return hits;
@@ -229,7 +235,7 @@ export class TranslationMemory {
     for (const item of items) {
       const normalized = normalizeTmSource(item.text);
       if (normalized === '') continue;
-      planned.push({ key: item.key, hash: tmEntryHash(normalized, langPair, glossaryVersion) });
+      planned.push({ key: item.key, hash: tmEntryHash(normalized, langPair, glossaryVersion, contextScope) });
     }
     if (planned.length === 0) return hits;
     const found = await this.store.getMany(planned.map((p) => p.hash));
@@ -248,8 +254,9 @@ export class TranslationMemory {
     langPair: string,
     maxEntries = this.maxEntries,
     glossaryVersion = 0,
+    contextScope = '',
   ): Promise<void> {
-    return this.withLock(() => this.rememberUnlocked(items, langPair, maxEntries, glossaryVersion));
+    return this.withLock(() => this.rememberUnlocked(items, langPair, maxEntries, glossaryVersion, contextScope));
   }
 
   private async rememberUnlocked(
@@ -257,6 +264,7 @@ export class TranslationMemory {
     langPair: string,
     maxEntries: number,
     glossaryVersion: number,
+    contextScope: string,
   ): Promise<void> {
     const now = Date.now();
     const written = new Set<string>();
@@ -266,7 +274,7 @@ export class TranslationMemory {
       if (translated === '') continue;
       const normalized = normalizeTmSource(item.source);
       if (normalized === '') continue;
-      const hash = tmEntryHash(normalized, langPair, glossaryVersion);
+      const hash = tmEntryHash(normalized, langPair, glossaryVersion, contextScope);
       const existing = await this.store.get(hash);
       await this.store.put({
         hash,

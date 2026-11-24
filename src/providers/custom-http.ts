@@ -80,22 +80,22 @@ export class CustomHttpProvider implements TranslationProvider {
   private renderBody(texts: string[], ctx: TranslationContext): string | undefined {
     const template = this.config.bodyTemplate;
     if (!template || template.trim() === '') return undefined;
-    let rendered = template
-      .replace(/\{\{\s*texts\s*\}\}/g, JSON.stringify(texts))
-      .replace(/\{\{\s*text\s*\}\}/g, JSON.stringify(texts[0] ?? ''));
     const simpleVars: Record<string, string> = {
       sourceLanguage: ctx.sourceLanguage,
       targetLanguage: ctx.targetLanguage,
       model: this.config.model,
       domain: ctx.domain ?? '',
+      documentTitle: ctx.documentContext?.title ?? '',
+      section: ctx.documentContext?.section ?? '',
       glossary: ctx.glossary ?? '',
       apiKey: this.config.apiKey,
     };
-    rendered = rendered.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (match, name: string) =>
-      Object.prototype.hasOwnProperty.call(simpleVars, name)
-        ? escapeForJsonString(simpleVars[name])
-        : match,
-    );
+    // Only template tokens are expanded. Source text and labels are opaque values.
+    const rendered = template.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (match, name: string) => {
+      if (name === 'texts') return JSON.stringify(texts);
+      if (name === 'text') return JSON.stringify(texts[0] ?? '');
+      return Object.hasOwn(simpleVars, name) ? escapeForJsonString(simpleVars[name]) : match;
+    });
     // Validate it is proper JSON; also add api key in body when requested.
     let parsed: unknown;
     try {

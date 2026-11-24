@@ -19,7 +19,7 @@ export type TranslateItemsFn = (
 export const defaultRuntimeTranslateItems: TranslateItemsFn = async (items, opts) => {
   const domain = opts?.domain ?? (typeof location !== 'undefined' ? location.hostname : undefined);
   if (opts?.onDelta) {
-    return streamViaPort(items, opts.onDelta, domain, opts.signal);
+    return streamViaPort(items, opts.onDelta, domain, opts.signal, opts.pageLanguage);
   }
   return sendRuntime({
     type: 'translate',
@@ -34,6 +34,7 @@ function streamViaPort(
   onDelta: (key: string, delta: string) => void,
   domain?: string,
   signal?: AbortSignal,
+  pageLanguage?: string | null,
 ): Promise<TranslateResults> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
@@ -77,7 +78,7 @@ function streamViaPort(
       }
       finish();
     });
-    const init: StreamPortInit = { items, domain };
+    const init: StreamPortInit = { items, domain, pageLanguage };
     try {
       port.postMessage(init);
     } catch (error) {

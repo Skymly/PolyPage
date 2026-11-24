@@ -1,5 +1,17 @@
 import { sendRuntime } from '../messaging/messages';
+import { minimaxThinkingLevels, parseThinkingLevel, REASONING_EFFORTS, type ThinkingLevel } from '../shared/modelThinking';
 import { supportsProviderModelList, type ProviderConfig, type ProviderModel } from '../shared/types';
+
+const THINKING_LABELS: Record<ThinkingLevel, string> = {
+  none: '关闭',
+  enabled: '开启',
+  minimal: '最低',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '特高',
+  max: '最高',
+};
 
 interface ModelListView {
   connection: string;
@@ -23,7 +35,11 @@ export function setupProviderModelEditor(
   const fetchButton = $<HTMLButtonElement>('provider-model-fetch');
   const modeButton = $<HTMLButtonElement>('provider-model-mode');
   const status = $('provider-model-status');
+  const thinking = $<HTMLSelectElement>('f-thinking-level');
+  const thinkingField = $('field-thinking-level');
+  const thinkingHint = $('thinking-level-hint');
   const views = new Map<string, ModelListView>();
+  let thinkingModel = '';
 
   function selectedView(): ModelListView | undefined {
     const provider = selectedProvider();
@@ -50,8 +66,47 @@ export function setupProviderModelEditor(
     }
   }
 
-  function render(): void {
+  function thinkingModelId(): string {
+    const id = model.value.trim();
+    return selectedProvider()?.type === 'opencode-go' ? id.replace(/^opencode-go\//, '') : id;
+  }
+
+  function renderThinking(view: ModelListView | undefined, level: ThinkingLevel | ''): void {
+    thinkingField.classList.toggle('hidden', !view);
+    thinkingModel = thinkingModelId();
+    if (!view) {
+      thinking.replaceChildren();
+      return;
+    }
+    const catalogModel = view.models.find(({ id }) => id === thinkingModel);
+    const supported = minimaxThinkingLevels(baseUrl.value, thinkingModel) ?? catalogModel?.reasoningEfforts;
+    const levels = supported ?? REASONING_EFFORTS;
+    const options = [{ value: '', label: '默认' }, ...levels.map((value) => ({ value, label: THINKING_LABELS[value] }))];
+    const unavailable = level && !levels.includes(level);
+    if (unavailable) {
+      options.push({ value: level, label: `${THINKING_LABELS[level]}（当前配置）` });
+    }
+    thinking.replaceChildren(...options.map(({ value, label }) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }));
+    thinking.value = level;
+    thinking.disabled = levels.length === 0 && !level;
+    if (unavailable) {
+      thinkingHint.textContent = '当前配置的档位不在此模型的可用选项中。';
+    } else if (supported === undefined) {
+      thinkingHint.textContent = '可用档位取决于模型和接口。';
+    } else {
+      thinkingHint.textContent = thinking.disabled ? '当前模型未提供可设置的思考档位。' : '';
+    }
+    thinkingHint.hidden = !thinkingHint.textContent;
+  }
+
+  function render(level: ThinkingLevel | '' = parseThinkingLevel(thinking.value) ?? ''): void {
     const view = selectedView();
+    renderThinking(view, level);
     const showPicker = !!view && !view.manual;
     picker.classList.toggle('hidden', !showPicker);
     model.classList.toggle('hidden', showPicker);
@@ -106,8 +161,12 @@ export function setupProviderModelEditor(
     model.value = picker.value;
     model.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  model.addEventListener('input', syncModelSelection);
-  for (const input of [baseUrl, apiKey, headers]) input.addEventListener('input', render);
+  model.addEventListener('input', () => {
+    syncModelSelection();
+    if (thinkingModelId() !== thinkingModel) renderThinking(selectedView(), '');
+  });
+  thinking.addEventListener('change', () => renderThinking(selectedView(), parseThinkingLevel(thinking.value) ?? ''));
+  for (const input of [baseUrl, apiKey, headers]) input.addEventListener('input', () => render());
   modeButton.addEventListener('click', () => {
     const view = selectedView();
     if (!view) return;
@@ -117,5 +176,5 @@ export function setupProviderModelEditor(
     else if (!picker.disabled) picker.focus();
   });
   fetchButton.addEventListener('click', () => void fetchModels());
-  return render;
+  return () => render(selectedProvider()?.thinkingLevel ?? '');
 }

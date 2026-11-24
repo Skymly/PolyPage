@@ -1,9 +1,8 @@
 /**
  * PDF page object / canvas lifetime (M-65).
  *
- * Text extraction still walks every page once (header/footer signatures),
- * but the pdf.js PageProxy must not stay pinned, and off-screen canvases
- * must drop their backing store.
+ * After text extraction the PageProxy can release its resources. Off-screen
+ * canvases can also drop their backing store.
  */
 import type { PdfLine } from './segment';
 

@@ -188,7 +188,7 @@ export const BUILTIN_SITE_RULES: SiteRule[] = [
     // 3.0 (pillar G): YouTube self-drawn captions. Known limitation: the
     // selectors break when YouTube ships new markup (spec 3.0 §7.2 item 4).
     id: 'builtin-youtube',
-    match: ['*.youtube.com'],
+    match: ['*.youtube.com', 'www.youtube-nocookie.com'],
     subtitleSelectors: ['.ytp-caption-segment'],
     enabled: true,
   },
@@ -230,6 +230,7 @@ export function defaultSettings(): Settings {
     blacklist: [],
     defaultSourceLanguage: 'auto',
     defaultTargetLanguage: '简体中文',
+    draftTargetLanguage: '英语',
     cacheEnabled: true,
     minTextLength: 6,
     glossary: [],

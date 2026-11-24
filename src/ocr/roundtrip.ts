@@ -137,6 +137,7 @@ export class OcrRoundTrip {
                 translation: sanitizeSegmentTranslation(seg.translation || '', settings),
               })),
               cached: true,
+              recognitionOnly: engineId === 'tesseract-wasm' && !instance,
               engine: engineId,
             };
           }
@@ -206,7 +207,7 @@ export class OcrRoundTrip {
           /* cache best-effort */
         }
       }
-      return { ok: true, segments, cached: false, engine: result.engine };
+      return { ok: true, segments, cached: false, engine: result.engine, recognitionOnly: engineId === 'tesseract-wasm' && !instance };
     } catch (e) {
       const err = toProviderError(e);
       if (provider) {

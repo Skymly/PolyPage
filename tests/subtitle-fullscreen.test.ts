@@ -86,7 +86,8 @@ describe('SubtitleManager fullscreen reparent (M-32)', () => {
     document.body.innerHTML = '<video></video>';
     const video = document.querySelector('video')!;
     const track = Object.assign(new EventTarget(), { kind: 'subtitles', mode: 'showing' });
-    Object.defineProperty(video, 'textTracks', { value: [track] });
+    const tracks = Object.assign(new EventTarget(), { 0: track, length: 1 });
+    Object.defineProperty(video, 'textTracks', { value: tracks });
     expect(manager.toggle()).toBe('on');
 
     const host = document.querySelector<HTMLElement>('.wt-subtitle-host')!;

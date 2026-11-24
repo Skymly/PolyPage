@@ -3,7 +3,7 @@ import { hostnameFromUrl } from '../shared/siteRules';
 import { computeOcrAvailable, tesseractRuntimeAvailable } from '../shared/tesseractRuntime';
 import type { ContentSettings, Settings } from '../shared/types';
 import { loadSettings, saveSettings } from '../storage/settings';
-import { effectiveLanguages } from '../translation/context';
+import { buildFailoverChain, effectiveLanguages, isProviderConfigured } from '../translation/context';
 import { activeProviderCapabilities } from './gatewayStatus';
 
 let settingsCache: Settings | null = null;
@@ -16,6 +16,18 @@ export async function getSettings(force = false): Promise<Settings> {
 export async function persistSettings(settings: Settings): Promise<void> {
   await saveSettings(settings);
   settingsCache = settings;
+}
+
+export function imageRoute(settings: Settings): string {
+  const provider = settings.providers.find(p => p.id === settings.activeProviderId);
+  const ready = provider && isProviderConfigured(provider);
+  if (settings.imageTranslate.engine === 'llm-vision') {
+    return ready ? `图片发送至 ${provider.name} 识别并翻译` : '请先配置视觉翻译服务';
+  }
+  if (!ready) return '本机识别，仅提取文字';
+  const backups = buildFailoverChain(settings, provider.id)
+    .map(id => settings.providers.find(p => p.id === id)?.name).filter(Boolean);
+  return `本机识别，文字发给 ${provider.name}${backups.length ? `（备用：${backups.join('、')}）` : ''}`;
 }
 
 export function buildContentSettings(s: Settings, tabUrl?: string): ContentSettings {
@@ -32,11 +44,13 @@ export function buildContentSettings(s: Settings, tabUrl?: string): ContentSetti
     inlineBudget: s.inlineBudget,
     viewportBudget: s.viewportBudget,
     defaultTargetLanguage: s.defaultTargetLanguage,
+    draftTargetLanguage: s.draftTargetLanguage,
     languageDetection: s.languageDetection,
     selectionSpeak: s.selectionSpeak,
     selectionTargetLanguage: provider ? effectiveLanguages(s, provider).target : s.defaultTargetLanguage,
     imageTranslateEnabled: s.imageTranslate.enabled,
     imageTranslateTrigger: s.imageTranslate.trigger,
+    imageRoute: imageRoute(s),
     visionSupported: vision,
     subtitlesEnabled: s.subtitles.enabled,
     subtitleBilingual: s.subtitles.bilingual,

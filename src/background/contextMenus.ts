@@ -4,6 +4,7 @@ import type { Settings } from '../shared/types';
 import { logError } from './diagnostics';
 import { activeProviderCapabilities } from './gatewayStatus';
 import { handlePdfOpen, looksLikePdfUrl } from './pdfRequests';
+import { imageRoute } from './settingsState';
 
 const MENU_TRANSLATE_PAGE = 'wt-translate-page';
 const MENU_TRANSLATE_SELECTION = 'wt-translate-selection';
@@ -51,7 +52,7 @@ export function setupContextMenus(settings?: Settings): void {
         if (menu.create) {
           chrome.contextMenus.create({
             id: MENU_TRANSLATE_IMAGE,
-            title: menu.title,
+            title: menu.enabled ? `翻译图片文字 · ${imageRoute(settings)}` : menu.title,
             contexts: ['image'],
             enabled: menu.enabled,
           });

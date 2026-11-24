@@ -88,7 +88,9 @@ describe('DeepL provider', () => {
     const provider = createProvider(
       baseConfig('deepl', { baseUrl: 'https://api-free.deepl.com', formality: 'more' }),
     );
-    const out = await provider.translateTexts(['Hello, world', 'Second'], ctx, new AbortController().signal);
+    const out = await provider.translateTexts(['Hello, world', 'Second'], {
+      ...ctx, documentContext: { title: 'Manual', section: 'Greetings' }, glossary: 'Hello = 您好',
+    }, new AbortController().signal);
     expect(out).toEqual(['你好，世界', '第二条']);
 
     const req = captured[0];
@@ -99,6 +101,7 @@ describe('DeepL provider', () => {
       target_lang: 'ZH',
       source_lang: 'EN',
       formality: 'more',
+      context: 'Manual\nGreetings\nHello = 您好',
     });
   });
 

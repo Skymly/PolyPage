@@ -11,7 +11,10 @@
 /** Structural typing keeps us independent of pdf.js's own d.ts. */
 export interface PdfPageLike {
   pageNumber: number;
-  getViewport(params: { scale: number }): { width: number; height: number };
+  getViewport(params: { scale: number }): {
+    width: number; height: number;
+    convertToViewportRectangle(box: [number, number, number, number]): number[];
+  };
   render(params: {
     canvasContext: CanvasRenderingContext2D;
     viewport: { width: number; height: number };
@@ -23,9 +26,19 @@ export interface PdfPageLike {
 
 export interface PdfDocumentLike {
   numPages: number;
+  getMetadata(): Promise<{ info?: { Title?: string } }>;
+  getOutline(): Promise<PdfOutlineEntry[] | null>;
+  getDestination(name: string): Promise<unknown[] | null>;
+  getPageIndex(ref: { num: number; gen: number }): Promise<number>;
   fingerprints?: readonly (string | null)[] | null;
   getPage(pageNumber: number): Promise<PdfPageLike>;
   destroy(): Promise<void>;
+}
+
+export interface PdfOutlineEntry {
+  title: string;
+  dest?: string | unknown[] | null;
+  items?: PdfOutlineEntry[];
 }
 
 interface PdfJsModule {

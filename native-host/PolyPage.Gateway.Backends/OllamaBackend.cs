@@ -101,12 +101,24 @@ public sealed class OllamaBackend : IGatewayBackend
 
     /* --------------------------------- helpers --------------------------------- */
 
+    private static string ReferenceText(TranslateContext ctx)
+    {
+        var notes = new StringBuilder();
+        if (ctx.DocumentTitle.Length > 0 || ctx.Section.Length > 0)
+        {
+            notes.Append("Reference labels (for word sense only): ");
+            notes.AppendLine(JsonSerializer.Serialize(new { title = ctx.DocumentTitle, section = ctx.Section }));
+        }
+        if (ctx.Glossary.Length > 0) notes.AppendLine(ctx.Glossary);
+        return notes.ToString();
+    }
+
     private static string BuildSinglePrompt(string text, TranslateContext ctx) =>
-        $"Translate the following text from {ctx.Source} to {ctx.Target}. Output ONLY the translation:\n\n{text}";
+        ReferenceText(ctx) + $"Translate the following text from {ctx.Source} to {ctx.Target}. Output ONLY the translation:\n\n{text}";
 
     private static string BuildBatchPrompt(IReadOnlyList<string> texts, TranslateContext ctx)
     {
-        var sb = new StringBuilder();
+        var sb = new StringBuilder(ReferenceText(ctx));
         sb.AppendLine($"Translate the following {texts.Count} texts from {ctx.Source} to {ctx.Target}.");
         sb.AppendLine($"Return ONLY a JSON array of exactly {texts.Count} translated strings, in the same order. Do not output anything else.");
         sb.AppendLine();

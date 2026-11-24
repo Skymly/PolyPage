@@ -12,6 +12,7 @@
  * 4.2: model / prompt / temperature fingerprint is also in the key (M-24).
  */
 import { CACHE_INDEX_KEY, CACHE_KEY_PREFIX, CACHE_MAX_ENTRIES } from '../shared/constants';
+import type { ThinkingLevel } from '../shared/modelThinking';
 import { hashText } from '../shared/utils';
 
 interface CacheEntry {
@@ -23,15 +24,17 @@ interface CacheIndex {
   order: string[];
 }
 
-/** Fingerprint of model + prompts + temperature (M-24). */
+/** Fingerprint of model settings and prompts (M-24). */
 export function cacheFingerprint(provider: {
   model: string;
   systemPrompt: string;
   userPromptTemplate: string;
   temperature: number;
+  thinkingLevel?: ThinkingLevel;
 }): string {
+  const thinking = provider.thinkingLevel ? `|${provider.thinkingLevel}` : '';
   return hashText(
-    `${provider.model}|${provider.systemPrompt}|${provider.userPromptTemplate}|${provider.temperature}`,
+    `${provider.model}|${provider.systemPrompt}|${provider.userPromptTemplate}|${provider.temperature}${thinking}`,
   );
 }
 

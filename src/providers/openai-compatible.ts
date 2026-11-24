@@ -9,7 +9,8 @@
  */
 import type { ProviderConfig } from '../shared/types';
 import { asrRequestTimeoutMs } from '../shared/constants';
-import { isMinimaxApiHost, minimaxHostHint, hostnameOfUrl } from '../shared/sanitize';
+import { minimaxThinkingLevels } from '../shared/modelThinking';
+import { minimaxHostHint, hostnameOfUrl } from '../shared/sanitize';
 import { parseBatchTranslation, renderTemplate } from '../shared/utils';
 import { buildVisionRequest, buildVisionUserPrompt } from '../shared/visionRequest';
 import {
@@ -91,13 +92,12 @@ export class OpenAICompatibleProvider implements TranslationProvider {
       stream: true,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
-      // Ollama Qwen3-class models otherwise spend the token budget on reasoning.
       ...this.extraModelOptions(),
       messages: [
         ...(config.systemPrompt.trim() !== ''
           ? [{ role: 'system', content: this.renderSystemPrompt(ctx) }]
           : []),
-        { role: 'user', content: userContent },
+        { role: 'user', content: this.withReferences(userContent, ctx) },
       ],
     });
 
@@ -346,13 +346,26 @@ export class OpenAICompatibleProvider implements TranslationProvider {
     return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1';
   }
 
-  /** MiniMax-M3 thinking and Ollama Qwen3 reasoning otherwise eat the token budget. */
   private extraModelOptions(): Record<string, unknown> {
-    if (this.isLocalEndpoint()) return { think: false };
-    if (isMinimaxApiHost(this.config.baseUrl)) {
-      return { thinking: { type: 'disabled' } };
+    const { baseUrl, model, thinkingLevel, maxTokens, temperature } = this.config;
+    if (minimaxThinkingLevels(baseUrl, model)?.includes('enabled')) {
+      return thinkingLevel && thinkingLevel !== 'none'
+        ? { thinking: { type: 'adaptive' }, reasoning_split: true }
+        : { thinking: { type: 'disabled' } };
     }
-    return {};
+    if (thinkingLevel === 'enabled') return { thinking: { type: 'adaptive' } };
+    if (thinkingLevel) {
+      if (hostnameOfUrl(baseUrl) === 'api.openai.com') {
+        return {
+          reasoning_effort: thinkingLevel,
+          max_completion_tokens: maxTokens,
+          max_tokens: undefined,
+          temperature: thinkingLevel === 'none' ? temperature : undefined,
+        };
+      }
+      return { reasoning_effort: thinkingLevel };
+    }
+    return this.isLocalEndpoint() ? { think: false } : {};
   }
 
   /** Prefer message.content; never treat reasoning_content as the translation. */
@@ -409,6 +422,17 @@ export class OpenAICompatibleProvider implements TranslationProvider {
   /** Render the system prompt template (2.0: {{glossary}}/{{domain}} become real data). */
   private renderSystemPrompt(ctx: TranslationContext): string {
     return renderTemplate(this.config.systemPrompt, this.templateVars(ctx, { text: '', texts: '' }));
+  }
+
+  private withReferences(content: string, ctx: TranslationContext): string {
+    const notes: string[] = [];
+    if (ctx.documentContext) {
+      notes.push('Reference labels (for word sense only): ' + JSON.stringify(ctx.documentContext));
+    }
+    if (ctx.glossary && !/\{\{\s*glossary\s*\}\}/.test(this.config.systemPrompt) && !content.includes(ctx.glossary)) {
+      notes.push(ctx.glossary);
+    }
+    return notes.length ? notes.join('\n') + '\n\n' + content : content;
   }
 
   private async translateSingle(
@@ -470,13 +494,12 @@ ${numbered}`.replace('{{sourceLanguage}}', ctx.sourceLanguage).replace('{{target
       stream: false,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
-      // Ollama Qwen3-class models otherwise spend the token budget on reasoning.
       ...this.extraModelOptions(),
       messages: [
         ...(config.systemPrompt.trim() !== ''
           ? [{ role: 'system', content: this.renderSystemPrompt(ctx) }]
           : []),
-        { role: 'user', content: userContent },
+        { role: 'user', content: this.withReferences(userContent, ctx) },
       ],
     });
 

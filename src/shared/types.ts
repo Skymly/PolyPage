@@ -11,6 +11,7 @@
  * pdf layoutPreset). See docs/history/PolyPage-4.1.md.
  * 4.2: schema v6 types (outputSanitize). See PolyPage-4.2.md.
  */
+import type { ReasoningEffort, ThinkingLevel } from './modelThinking';
 
 /** Display modes. 2.0 adds `inline` (sixth mode, spec 2.0 §7.2). */
 export type DisplayMode =
@@ -202,6 +203,8 @@ export interface ProviderConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** OpenAI-compatible and OpenCode Go only. Unset uses the existing request defaults. */
+  thinkingLevel?: ThinkingLevel;
   /** Empty string means "use global default language". */
   sourceLanguage: string;
   targetLanguage: string;
@@ -247,6 +250,8 @@ export interface ProviderConfig {
 export interface ProviderModel {
   id: string;
   name: string;
+  /** Missing when the catalog does not describe reasoning controls. */
+  reasoningEfforts?: ReasoningEffort[];
 }
 
 export function supportsProviderModelList(type: ProviderType): boolean {
@@ -265,6 +270,8 @@ export interface Settings {
   blacklist: string[];
   defaultSourceLanguage: string;
   defaultTargetLanguage: string;
+  /** Language for composing replies, independent of the reading Provider's pair. */
+  draftTargetLanguage: string;
   cacheEnabled: boolean;
   /** Minimum trimmed text length for a node to be translated. */
   minTextLength: number;
@@ -297,6 +304,12 @@ export interface Settings {
   outputSanitize: OutputSanitizeSettings;
 }
 
+/** Human-readable labels used to disambiguate a paragraph. */
+export interface DocumentContext {
+  title?: string;
+  section?: string;
+}
+
 /** A single translation work item as sent from content script to background. */
 export interface TranslationItem {
   /** Stable key within the page (the element's data-wt-id). */
@@ -304,6 +317,7 @@ export interface TranslationItem {
   text: string;
   /** Participates in the translation cache key; never sent to a Provider or TM. */
   cacheScope?: string;
+  documentContext?: DocumentContext;
 }
 
 export type ErrorKind =
@@ -451,11 +465,13 @@ export interface ContentSettings {
   viewportBudget: number;
   /* ------------------------- 3.0 additions ------------------------- */
   defaultTargetLanguage: string;
+  draftTargetLanguage?: string;
   languageDetection: LanguageDetectionMode;
   selectionSpeak: boolean;
   selectionTargetLanguage: string;
   imageTranslateEnabled: boolean;
   imageTranslateTrigger: ImageTranslateTrigger;
+  imageRoute?: string;
   /** Active provider supports vision; image entries grey out otherwise. */
   visionSupported: boolean;
   subtitlesEnabled: boolean;

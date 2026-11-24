@@ -48,6 +48,15 @@ export class NativeHostProvider implements TranslationProvider {
     return params;
   }
 
+  private textParams(ctx: TranslationContext): Record<string, unknown> {
+    return {
+      ...this.baseParams(ctx),
+      documentTitle: ctx.documentContext?.title,
+      section: ctx.documentContext?.section,
+      glossary: ctx.glossary || undefined,
+    };
+  }
+
   async translateTexts(
     texts: string[],
     ctx: TranslationContext,
@@ -63,7 +72,7 @@ export class NativeHostProvider implements TranslationProvider {
       const result = await nativeRequest<GatewayTranslateResult>(
         this.hostName,
         'translate',
-        { texts, stream: false, ...this.baseParams(ctx) },
+        { texts, stream: false, ...this.textParams(ctx) },
         {
           timeoutMs: this.config.timeoutMs,
           onId: (id) => {
@@ -94,7 +103,7 @@ export class NativeHostProvider implements TranslationProvider {
       const result = await nativeRequest<{ translation?: unknown }>(
         this.hostName,
         'translate.stream',
-        { text, ...this.baseParams(ctx) },
+        { text, ...this.textParams(ctx) },
         {
           timeoutMs: this.config.timeoutMs,
           onId: (id) => {

@@ -18,6 +18,7 @@ import { applyImageOverlay, removeImageOverlay } from '../ocr/overlay';
 export interface ImageButtonConfig {
   enabled: boolean;
   trigger: ImageTranslateTrigger;
+  route?: string;
   visionSupported: boolean;
   /** 4.0: OCR can run (vision provider or tesseract-wasm). */
   ocrAvailable: boolean;
@@ -30,6 +31,7 @@ export interface ImageButtonConfig {
 export class ImageTranslateController {
   private button: HTMLElement | null = null;
   private buttonImg: HTMLImageElement | null = null;
+  private contextImage: HTMLImageElement | null = null;
   private panel = new OcrResultPanel();
   private currentRequestId: string | null = null;
   private config: ImageButtonConfig = {
@@ -44,6 +46,7 @@ export class ImageTranslateController {
   configure(config: ImageButtonConfig): void {
     this.config = config;
     if (!this.hoverAllowed()) this.hideButton();
+    else if (this.buttonImg) this.showButton(this.buttonImg);
     if (!config.overlayEnabled) removeImageOverlay();
   }
 
@@ -57,6 +60,10 @@ export class ImageTranslateController {
   init(): void {
     document.addEventListener('mouseover', this.onMouseOver, true);
     document.addEventListener('mouseout', this.onMouseOut, true);
+    document.addEventListener('contextmenu', e => {
+      const target = e.composedPath()[0];
+      this.contextImage = e.isTrusted && target instanceof HTMLImageElement ? target : null;
+    }, true);
   }
 
   private onMouseOver = (e: MouseEvent): void => {
@@ -86,10 +93,10 @@ export class ImageTranslateController {
     this.hideButton();
     const btn = document.createElement('button');
     btn.className = 'wt-img-btn';
-    btn.textContent = '译图';
+    btn.textContent = this.config.ocrAvailable && this.config.route ? `译图 · ${this.config.route}` : '译图';
     const reason = this.config.disabledReason;
     btn.title = this.config.ocrAvailable
-      ? '翻译图片文字 (PolyPage)'
+      ? btn.textContent
       : reason ?? '当前翻译服务不支持视觉翻译';
     btn.style.cssText = [
       'position:fixed',
@@ -109,14 +116,15 @@ export class ImageTranslateController {
       btn.style.cursor = 'not-allowed';
     }
     const rect = img.getBoundingClientRect();
-    btn.style.left = `${Math.max(4, Math.round(rect.right - 52))}px`;
+    btn.style.maxWidth = `${Math.max(110, Math.min(rect.width, window.innerWidth) - 12)}px`;
+    btn.style.right = `${Math.max(4, Math.round(window.innerWidth - rect.right + 6))}px`;
     btn.style.top = `${Math.max(4, Math.round(rect.top + 6))}px`;
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
       if (!isTrustedGesture(e)) return;
       if (!this.config.ocrAvailable) return;
-      this.translateImage(img.src, img, true);
+      this.translateImage(img.currentSrc || img.src, img, true);
     });
     document.documentElement.appendChild(btn);
     this.button = btn;
@@ -136,6 +144,11 @@ export class ImageTranslateController {
   /** Entry for both hover button and background context-menu command. */
   translateImage(url: string, near?: Element, userGesture = false): void {
     if (!this.config.enabled) return;
+    const img = this.contextImage;
+    if (!near && img?.isConnected && (url === img.currentSrc || url === img.src)) near = img;
+    this.contextImage = null;
+    this.cancelCurrent();
+    removeImageOverlay();
     if (!this.config.ocrAvailable) {
       this.panel.setCallbacks({ onCancel: () => undefined, onClose: () => undefined });
       this.panel.showLoading(near);
@@ -144,14 +157,17 @@ export class ImageTranslateController {
     }
     const requestId = `ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.currentRequestId = requestId;
+    const close = () => {
+      this.cancelCurrent();
+      removeImageOverlay();
+    };
     this.panel.setCallbacks({
       onCancel: () => {
-        void sendRuntime({ type: 'ocr-cancel', requestId }).catch(() => undefined);
+        close();
         this.panel.hide();
       },
-      onClose: () => {
-        void sendRuntime({ type: 'ocr-cancel', requestId }).catch(() => undefined);
-      },
+      onClose: close,
+      onRetry: () => this.translateImage(url, near, userGesture),
     });
     this.panel.showLoading(near);
     void sendRuntime({
@@ -165,8 +181,9 @@ export class ImageTranslateController {
     })
       .then((res) => {
         if (this.currentRequestId !== requestId) return;
+        this.currentRequestId = null;
         if (res?.ok) {
-          this.panel.showSegments(res.segments);
+          this.panel.showSegments(res.segments, res.recognitionOnly);
           if (this.config.overlayEnabled && near instanceof HTMLImageElement) {
             applyImageOverlay(near, res.segments);
           } else {
@@ -178,7 +195,14 @@ export class ImageTranslateController {
       })
       .catch((e: unknown) => {
         if (this.currentRequestId !== requestId) return;
+        this.currentRequestId = null;
         this.panel.showError(e instanceof Error ? e.message : String(e));
       });
+  }
+
+  private cancelCurrent(): void {
+    const requestId = this.currentRequestId;
+    this.currentRequestId = null;
+    if (requestId) void sendRuntime({ type: 'ocr-cancel', requestId }).catch(() => undefined);
   }
 }

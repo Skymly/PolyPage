@@ -87,6 +87,10 @@
             <label for="default-target">默认目标语言</label>
             <input id="default-target" type="text" placeholder="简体中文" />
           </div>
+            <div class="field-row">
+              <label for="draft-target">输入框翻译目标语言</label>
+              <input id="draft-target" type="text" placeholder="英语" />
+            </div>
           <div class="field-row">
             <label for="min-text-length">最短翻译文本长度（字符）</label>
             <input id="min-text-length" type="number" min="1" max="200" step="1" />
@@ -160,6 +164,11 @@
                 <select id="provider-model-select" class="hidden"></select>
                 <p id="provider-model-status" class="hint" role="status"></p>
               </div>
+              <div class="field hidden" id="field-thinking-level">
+                <label for="f-thinking-level">思考级别</label>
+                <select id="f-thinking-level" aria-describedby="thinking-level-hint"></select>
+                <p id="thinking-level-hint" class="hint" hidden></p>
+              </div>
             </div>
 
             <div id="custom-http-fields" class="hidden">
@@ -194,7 +203,7 @@
               <div class="field">
                 <label
                   >Body 模板（JSON；变量：{{texts}} 数组 / {{text}} 单条 / {{sourceLanguage}}
-                  {{targetLanguage}} {{model}} {{apiKey}}）</label
+                  {{targetLanguage}} {{model}} {{apiKey}} {{domain}} {{documentTitle}} {{section}} {{glossary}}）</label
                 >
                 <textarea id="f-body-template" rows="5"></textarea>
               </div>
@@ -356,9 +365,8 @@
 
         <section id="glossary" class="card">
           <h2>术语表</h2>
-          <p class="hint">
-            术语表会注入到 System Prompt 的 {{glossary}} 变量；每次编辑自动递增版本号并使旧缓存失效。
-          </p>
+          <p class="hint" id="glossary-service"></p>
+          <p class="hint">保存修改后，在网页切回原文并重新翻译即可使用新译名。</p>
           <div id="glossary-list" class="glossary-list"></div>
           <div class="btn-row">
             <button id="glossary-add" class="btn">+ 添加术语</button>

@@ -13,6 +13,7 @@ public class OllamaBackendTests : IDisposable
     private int _chatCalls;
     private Func<int, (int Status, string Body, bool Sse)> _chat = _ => (200, ChatJson("[\"一\",\"二\"]"), false);
     private string _lastPath = "";
+    private string _lastPrompt = "";
 
     public OllamaBackendTests()
     {
@@ -47,6 +48,9 @@ public class OllamaBackendTests : IDisposable
                 }
 
                 var n = Interlocked.Increment(ref _chatCalls);
+                using var input = await System.Text.Json.JsonDocument.ParseAsync(ctx.Request.InputStream);
+                var userMessage = input.RootElement.GetProperty("messages").EnumerateArray().Last().GetProperty("content");
+                if (userMessage.ValueKind == System.Text.Json.JsonValueKind.String) _lastPrompt = userMessage.GetString() ?? "";
                 var (status, body, sse) = _chat(n);
                 if (sse)
                 {
@@ -102,9 +106,11 @@ public class OllamaBackendTests : IDisposable
     public async Task TranslateParsesChatJsonArray()
     {
         var result = await Make().TranslateAsync(
-            new[] { "one", "two" }, new TranslateContext("en", "zh"), CancellationToken.None);
+            new[] { "one", "two" }, new TranslateContext("en", "zh", "Guide", "Harbors", "port = 港口"), CancellationToken.None);
         Assert.Equal(new[] { "一", "二" }, result);
         Assert.Equal(1, _chatCalls);
+        Assert.Contains("Harbors", _lastPrompt);
+        Assert.Contains("port = 港口", _lastPrompt);
     }
 
     [Fact]

@@ -35,7 +35,8 @@ import {
   defaultSettings,
   defaultProvider,
 } from '../shared/constants';
-import { parseDisplayMode } from '../shared/types';
+import { parseThinkingLevel } from '../shared/modelThinking';
+import { parseDisplayMode, supportsProviderModelList } from '../shared/types';
 import type {
   AsrSettings,
   DisplayMode,
@@ -143,8 +144,12 @@ export function normalizeSettings(raw: unknown): Settings {
     : [];
   const siteRules = [...userRules];
   for (const builtin of BUILTIN_SITE_RULES) {
-    if (!siteRules.some((s) => s.id === builtin.id)) {
+    const saved = siteRules.find(rule => rule.id === builtin.id);
+    if (!saved) {
       siteRules.push({ ...builtin });
+    } else if (saved.id === 'builtin-youtube' && saved.match.length === 1 && saved.match[0] === '*.youtube.com') {
+      // Upgrade the old default host list while keeping disabled rules and custom selectors.
+      saved.match = [...builtin.match];
     }
   }
 
@@ -181,6 +186,10 @@ export function normalizeSettings(raw: unknown): Settings {
       typeof r.defaultTargetLanguage === 'string' && r.defaultTargetLanguage.trim() !== ''
         ? r.defaultTargetLanguage
         : defaults.defaultTargetLanguage,
+    draftTargetLanguage:
+      typeof r.draftTargetLanguage === 'string' && r.draftTargetLanguage.trim()
+        ? r.draftTargetLanguage.trim()
+        : defaults.draftTargetLanguage,
     cacheEnabled: r.cacheEnabled !== false,
     minTextLength:
       typeof r.minTextLength === 'number' && Number.isFinite(r.minTextLength)
@@ -400,6 +409,9 @@ export function normalizeProvider(raw: unknown): ProviderConfig | null {
     headers,
     enabled: r.enabled !== false,
   };
+
+  const thinkingLevel = parseThinkingLevel(r.thinkingLevel);
+  if (thinkingLevel && supportsProviderModelList(type)) provider.thinkingLevel = thinkingLevel;
 
   if (type === 'custom-http') {
     provider.method =

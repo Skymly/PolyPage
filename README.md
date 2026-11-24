@@ -133,6 +133,8 @@ dotnet test  native-host/PolyPage.slnx                     # 见命令输出
 
 设置页 → 「翻译服务」→ 「添加服务」，选择预设会自动填入服务地址。支持模型列表的服务可填入 API Key 后点「获取模型列表」，再选模型并保存。也可手动输入模型 ID，或添加自定义 OpenAI 兼容接口。多个 Provider 可共存，可选择当前服务并配置**故障转移链**。
 
+OpenCode Go 和 OpenAI 兼容服务的「模型」下方可设置「思考级别」。模型列表提供档位时，设置页会按模型显示选项。手动填写模型时，可按接口支持的档位选择，或保留「默认」。保存后，连接测试和翻译请求都会使用所选档位。
+
 - **openai-compatible**：`POST {baseUrl}/chat/completions`，支持 SSE 流式、MiniMax Token Plan（`api.minimax.chat` / MiniMax-M3 视觉）、
 
   **视觉翻译（image_url）** 与 **`/audio/transcriptions` 转写**；本地端点免 API Key。
@@ -144,16 +146,15 @@ dotnet test  native-host/PolyPage.slnx                     # 见命令输出
 
 不支持某项可选能力的 Provider，对应入口置灰并给出原因，不另开旁路。
 
-Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} {{domain}} {{glossary}}`。
+Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} {{domain}} {{documentTitle}} {{section}} {{glossary}}`。
 
 ## 使用入口
 
-- **PDF**：Popup「打开双语阅读器」（检测到 PDF 时出现）/ 右键「用 PolyPage 打开双语阅读器」/
-  链接右键；设置可开「访问 PDF 链接自动打开」（需授予 webNavigation）。扫描页提示旁可
-  「识别本页」（走当前 OCR 引擎）。
-- **图片**：图片右键「翻译图片文字」或悬停大图右上角「译图」按钮。`llm-vision` 需要
-  视觉 Provider；`tesseract-wasm` 可在纯文本模型上先识别再翻译。
-- **字幕**：带 `<track>` 的视频页，Popup「字幕翻译」开关；再按一次还原原字幕。
+- **网页术语**。在设置的「翻译服务」选择当前服务，再到「术语表」查看该服务如何使用术语并录入译名。翻译技术文档时，段落所属章节和匹配的术语会按服务能力进入请求。编辑术语后，恢复原文并再次翻译即可使用新译名。
+- **回复草稿**。在设置中选择输入目标语言。聚焦输入框或回复编辑器，选中一段中文或保留整份草稿，点击「预览翻译」或按 Alt+Shift+Enter，再选择替换。可在面板撤销。
+- **PDF**。从扩展弹窗打开本地 PDF，或在 PDF 网页打开双语阅读器。可跳到指定页、从段落定位原页区域、对扫描页点击「识别本页」。双语 HTML 导出会按所选页范围记录已有结果和未完成页。
+- **图片**。悬停图片或打开图片右键菜单，可先看到识别地点和服务名。使用本机 Tesseract 时，仅识别出的文字交给所配置的文本服务。面板支持复制、重试和收起原图覆盖层。
+- **字幕**。打开扩展弹窗，点击「字幕翻译」，在播放器里切换原字幕语言。点击「导出已译字幕 (.srt)」保存当前媒体已有译文。标准字幕沿用轨道时间，自绘字幕记录实际观看区间。再次点击字幕开关可恢复原字幕。
 - **无字幕媒体**：Popup / 右键「转写并翻译」；默认从当前播放位置起有限窗口，整段需二次确认。
   关闭即丢弃内存 cue。不申请麦克风。
 - **划词**：选中文字出悬浮按钮；面板支持朗读（Alt+点击读原文）、标记坏句、复制；
@@ -174,6 +175,7 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 
 ## 验证
 
+- 网页术语、回复草稿、本地 PDF、字幕和图片的试用入口、实测及复核命令见[四条翻译流程验证记录](docs/validation/reading-workflows.md)。
 - 常规 CI 在 Windows 跑 `npm ci`、`npm run verify` 和 `npm run test:contract`。
 - 发布前在 GitHub Actions 手动运行 [Browser validation](.github/workflows/browser-validation.yml)。
   核对两个任务都运行在待发布提交：Edge 跑完整冒烟，Firefox 临时加载扩展，并通过同一提交编译的网关完成一次本地桩翻译。
@@ -184,7 +186,7 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 ## 已知限制
 
 - PDF 双栏 / 表格聚类仍为启发式，不承诺完美版面；
-- 目前没有 Provider 实现 `transcribeStream`，ASR 在转写结束后一次性注入字幕；关闭即丢内存 cue，不导出 SRT/VTT；
+- 目前没有 Provider 实现 `transcribeStream`，ASR 在转写结束后一次性注入字幕；如需保留已译字幕，可在关闭前导出双语 SRT；
 - DRM / 无法 `captureStream` 时报错并拒绝下载整段文件；不按 DRM 预先置灰入口，也不申请 tabCapture 或麦克风；
 - `subtitleSelectors` 为规则驱动，站点改版即失效（内置 YouTube 规则随版本更新）；
 - tesseract 默认只打包 `eng` + `chi_sim`；附加语言包可在 Options 下载；
@@ -200,7 +202,6 @@ Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} 
 |---|---|---|
 | 1 | 真实 Whisper 联调 | 使用固定短音频、用户自装权重和 Windows 网关；记录后端、模型版本和命令，用真实转写验证时间戳、双语 cue 与关闭后的清理。无权重时明确标记未验证，不能用桩替代。 |
 | 2 | 纯 `<audio>` 字幕条 | 复用现有 cue 调度；覆盖播放、跳转、关闭和切换音源，并验证已有视频字幕不回退。 |
-| 3 | SRT 导出 | 仅导出用户主动触发的当前 cue；验证时间顺序、Unicode 与格式，不改写媒体或源字幕。 |
-| 4 | PDF 复杂版面 | 先补真实表格与双栏夹具；验证不跨单元格串段，并保留按行回退。 |
+| 3 | PDF 复杂版面 | 继续验证不规则多栏、合并单元格和跨页表格的阅读顺序。 |
 
 流式 ASR 等实际后端提供 `transcribeStream` 后再立项；继续保留用户触发、不申请麦克风、不随扩展分发 Whisper 权重的约束。

@@ -45,6 +45,8 @@ export class DeepLProvider implements TranslationProvider {
       target_lang: target,
     };
     if (source) body.source_lang = source;
+    const reference = [ctx.documentContext?.title, ctx.documentContext?.section, ctx.glossary].filter(Boolean);
+    if (reference.length) body.context = reference.join('\n');
     const formality = this.config.formality ?? 'default';
     if (formality !== 'default') body.formality = formality;
 

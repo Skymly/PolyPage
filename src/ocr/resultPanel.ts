@@ -39,6 +39,18 @@ button:hover { color: #111827; }
 export interface OcrPanelCallbacks {
   onCancel(): void;
   onClose(): void;
+  onRetry?(): void;
+}
+
+async function copyText(button: HTMLButtonElement, text: string): Promise<void> {
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = '已复制';
+  } catch {
+    button.textContent = '复制失败，请选择文字复制';
+  }
+  window.setTimeout(() => { button.textContent = original; }, 1500);
 }
 
 export class OcrResultPanel {
@@ -82,10 +94,7 @@ export class OcrResultPanel {
         const dst = seg.querySelector('.wt-ocr-dst')?.textContent ?? '';
         return `${src} -> ${dst}`;
       });
-      void navigator.clipboard?.writeText(segs.join('\n')).then(() => {
-        copyAll.textContent = '已复制';
-        window.setTimeout(() => (copyAll.textContent = '复制全部'), 1200);
-      });
+      if (segs.length) void copyText(copyAll, segs.join('\n'));
     });
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -131,17 +140,18 @@ export class OcrResultPanel {
     this.callbacks = callbacks;
   }
 
-  showSegments(segments: { text: string; translation: string }[]): void {
+  showSegments(segments: { text: string; translation: string }[], recognitionOnly = false): void {
     this.ensureHost();
     const body = this.body!;
     body.innerHTML = '';
     const ocrOnly = segments.length > 0 && segments.every((s) => s.translation.trim() === '');
-    if (this.titleEl) this.titleEl.textContent = ocrOnly ? '仅识别' : '图片文字翻译';
+    if (this.titleEl) this.titleEl.textContent = recognitionOnly ? '仅识别' : ocrOnly ? '已识别，翻译未完成' : '图片文字翻译';
     if (segments.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'wt-ocr-skel';
       empty.textContent = '未识别到文字';
       body.append(empty);
+      this.appendRetry();
       return;
     }
     for (const seg of segments) {
@@ -158,14 +168,24 @@ export class OcrResultPanel {
       copy.textContent = '复制';
       copy.addEventListener('click', (e) => {
         e.stopPropagation();
-        void navigator.clipboard?.writeText(`${seg.text} -> ${seg.translation}`).then(() => {
-          copy.textContent = '已复制';
-          window.setTimeout(() => (copy.textContent = '复制'), 1200);
-        });
+        void copyText(copy, seg.translation ? `${seg.text} -> ${seg.translation}` : seg.text);
       });
       row.append(src, dst, copy);
       body.append(row);
     }
+    if (!recognitionOnly && segments.some(seg => !seg.translation.trim())) this.appendRetry();
+  }
+
+  private appendRetry(): void {
+    if (!this.callbacks?.onRetry || !this.body) return;
+    const retry = document.createElement('button');
+    retry.className = 'wt-ocr-copy';
+    retry.textContent = '重试';
+    retry.addEventListener('click', e => {
+      e.stopPropagation();
+      this.callbacks?.onRetry?.();
+    });
+    this.body.append(retry);
   }
 
   showError(message: string): void {
@@ -176,6 +196,7 @@ export class OcrResultPanel {
     err.className = 'wt-ocr-error';
     err.textContent = `图片翻译失败：${message}`;
     body.append(err);
+    this.appendRetry();
   }
 
   hide(): void {

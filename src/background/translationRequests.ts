@@ -40,6 +40,7 @@ export async function handleTranslate(
     items.map((item) => ({
       text: item.text,
       cacheScope: item.cacheScope,
+      documentContext: item.documentContext,
       key: item.key,
       domain,
       tabId,
@@ -76,7 +77,9 @@ async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortIn
       text: item.text,
       key: item.key,
       cacheScope: item.cacheScope,
+      documentContext: item.documentContext,
       domain: init.domain,
+      pageLanguage: init.pageLanguage,
     })),
     {
       immediate: true,
@@ -98,6 +101,13 @@ async function handleStreamRequest(port: chrome.runtime.Port, init: StreamPortIn
     }
   }
   post({ type: 'finished' });
+}
+
+export function translateDraft(texts: string[], domain?: string, tabId?: number, frameId?: number): Promise<TranslateResults> {
+  return pipeline.translate(
+    texts.map((text, index) => ({ text, key: String(index), draft: true, domain, tabId, frameId })),
+    { immediate: texts.length === 1 },
+  );
 }
 
 export async function translateSelection(text: string, domain?: string, tabId?: number, frameId?: number) {

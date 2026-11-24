@@ -27,6 +27,8 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 let activeTabId: number | null = null;
+let subtitleFrameId: number | null = null;
+let srtFrameId = MEDIA_COMMAND_FRAME_ID;
 
 async function resolveActiveTab(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -70,7 +72,25 @@ async function fetchAggregated(): Promise<Aggregated> {
   // content-script query (1.0 behavior) when nothing was reported yet.
   try {
     const res = await sendRuntime({ type: 'get-frame-states', ...(activeTabId !== null ? { tabId: activeTabId } : {}) });
-    if (res.frames.length > 0) {
+    const tabId = activeTabId;
+    if (res.frames.length > 0 && tabId !== null) {
+      // Players may load tracks long after the page's initial state report.
+      const top = res.frames.find(f => f.frameId === MEDIA_COMMAND_FRAME_ID);
+      if (top) {
+        try {
+          top.state = await sendTabCommand(tabId, { type: 'wt:get-state' }, { frameId: top.frameId });
+        } catch { /* retained frame state is still available */ }
+      }
+      if (top && canTranslateSubtitles(top.state)) {
+        return { state: aggregate(res.frames), frames: res.frames, reachable: true };
+      }
+      await Promise.all(res.frames.filter(f => f !== top).map(async f => {
+        try {
+          f.state = await sendTabCommand(tabId, { type: 'wt:get-state' }, { frameId: f.frameId });
+        } catch {
+          f.state = { ...f.state, subtitles: 'unavailable', subtitleVideos: 0 };
+        }
+      }));
       return { state: aggregate(res.frames), frames: res.frames, reachable: true };
     }
   } catch {
@@ -78,7 +98,7 @@ async function fetchAggregated(): Promise<Aggregated> {
   }
   if (activeTabId === null) return { state: null, frames: [], reachable: false };
   try {
-    const state = await sendTabCommand(activeTabId, { type: 'wt:get-state' });
+    const state = await sendTabCommand(activeTabId, { type: 'wt:get-state' }, { frameId: MEDIA_COMMAND_FRAME_ID });
     return { state, frames: [{ frameId: 0, state }], reachable: true };
   } catch {
     return { state: null, frames: [], reachable: false };
@@ -142,7 +162,7 @@ function renderAggregated(agg: Aggregated): void {
   if (state.viewportOnly) hints.push('已降级为仅视口翻译（页面条目过多）');
   if (state.inlineDowngraded) hints.push('部分段落超出段内对照预算，已降级为段落双语');
   if (state.autoSkipped) hints.push('页面语言与目标语言相同，已跳过自动翻译');
-  renderMediaRow(state);
+  renderMediaRow(state, agg.frames);
   const hintBox = $<HTMLDivElement>('info-hints');
   if (hints.length > 0) {
     hintBox.textContent = hints.join('；');
@@ -329,7 +349,12 @@ function looksLikePdf(url: string): boolean {
 /** Show PDF reader / subtitle entries based on the current tab + page state. */
 let lastSummary: { asrEnabled?: boolean; asrSupported?: boolean } | null = null;
 
-function renderMediaRow(state: PageState | null): void {
+function canTranslateSubtitles(state: PageState): boolean {
+  return !state.blacklisted && (state.subtitles === 'on' || state.subtitles === 'off' ||
+    (state.subtitleVideos ?? 0) > 0);
+}
+
+function renderMediaRow(state: PageState | null, frames: FrameStateEntry[]): void {
   const pdfBtn = $<HTMLButtonElement>('btn-open-pdf');
   const subBtn = $<HTMLButtonElement>('btn-toggle-subtitles');
   const asrBtn = $<HTMLButtonElement>('btn-transcribe');
@@ -337,14 +362,20 @@ function renderMediaRow(state: PageState | null): void {
 
   pdfBtn.classList.toggle('hidden', !looksLikePdf(activeTabUrl));
 
-  const subtitleVideos = state?.subtitleVideos ?? 0;
-  const hasSubtitles = state?.subtitles !== undefined && state.subtitles !== 'unavailable';
-  subBtn.classList.toggle('hidden', !(hasSubtitles || subtitleVideos > 0));
-  if (hasSubtitles || subtitleVideos > 0) {
-    subBtn.textContent = state?.subtitles === 'on' ? '关闭字幕翻译' : '字幕翻译';
+  const candidates = frames.filter(f => canTranslateSubtitles(f.state));
+  const subtitleFrame = candidates.find(f => f.frameId === MEDIA_COMMAND_FRAME_ID) ??
+    candidates.find(f => f.state.subtitles === 'on') ?? candidates[0];
+  subtitleFrameId = subtitleFrame?.frameId ?? null;
+  const subtitleVideos = subtitleFrame?.state.subtitleVideos ?? 0;
+  const subtitlesOn = subtitleFrame?.state.subtitles === 'on';
+  srtFrameId = subtitlesOn && subtitleFrame ? subtitleFrame.frameId : MEDIA_COMMAND_FRAME_ID;
+  $('btn-export-srt').classList.toggle('hidden', !(subtitlesOn || state?.asrActive));
+  subBtn.classList.toggle('hidden', !subtitleFrame);
+  if (subtitleFrame) {
+    subBtn.textContent = subtitlesOn ? '关闭字幕翻译' : '字幕翻译';
   }
   const captionless = state?.captionlessMedia ?? 0;
-  const showAsr = (lastSummary?.asrEnabled ?? true) && captionless > 0 && subtitleVideos === 0;
+  const showAsr = (lastSummary?.asrEnabled ?? true) && captionless > 0 && !subtitleFrame;
   asrBtn.classList.toggle('hidden', !showAsr);
   asrBtn.disabled = !(lastSummary?.asrSupported ?? false);
   asrBtn.title = lastSummary?.asrSupported ? '从当前播放位置转写并翻译' : '当前翻译服务不支持转写';
@@ -357,7 +388,7 @@ function renderMediaRow(state: PageState | null): void {
   }
 
   const hints: string[] = [];
-  if (!looksLikePdf(activeTabUrl) && !hasSubtitles && subtitleVideos === 0) {
+  if (!looksLikePdf(activeTabUrl) && !subtitleFrame) {
     hint.classList.add('hidden');
   } else {
     if (looksLikePdf(activeTabUrl)) hints.push('检测到 PDF：可用双语阅读器逐页翻译');
@@ -390,10 +421,27 @@ async function main(): Promise<void> {
     void sendRuntime({ type: 'pdf-open', url: activeTabUrl }).catch(() => undefined);
   });
   $<HTMLButtonElement>('btn-toggle-subtitles').addEventListener('click', () => {
-    if (activeTabId === null) return;
-    void sendTabCommand(activeTabId, { type: 'wt:toggle-subtitles' }, { frameId: MEDIA_COMMAND_FRAME_ID })
+    if (activeTabId === null || subtitleFrameId === null) return;
+    void sendTabCommand(activeTabId, { type: 'wt:toggle-subtitles' }, { frameId: subtitleFrameId })
       .then(() => setTimeout(() => void refresh(), 250))
       .catch(() => undefined);
+  });
+  $('btn-export-srt').addEventListener('click', async () => {
+    if (activeTabId === null) return;
+    const status = $('srt-status');
+    try {
+      const { srt, title } = await sendTabCommand(activeTabId, { type: 'wt:export-srt' },
+        { frameId: srtFrameId });
+      if (!srt) {
+        status.textContent = '请先播放一条字幕并等待译文，再导出。';
+        return;
+      }
+      const filename = (title || 'video').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+      download(`${filename}.bilingual.srt`, srt, 'application/x-subrip;charset=utf-8');
+      status.textContent = '已导出当前媒体已译字幕';
+    } catch {
+      status.textContent = '无法读取当前字幕，请重新打开播放器后重试。';
+    }
   });
   $<HTMLButtonElement>('btn-transcribe').addEventListener('click', () => {
     if (activeTabId === null) return;

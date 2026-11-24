@@ -3,9 +3,9 @@
  * that still need language / Provider configuration outside the pipeline
  * (OCR, ASR, settings projection).
  */
-import type { ProviderConfig, Settings, ErrorKind } from '../shared/types';
+import type { DocumentContext, ProviderConfig, Settings, ErrorKind } from '../shared/types';
 import type { TranslationContext } from '../providers/provider';
-import { renderGlossary } from '../shared/siteRules';
+import { boundedDocumentContext, relevantGlossary } from '../shared/documentContext';
 
 export function effectiveLanguages(settings: Settings, provider: ProviderConfig): {
   source: string;
@@ -22,6 +22,8 @@ export function buildContext(
   provider: ProviderConfig,
   domain?: string,
   pageLanguage?: string | null,
+  documentContext?: DocumentContext,
+  texts?: string[],
 ): TranslationContext {
   const { source, target } = effectiveLanguages(settings, provider);
   const resolvedSource =
@@ -35,7 +37,8 @@ export function buildContext(
     sourceLanguage: resolvedSource,
     targetLanguage: target,
     domain,
-    glossary: renderGlossary(settings.glossary),
+    documentContext: boundedDocumentContext(documentContext),
+    glossary: relevantGlossary(settings.glossary, texts),
   };
 }
 

@@ -57,3 +57,25 @@ html, body { margin: 0; padding: 0; background: #525659; font-family: system-ui,
   border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.3);
   pointer-events: none; white-space: pre-wrap; word-break: break-word;
 }
+#toolbar { flex-wrap: wrap; gap: 6px 10px; }
+#toolbar .title { max-width: 18em; }
+#toolbar a, .file-picker { color: #e7e9ee; text-decoration: underline; cursor: pointer; }
+.file-picker { position: relative; padding: 5px; }
+.file-picker input { opacity: 0; position: absolute; inset: 0; width: 100%; cursor: pointer; }
+.file-picker:focus-within { outline: 2px solid #b8caff; }
+#page-number { width: 5em; }
+#export-hint { text-align: center; padding: 4px; background: #34373c; color: #d7dce8; font-size: 12px; }
+.page { min-height: 75vh; scroll-margin-top: 5rem; }
+.sheet { position: relative; max-width: 100%; margin: 0 auto; }
+.page .sheet canvas { width: 100% !important; height: 100% !important; }
+.source-links { position: absolute; inset: 0; pointer-events: none; }
+.source-hit { position: absolute; padding: 0; pointer-events: auto; background: transparent; border: 0; cursor: pointer; }
+.source-hit:hover, .source-hit:focus-visible, .source-hit.selected { outline: 2px solid #5068a5; background: rgb(85 110 200 / 13%); }
+.source-location { border: 0; padding: 0; color: #435b94; background: transparent; text-decoration: underline; cursor: pointer; }
+.para.selected { outline: 2px solid #5068a5; }
+@media (min-width: 1000px) {
+  #document { max-width: 1620px; }
+  .page { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .page .paras { border-top: 0; border-left: 1px solid #e5e7eb; margin: 0; padding: 0 0 0 10px; }
+  .page .scanned-hint { grid-column: 2; grid-row: 1; }
+}

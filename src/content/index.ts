@@ -23,6 +23,7 @@ import { DomObserver } from './observer';
 import { effectiveRuleForHost, hostBlacklisted, resolveBlacklistHost, topLevelHostname } from './rules';
 import { isInsertedOwnElement } from './scanner';
 import { SelectionTranslator } from './selection';
+import { DraftTranslator } from './draftTranslator';
 import { PageTranslator } from './translator';
 import {
   AsrSession,
@@ -43,6 +44,7 @@ const translator = new PageTranslator();
 translator.init();
 
 const selectionTranslator = new SelectionTranslator();
+const draftTranslator = new DraftTranslator();
 const subtitleManager = new SubtitleManager();
 const asrSession = new AsrSession();
 const imageController = new ImageTranslateController();
@@ -68,6 +70,7 @@ function isOwnNode(node: Node): boolean {
   if (
     node.classList.contains('wt-tooltip-host') ||
     node.classList.contains('wt-selection-host') ||
+    node.classList.contains('wt-draft-host') ||
     node.classList.contains('wt-ocr-host') ||
     node.classList.contains(OCR_OVERLAY_HOST_CLASS) ||
     node.classList.contains('wt-img-btn') ||
@@ -283,6 +286,8 @@ async function handleCommand(cmd: TabCommand): Promise<unknown> {
       return { ok: selectionTranslator.translateCurrentSelection() };
     case 'wt:collect-export':
       return translator.collectExport();
+    case 'wt:export-srt':
+      return { srt: subtitleManager.exportSrt(), title: document.title };
     /* ------------------------------ 3.0 additions ----------------------------- */
     case 'wt:open-pdf-viewer':
       return { ok: true, url: location.href };
@@ -399,6 +404,7 @@ function applyLoadedSettings(cs: ContentSettings): boolean {
   const topHost = resolveBlacklistHost(topLevelHostname(), cs.tabHostname ?? '');
   const blacklisted = hostBlacklisted(topHost, cs.blacklist);
   translator.blacklisted = blacklisted;
+  draftTranslator.configure(!blacklisted, cs.draftTargetLanguage ?? '英语');
   selectionTranslator.setMode(cs.selectionTranslate);
   selectionTranslator.setSpeak(cs.selectionSpeak);
   selectionTranslator.setStreamingTarget(cs.streamingSupported ? cs.selectionTargetLanguage : null);
@@ -407,6 +413,7 @@ function applyLoadedSettings(cs: ContentSettings): boolean {
     imageController.configure({
       enabled: cs.imageTranslateEnabled,
       trigger: cs.imageTranslateTrigger,
+      route: cs.imageRoute,
       visionSupported: cs.visionSupported,
       overlayEnabled: cs.imageOverlayEnabled === true,
       ocrAvailable,
@@ -423,9 +430,7 @@ function applyLoadedSettings(cs: ContentSettings): boolean {
       background: cs.subtitleBackground ?? 'rgba(0,0,0,.62)',
       position: cs.subtitlePosition ?? 'bottom',
     });
-    if ((effectiveRule?.subtitleSelectors.length ?? 0) > 0 && cs.subtitlesEnabled) {
-      subtitleManager.applySelectors(effectiveRule.subtitleSelectors);
-    }
+    subtitleManager.applySelectors(cs.subtitlesEnabled ? effectiveRule.subtitleSelectors : []);
   }
   return blacklisted;
 }

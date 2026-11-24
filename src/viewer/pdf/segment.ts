@@ -27,6 +27,8 @@ export interface PdfLine {
   gapBefore: number;
   /** Left indent in text-space units. */
   indent: number;
+  right?: number;
+  tableRow?: boolean;
   fontSize: number;
   text: string;
 }
@@ -34,6 +36,8 @@ export interface PdfLine {
 export interface PdfParagraph {
   text: string;
   fontSize: number;
+  /** Bounding box in PDF user-space units, relative to the original page. */
+  bounds: [number, number, number, number];
 }
 
 export interface PageClusterResult {
@@ -114,8 +118,70 @@ export function isNearPageEdge(
 interface Segment {
   y: number;
   x0: number;
+  x1: number;
   fontSize: number;
   text: string;
+  column?: 'left' | 'right';
+  tableRow?: boolean;
+}
+
+/** A persistent gutter in a paper remains empty even when the two columns
+ * have different line heights. Look at original PDF glyph runs before
+ * grouping them into visual rows, which would erase a narrow gutter. */
+function paperGutter(items: TextItemLike[], options: ClusterOptions): number | undefined {
+  if ((options.columnGapFactor ?? 4) > 20) return;
+  const runs = items.filter((i) => i.str?.trim() && (i.width ?? 0) > 0);
+  if (runs.length < 8) return;
+  let left = Infinity, right = -Infinity;
+  for (const r of runs) { left = Math.min(left, r.transform[4]); right = Math.max(right, r.transform[4] + r.width!); }
+  const width = right - left;
+  if (width < 120) return;
+  const center = (left + right) / 2;
+  let best: { x: number; score: number } | undefined;
+  for (let step = -10; step <= 10; step++) {
+    const x = center + width * step / 100;
+    const crossing = new Set<number>();
+    const leftRows = new Set<number>(), rightRows = new Set<number>();
+    for (const r of runs) {
+      const x0 = r.transform[4], x1 = x0 + r.width!, y = Math.round(r.transform[5]);
+      if (x0 < x + 2 && x1 > x - 2) crossing.add(y);
+      // Full prose lines distinguish a gutter from gaps between narrow table cells.
+      else if (r.width! >= width * 0.16 && /[\p{L}]{2}/u.test(r.str)) {
+        (x1 < x ? leftRows : rightRows).add(y);
+      }
+    }
+    const evidence = Math.min(leftRows.size, rightRows.size);
+    if (evidence < 4 || crossing.size > Math.max(4, evidence * 0.28)) continue;
+    const score = crossing.size + Math.abs(step) / 32;
+    if (!best || score < best.score) best = { x, score };
+  }
+  return best?.x;
+}
+
+function paperSegments(items: TextItemLike[], gutter: number, opts: ClusterOptions): Segment[] {
+  const runs = items.filter((i) => i.str?.trim()).sort((a, b) => b.transform[5] - a.transform[5]);
+  const out: Segment[] = [];
+  let left: TextItemLike[] = [], right: TextItemLike[] = [];
+  const flush = (): void => {
+    for (const s of extractSegments(left, opts)) out.push({ ...s, column: 'left' });
+    for (const s of extractSegments(right, opts)) out.push({ ...s, column: 'right' });
+    left = []; right = [];
+  };
+  for (let i = 0; i < runs.length;) {
+    let j = i + 1;
+    const tol = Math.max(1, fontSizeOf(runs[i]) * 0.3);
+    while (j < runs.length && runs[i].transform[5] - runs[j].transform[5] <= tol) j++;
+    const row = runs.slice(i, j);
+    if (row.some((r) => r.transform[4] < gutter && r.transform[4] + (r.width ?? 0) > gutter)) {
+      flush();
+      out.push(...extractSegments(row, opts));
+    } else {
+      for (const r of row) (r.transform[4] < gutter ? left : right).push(r);
+    }
+    i = j;
+  }
+  flush();
+  return out;
 }
 
 /**
@@ -163,22 +229,32 @@ export function extractSegments(items: TextItemLike[], opts: ClusterOptions = {}
     }
   }
 
+  // Adjacent numeric columns in a table are often closer than the gutter
+  // used for prose. Use their repeated centers to include the header row.
+  const numericCenters = groups.map(({ items }) =>
+    items.filter((p) => /^[-–—]$|^\d+(?:[.,]\d+)*%?$/.test(p.str.trim())).map((p) => p.x + p.width / 2));
   const segments: Segment[] = [];
-  for (const group of groups) {
+  for (const [index, group] of groups.entries()) {
     group.items.sort((a, b) => a.x - b.x);
+    const tableRow = group.items.length >= 3 && [index - 1, index + 1].some((neighbor) => {
+      const centers = numericCenters[neighbor] ?? [];
+      if (centers.length < 2 || Math.abs(groups[neighbor].y - group.y) > 2.4 * group.fontSize) return false;
+      return group.items.filter((p) =>
+        centers.some((x) => Math.abs(p.x + p.width / 2 - x) < group.fontSize)).length >= 2;
+    });
     let text = '';
     let x0 = group.items[0]?.x ?? 0;
     let prevEnd = Number.NaN;
     let prevSize = group.fontSize;
     const push = (): void => {
       if (text.trim() !== '') {
-        segments.push({ y: group.y, x0, fontSize: group.fontSize, text: text.trim() });
+        segments.push({ y: group.y, x0, x1: prevEnd, fontSize: group.fontSize, text: text.trim(), tableRow });
       }
     };
     for (const item of group.items) {
       if (text !== '' && Number.isFinite(prevEnd)) {
         const gap = item.x - prevEnd;
-        if (gap > columnGapFactor * Math.max(prevSize, item.fontSize)) {
+        if (gap > (tableRow ? Math.min(1.5, columnGapFactor) : columnGapFactor) * Math.max(prevSize, item.fontSize)) {
           push();
           text = '';
           x0 = item.x;
@@ -247,22 +323,30 @@ export function reorderColumns(segments: Segment[], opts: ClusterOptions = {}): 
  * Infinity so clustering always starts a new paragraph there.
  */
 export function extractLines(items: TextItemLike[], opts: ClusterOptions = {}): PdfLine[] {
-  const ordered = reorderColumns(extractSegments(items, opts), opts);
+  const gutter = paperGutter(items, opts);
+  const ordered = gutter === undefined ? reorderColumns(extractSegments(items, opts), opts) : paperSegments(items, gutter, opts);
+  const rowSizes = new Map<string, number>();
+  const rowKey = (s: Segment) => `${s.column ?? ''}:${s.y}`;
+  for (const seg of ordered) rowSizes.set(rowKey(seg), (rowSizes.get(rowKey(seg)) ?? 0) + 1);
   const lines: PdfLine[] = [];
   let prevY = Number.NaN;
+  let prevColumn: Segment['column'];
   for (const seg of ordered) {
     let gapBefore: number;
     if (Number.isNaN(prevY)) gapBefore = 0;
-    else if (seg.y < prevY - 0.5) gapBefore = Number.POSITIVE_INFINITY; // column jump
+    else if (seg.y < prevY - 0.5 || prevColumn !== seg.column) gapBefore = Number.POSITIVE_INFINITY;
     else gapBefore = seg.y - prevY;
     lines.push({
       y: seg.y,
       gapBefore,
       indent: seg.x0,
+      right: seg.x1,
+      tableRow: seg.tableRow || (rowSizes.get(rowKey(seg)) ?? 0) >= (opts.cellBreak ? 2 : 3),
       fontSize: seg.fontSize,
       text: seg.text,
     });
     prevY = seg.y;
+    prevColumn = seg.column;
   }
   return lines.filter((l) => l.text.length > 0);
 }
@@ -285,6 +369,10 @@ export function clusterParagraphs(lines: PdfLine[], opts: ClusterOptions = {}): 
     paragraphs.push({
       text: joinLines(buffer),
       fontSize: buffer[0].fontSize,
+      bounds: buffer.reduce<[number, number, number, number]>((box, line) => [
+        Math.min(box[0], line.indent), Math.min(box[1], -line.y - line.fontSize * 0.22),
+        Math.max(box[2], line.right ?? line.indent), Math.max(box[3], -line.y + line.fontSize),
+      ], [Infinity, Infinity, -Infinity, -Infinity]),
     });
     buffer = [];
   };
@@ -305,7 +393,7 @@ export function clusterParagraphs(lines: PdfLine[], opts: ClusterOptions = {}): 
         opts.cellBreak === true &&
         Math.abs(line.y - prev.y) <= 0.5 &&
         Math.abs(line.indent - prev.indent) > 2 * lineHeight;
-      if (gapBreak || columnJump || sizeChanged || indentStarted || cellBreak) {
+      if (gapBreak || columnJump || sizeChanged || indentStarted || cellBreak || line.tableRow || prev.tableRow) {
         flush();
       }
     }
@@ -355,8 +443,8 @@ export function clusterPageFromLines(
   const hf = options.headerFooterSet;
   const pageHeight = options.pageHeight ?? DEFAULT_PDF_PAGE_HEIGHT;
   const filtered = lines.filter((line) => {
-    if (isPageNumberLine(line.text) && isNearPageEdge(line.y, pageHeight)) return false;
-    if (skip && hf && hf.has(normalizeForRepeat(line.text))) return false;
+    if (!line.tableRow && isPageNumberLine(line.text) && isNearPageEdge(line.y, pageHeight)) return false;
+    if (skip && hf && isNearPageEdge(line.y, pageHeight) && hf.has(normalizeForRepeat(line.text))) return false;
     return true;
   });
   const paragraphs = clusterParagraphs(filtered, options.cluster);

@@ -5,6 +5,7 @@ beforeEach(() => {
   HTMLElement.prototype.checkVisibility = () => true;
 });
 import { INLINE_DST_CLASS, INLINE_SRC_CLASS, NAV_TRANSLATION_CLASS } from '../src/shared/constants';
+import { pageContextReader } from '../src/content/documentContext';
 import {
   isMenuChrome,
   scanTranslatableNodes,
@@ -17,6 +18,18 @@ function mount(html: string): HTMLElement {
 }
 
 describe('scanTranslatableNodes nav chrome', () => {
+  it('uses only visible headings allowed by site rules, including short section labels', () => {
+    mount(`<article><h2>Unlisted chapter</h2><p id="outside"></p>
+      <div class="docs"><h2>TCP</h2><div class="private"><h2>Excluded heading</h2></div>
+      <h2 id="invisible">Invisible heading</h2><p id="public">The port is closed.</p></div></article>`);
+    document.getElementById('invisible')!.checkVisibility = () => false;
+    const read = pageContextReader({
+      includeSelectors: ['.docs'], excludeSelectors: ['.private'], defaultMode: null,
+      minTextLength: null, viewportOnly: false, subtitleSelectors: [],
+    }, sourceTextOf);
+    expect(read(document.getElementById('outside')!)?.section).toBeUndefined();
+    expect(read(document.getElementById('public')!)?.section).toBe('TCP');
+  });
   it('includes Wikipedia-style nav list items and short labels', () => {
     mount(`
       <nav id="sidebar">

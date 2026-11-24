@@ -10,7 +10,7 @@
  * single-shot translateTexts() result.
  */
 import { MAX_RETRIES } from '../shared/constants';
-import type { ErrorKind, ProviderConfig, ProviderType } from '../shared/types';
+import type { DocumentContext, ErrorKind, ProviderConfig, ProviderType } from '../shared/types';
 
 export class ProviderError extends Error {
   constructor(
@@ -34,6 +34,7 @@ export interface TranslationContext {
   domain?: string;
   /** Optional glossary text, available as {{glossary}} in prompt templates. */
   glossary?: string;
+  documentContext?: DocumentContext;
 }
 
 /** `separatedReasoning` indicates the response uses a distinct reasoning channel. */

@@ -3,6 +3,7 @@
  * / disabled does not write.
  */
 import { describe, expect, it } from 'vitest';
+import { hashText } from '../src/shared/utils';
 import {
   MemoryTmStore,
   TranslationMemory,
@@ -40,6 +41,18 @@ describe('isTmEligible', () => {
 });
 
 describe('TranslationMemory', () => {
+  it('preserves programming-language symbols and ignores ambiguous legacy normalized rows', async () => {
+    const store = new MemoryTmStore();
+    const tm = new TranslationMemory(store, 10);
+    await store.put({
+      hash: hashText(PAIR + '\u0000g0\u0000Compile using C'), source: 'Compile using C',
+      target: '使用 C++ 编译', langPair: PAIR, hits: 0, ts: 0,
+    });
+    const variants = ['C', 'C#', 'C++'].map(language => ({ key: language, text: 'Compile using ' + language }));
+    expect((await tm.lookup(variants, PAIR)).size).toBe(0);
+    await tm.remember(variants.map(item => ({ source: item.text, target: item.key })), PAIR);
+    expect([...await tm.lookup(variants, PAIR)]).toEqual(variants.map(item => [item.key, item.key]));
+  });
   it('hits after a remember on the normalized sentence', async () => {
     const tm = new TranslationMemory(new MemoryTmStore(), 10);
     await tm.remember([{ source: 'Hello, world!', target: '你好，世界' }], PAIR);

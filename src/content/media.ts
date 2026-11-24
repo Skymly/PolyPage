@@ -6,14 +6,15 @@
  * immediate path (translate-cue) and renders in a self-drawn Shadow DOM
  * layer. Closing restores everything with zero residue (spec §7.1 item 7).
  *
- * P1: `subtitleSelectors` site rules watch self-drawn subtitle DOM
- * (e.g. YouTube caption segments) and translate in place with hover-to-see-
- * original (spec §7.2).
+ * Site rules identify player-drawn captions. The companion translation leaves
+ * the player's source nodes intact, including when the player reuses a node.
  */
 import { sendRuntime } from '../messaging/messages';
 import type { SubtitleState } from '../shared/types';
-import { CueScheduler, activeCueText, mergeMemoryCues, stripVttTags } from './subtitleScheduler';
+import { CueScheduler, mergeMemoryCues, stripVttTags } from './subtitleScheduler';
 import type { CueLike } from './subtitleScheduler';
+import { DomCaptionSession } from './domCaptions';
+import { bilingualSrt, translatedIntervals } from './subtitleExport';
 import {
   DEFAULT_SUBTITLE_STYLE,
   cueLineOrder,
@@ -98,7 +99,8 @@ interface CueHost {
 }
 
 class VideoSubtitleController {
-  private savedModes: { track: TextTrack; mode: TextTrackMode }[] = [];
+  private selected: { track: TextTrack; mode: TextTrackMode } | null = null;
+  private showingNativeTrack = false;
   private timer: number | null = null;
   private scheduler = new CueScheduler();
   private cueHost: CueHost | null = null;
@@ -144,15 +146,19 @@ class VideoSubtitleController {
   private collectCues(): CueLike[] {
     if (this.memoryCues.length > 0) return this.memoryCues;
     const out: CueLike[] = [];
-    for (const track of this.subtitleTracks()) {
-      const cues = track.cues;
-      if (!cues) continue;
+    const cues = this.selected?.track.cues;
+    if (cues) {
       for (let i = 0; i < cues.length; i++) {
         const cue = cues[i];
         out.push({ startTime: cue.startTime, endTime: cue.endTime, text: (cue as VTTCue).text });
       }
     }
     return out;
+  }
+
+  exportCues(): CueLike[] {
+    return this.memoryCues.length ? this.cuesSnapshot()
+      : translatedIntervals(this.collectCues(), text => this.scheduler.cachedTranslation(text));
   }
 
   setStyles(style: SubtitleStyleConfig): void {
@@ -162,16 +168,46 @@ class VideoSubtitleController {
   }
 
   takeover(): void {
-    if (this.savedModes.length > 0) return;
-    for (const track of this.subtitleTracks()) {
-      this.savedModes.push({ track, mode: track.mode });
-      track.mode = 'hidden';
-      track.addEventListener('cuechange', this.onCueChange);
-    }
+    if (this.selected) return;
+    const tracks = this.subtitleTracks();
+    const track = tracks.find(t => t.mode === 'showing') ?? tracks.find(t => t.mode === 'hidden') ?? tracks[0];
+    if (!track) return;
+    this.select(track);
+    this.media.textTracks.addEventListener('change', this.onTrackChange);
     this.ensureLayer();
     this.timer = window.setInterval(this.tick, 250);
     this.tick();
   }
+
+  private select(track: TextTrack): void {
+    this.selected?.track.removeEventListener('cuechange', this.onCueChange);
+    this.selected = { track, mode: track.mode };
+    track.addEventListener('cuechange', this.onCueChange);
+    track.mode = 'hidden';
+    this.fetchEpoch++;
+    this.scheduler.reset();
+    this.lastRendered = null;
+    this.render(null, null);
+  }
+
+  private onTrackChange = (): void => {
+    if (!this.selected || this.showingNativeTrack) return;
+    const tracks = this.subtitleTracks();
+    const next = tracks.find(t => t.mode === 'showing');
+    if (next && next === this.selected.track) {
+      // Chromium can re-show the selected track while entering/leaving native fullscreen.
+      next.mode = 'hidden';
+      return;
+    }
+    if (next) {
+      if (this.selected.track.mode === 'hidden') this.selected.track.mode = 'disabled';
+      this.select(next);
+      this.tick();
+    } else if (this.selected.track.mode === 'disabled' || !tracks.includes(this.selected.track)) {
+      this.selected.mode = 'disabled';
+      this.restore();
+    }
+  };
 
   restore(): void {
     this.fetchEpoch += 1;
@@ -179,11 +215,14 @@ class VideoSubtitleController {
       window.clearInterval(this.timer);
       this.timer = null;
     }
-    for (const { track, mode } of this.savedModes) {
+    if (this.selected) {
+      this.media.textTracks.removeEventListener('change', this.onTrackChange);
+      const { track, mode } = this.selected;
       track.removeEventListener('cuechange', this.onCueChange);
       track.mode = mode;
     }
-    this.savedModes = [];
+    this.selected = null;
+    this.showingNativeTrack = false;
     this.memoryCues = [];
     this.cueHost?.host.remove();
     this.cueHost = null;
@@ -192,7 +231,7 @@ class VideoSubtitleController {
   }
 
   get active(): boolean {
-    return this.savedModes.length > 0 || this.memoryCues.length > 0;
+    return this.selected !== null || this.memoryCues.length > 0;
   }
 
   private onCueChange = (): void => {
@@ -223,10 +262,10 @@ class VideoSubtitleController {
     const supportsPopover = typeof host.showPopover === 'function';
     const parent = videoFullscreen ? document.documentElement : fullscreen;
     // PiP and older browsers without popovers can still show the original track.
-    const useNativeTrack = pip || (ownsFullscreenVideo && !supportsPopover);
+    this.showingNativeTrack = pip || (ownsFullscreenVideo && !supportsPopover);
 
     if (host.parentElement !== parent) parent.appendChild(host);
-    host.style.display = useNativeTrack ? 'none' : '';
+    host.style.display = this.showingNativeTrack ? 'none' : '';
     if (ownsFullscreenVideo && supportsPopover && !pip) {
       // A video is a replaced element. Use the top layer to paint above it.
       host.setAttribute('popover', 'manual');
@@ -236,9 +275,7 @@ class VideoSubtitleController {
       host.removeAttribute('popover');
     }
 
-    for (const { track } of this.savedModes) {
-      track.mode = useNativeTrack ? 'showing' : 'hidden';
-    }
+    if (this.selected) this.selected.track.mode = this.showingNativeTrack ? 'showing' : 'hidden';
   }
 
   /** Position the fixed layer over the video's bottom area. */
@@ -274,7 +311,7 @@ class VideoSubtitleController {
     const decision = this.scheduler.decide(cues, time);
     if (decision.kind === 'none') {
       // Keep last frame only while a fetch is in flight; otherwise clear.
-      if (this.lastRendered !== null && activeCueText(cues, time) === null) {
+      if (this.cueHost?.box.childElementCount) {
         this.render(null, null);
         this.lastRendered = null;
       }
@@ -359,11 +396,9 @@ export class SubtitleManager {
   /** Media that started the current ASR capture; partials must not re-pick. */
   private asrTarget: HTMLMediaElement | null = null;
   private style: SubtitleStyleConfig = { ...DEFAULT_SUBTITLE_STYLE };
-  private selectorObserver: MutationObserver | null = null;
-  private selectorTimer: number | null = null;
-  private selectorDirty = new Set<Element>();
-  /** subtitleSelectors in-place replacements: node -> original text. */
-  private replaced = new Map<Element, string>();
+  private domCaptions: DomCaptionSession | null = null;
+  private selectorsEnabled = false;
+  private domPlayer: { video: HTMLVideoElement; src: string } | null = null;
   private selectors: string[] = [];
   private wired = false;
   private pipWired = new Set<HTMLVideoElement>();
@@ -446,7 +481,7 @@ export class SubtitleManager {
 
   /** Number of videos carrying subtitle/caption tracks. */
   subtitleVideoCount(): number {
-    return this.videos().filter((v) => this.controllerFor(v).hasTracks).length;
+    return this.hasDomCaptions() ? 1 : this.videos().filter((v) => this.controllerFor(v).hasTracks).length;
   }
 
   captionlessMediaCount(): number {
@@ -501,7 +536,10 @@ export class SubtitleManager {
 
   state(): SubtitleState {
     const withTracks = this.videos().filter((v) => this.controllerFor(v).hasTracks);
-    if (withTracks.length === 0) return 'unavailable';
+    if (withTracks.length === 0) {
+      if (!this.hasDomCaptions()) return 'unavailable';
+      return this.domCaptions ? 'on' : 'off';
+    }
     return withTracks.some((v) => this.controllerFor(v).active) ? 'on' : 'off';
   }
 
@@ -509,7 +547,12 @@ export class SubtitleManager {
   toggle(): SubtitleState {
     this.wireInteraction();
     const candidates = this.videos().filter((v) => this.controllerFor(v).hasTracks);
-    if (candidates.length === 0) return 'unavailable';
+    if (candidates.length === 0) {
+      if (!this.hasDomCaptions()) return 'unavailable';
+      if (this.domCaptions) this.restoreSelectors();
+      else this.startSelectors();
+      return this.state();
+    }
     const target =
       this.activeVideo && candidates.includes(this.activeVideo)
         ? this.activeVideo
@@ -542,92 +585,62 @@ export class SubtitleManager {
   /* ------------------------- subtitleSelectors (P1) ------------------------- */
 
   applySelectors(selectors: string[]): void {
+    if (this.selectorsEnabled && JSON.stringify(selectors) === JSON.stringify(this.selectors)) return;
+    this.restoreSelectors();
+    this.selectorsEnabled = true;
+    this.domPlayer = null;
     this.selectors = selectors;
-    if (selectors.length === 0) {
-      this.restoreSelectors();
-      return;
-    }
-    if (this.selectorObserver) return;
-    this.selectorObserver = new MutationObserver((mutations) => {
-      try {
-        for (const mutation of mutations) {
-          const node =
-            mutation.type === 'characterData' ? mutation.target.parentElement : mutation.target;
-          if (!(node instanceof Element)) continue;
-          const matched = matchSelectorAgainstNode(node, this.selectors);
-          if (matched) this.selectorDirty.add(matched);
-        }
-        if (this.selectorDirty.size === 0) return;
-        if (this.selectorTimer !== null) return;
-        // 150ms debounce (spec 3.0 §7.2 item 1).
-        this.selectorTimer = window.setTimeout(() => {
-          this.selectorTimer = null;
-          const dirty = [...this.selectorDirty];
-          this.selectorDirty.clear();
-          for (const el of dirty) void this.translateSelectorNode(el);
-        }, 150);
-      } catch {
-        /* illegal selector / detached node — keep observing (M-86) */
-      }
-    });
-    this.selectorObserver.observe(document.body ?? document.documentElement, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-    // Prime existing nodes.
-    for (const el of queryAllSafeSelectors(document, selectors)) {
-      this.selectorDirty.add(el);
-    }
-    if (this.selectorDirty.size > 0 && this.selectorTimer === null) {
-      this.selectorTimer = window.setTimeout(() => {
-        this.selectorTimer = null;
-        const dirty = [...this.selectorDirty];
-        this.selectorDirty.clear();
-        for (const el of dirty) void this.translateSelectorNode(el);
-      }, 150);
-    }
+    if (selectors.length) this.startSelectors();
   }
 
-  private async translateSelectorNode(el: Element): Promise<void> {
-    const original = this.replaced.get(el) ?? (el.textContent ?? '').trim();
-    const current = (el.textContent ?? '').trim();
-    if (current === '' || current === this.replaced.get(el)) return;
-    // Never translate our own translations again.
-    if (el.getAttribute('data-wt-sub') === '1') return;
-    try {
-      const res = await sendRuntime({
-        type: 'translate-cue',
-        text: stripVttTags(current),
-        domain: location.hostname,
-      });
-      if (res?.ok && res.translated) {
-        this.replaced.set(el, original);
-        el.setAttribute('data-wt-sub', '1');
-        el.setAttribute('title', original); // hover to see original
-        el.textContent = res.translated;
+  private readDomCaptions(): { media: HTMLVideoElement | null; nodes: Element[] } {
+    const nodes = queryAllSafeSelectors(document, this.selectors).filter(el => {
+      if (el.getClientRects().length === 0) return false;
+      // YouTube reuses caption markup for its language-change notice and settings icon.
+      return !el.closest('.caption-window.ytp-caption-window-top')
+        ?.querySelector('.ytp-caption-segment svg .ytp-svg-shadow');
+    });
+    const groups = new Map<HTMLVideoElement, Element[]>();
+    for (const node of nodes) {
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const videos = parent.querySelectorAll('video');
+        if (!videos.length) continue;
+        if (videos.length === 1 && !this.controllerFor(videos[0]).hasTracks) {
+          const list = groups.get(videos[0]) ?? [];
+          list.push(node);
+          groups.set(videos[0], list);
+        }
+        break;
       }
-    } catch {
-      /* background unavailable; node stays original */
     }
+    const previous = this.domPlayer;
+    const current = this.activeVideo && groups.has(this.activeVideo) ? this.activeVideo
+      : [...groups.keys()].find(v => !v.paused) ?? groups.keys().next().value;
+    if (current) this.domPlayer = { video: current, src: current.currentSrc };
+    else if (previous && (!previous.video.isConnected || previous.video.currentSrc !== previous.src ||
+             this.controllerFor(previous.video).hasTracks)) this.domPlayer = null;
+    return { media: this.domPlayer?.video ?? null, nodes: current ? groups.get(current)! : [] };
+  }
+
+  private hasDomCaptions(): boolean {
+    return this.selectors.length > 0 && !!this.readDomCaptions().media;
+  }
+
+  private startSelectors(): void {
+    this.domCaptions = new DomCaptionSession(() => this.readDomCaptions());
   }
 
   restoreSelectors(): void {
-    this.selectorObserver?.disconnect();
-    this.selectorObserver = null;
-    if (this.selectorTimer !== null) {
-      window.clearTimeout(this.selectorTimer);
-      this.selectorTimer = null;
-    }
-    for (const [el, original] of this.replaced) {
-      if (el.isConnected) {
-        el.textContent = original;
-        el.removeAttribute('data-wt-sub');
-        el.removeAttribute('title');
-      }
-    }
-    this.replaced.clear();
-    this.selectorDirty.clear();
+    this.domCaptions?.close();
+    this.domCaptions = null;
+  }
+
+  exportSrt(): string {
+    const videos = this.videos();
+    const selected = this.activeVideo && videos.includes(this.activeVideo) ? this.activeVideo : null;
+    const active = selected && this.controllers.get(selected)?.active
+      ? this.controllers.get(selected) : [...this.controllers].find(([media, c]) => media.isConnected && c.active)?.[1];
+    return bilingualSrt(active?.exportCues() ?? this.domCaptions?.exportCues() ?? []);
   }
 
   get selectorList(): string[] {

@@ -8,7 +8,9 @@
  */
 import { BATCH_WINDOW_MS, MAX_CONCURRENT_REQUESTS } from '../shared/constants';
 import { createThinkDeltaFilter, persistSanitizedOutput, sanitizeOptionsFromSettings, sanitizeTranslation } from '../shared/sanitize';
-import type { ErrorKind, ProviderConfig, Settings, TranslateResults } from '../shared/types';
+import type { DocumentContext, ErrorKind, GlossaryEntry, ProviderConfig, Settings, TranslateResults } from '../shared/types';
+import { boundedDocumentContext, glossaryFits, matchedTerms } from '../shared/documentContext';
+import { hashText } from '../shared/utils';
 import {
   ProviderError,
   providerSupportsStreaming,
@@ -26,11 +28,14 @@ import {
 
 export interface PipelineItem {
   text: string;
+  /** A reply uses automatic source detection and the user's writing language. */
+  draft?: boolean;
   /** Participates in the translation cache key; never sent to a Provider or TM. */
   cacheScope?: string;
   key?: string;
   domain?: string;
   pageLanguage?: string | null;
+  documentContext?: DocumentContext;
   tabId?: number;
   frameId?: number;
 }
@@ -84,6 +89,7 @@ interface ItemResult {
 }
 
 interface QueueItem {
+  draft?: boolean;
   requestId: number;
   resultKey: string;
   providerId: string;
@@ -92,6 +98,9 @@ interface QueueItem {
   key: string;
   domain?: string;
   pageLanguage?: string | null;
+  documentContext?: DocumentContext;
+  /** Hash of the document labels, site and glossary. Used only for local reuse. */
+  contextKey: string;
   tabId?: number;
   frameId?: number;
   stream: boolean;
@@ -99,6 +108,23 @@ interface QueueItem {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   resolve: (r: ItemResult) => void;
+}
+
+function reuseIdentity(provider: ProviderConfig, item: QueueItem): { fingerprint: string; tmScope: string } {
+  const model = cacheFingerprint(provider);
+  if (!item.contextKey) return { fingerprint: model, tmScope: '' };
+  // The endpoint and HTTP body template determine whether a backend receives
+  // the references. Changing either must retranslate context-sensitive rows.
+  const route = hashText(JSON.stringify([
+    provider.type, provider.baseUrl, provider.backend, provider.method, provider.bodyTemplate, provider.formality,
+  ]));
+  const fingerprint = model + ':' + route + ':' + item.contextKey;
+  return { fingerprint, tmScope: provider.id + ':' + fingerprint };
+}
+
+function itemContext(settings: Settings, provider: ProviderConfig, item: QueueItem, texts: string[]) {
+  const ctx = buildContext(settings, provider, item.domain, item.pageLanguage, item.documentContext, texts);
+  return item.draft ? { ...ctx, sourceLanguage: 'auto', targetLanguage: settings.draftTargetLanguage } : ctx;
 }
 
 export class TranslationPipeline {
@@ -146,6 +172,10 @@ export class TranslationPipeline {
       if (item.tabId !== undefined) this.cancelledTabs.delete(item.tabId);
     }
     const pending = items.map((item, index) => {
+      const documentContext = boundedDocumentContext(item.documentContext);
+      const contextKey = documentContext || item.domain
+        ? hashText(JSON.stringify([item.domain, documentContext]))
+        : '';
       const resultKey = item.key && item.key !== '' ? item.key : `anon-${requestId}-${index}`;
       return new Promise<{ resultKey: string; outcome: ItemResult }>((resolve) => {
         if (options.signal?.aborted) {
@@ -164,6 +194,10 @@ export class TranslationPipeline {
               q.tabId === item.tabId &&
               q.frameId === item.frameId &&
               q.key === item.key &&
+              q.providerId === providerId &&
+              q.pageLanguage === item.pageLanguage &&
+              q.contextKey === contextKey &&
+              q.draft === item.draft &&
               q.text === item.text &&
               (q.cacheScope ?? '') === (item.cacheScope ?? ''),
           );
@@ -181,9 +215,13 @@ export class TranslationPipeline {
           providerId,
           text: item.text,
           cacheScope: item.cacheScope,
-          key: item.key ?? '',
+          // Draft work has a result key for this RPC, but no resumable page node.
+          key: item.draft ? '' : (item.key ?? ''),
+          draft: item.draft,
           domain: item.domain,
           pageLanguage: item.pageLanguage,
+          documentContext,
+          contextKey,
           tabId: item.tabId,
           frameId: item.frameId,
           stream: typeof options.onDelta === 'function',
@@ -253,8 +291,10 @@ export class TranslationPipeline {
     const settings = await this.deps.getSettings(true);
 
     const groups = new Map<string, QueueItem[]>();
+    const glossaryKey = settings.glossary.length ? hashText(JSON.stringify(settings.glossary)) : '';
     for (const item of items) {
-      const key = `${item.providerId}|${item.tabId ?? -1}|${item.frameId ?? -1}|${item.domain ?? ''}|${item.pageLanguage ?? ''}`;
+      if (glossaryKey) item.contextKey += ':' + glossaryKey;
+      const key = JSON.stringify([item.providerId, item.tabId, item.frameId, item.pageLanguage, item.contextKey, !!item.draft]);
       const list = groups.get(key) ?? [];
       list.push(item);
       groups.set(key, list);
@@ -301,10 +341,10 @@ export class TranslationPipeline {
       await this.deps.logError?.('background', 'config', `Provider "${provider?.name ?? providerId}": ${message}`, providerId);
       return [];
     }
-    const ctx = buildContext(settings, provider, group[0].domain, group[0].pageLanguage);
+    const ctx = itemContext(settings, provider, group[0], []);
     const source = ctx.sourceLanguage;
     const target = ctx.targetLanguage;
-    const fingerprint = cacheFingerprint(provider);
+    const { fingerprint, tmScope } = reuseIdentity(provider, group[0]);
 
     let hits = new Map<string, string>();
     if (settings.cacheEnabled) {
@@ -356,6 +396,7 @@ export class TranslationPipeline {
           misses.map((m, i) => ({ key: String(i), text: m.text })),
           pair,
           settings.glossaryVersion,
+          tmScope,
         );
         const still: QueueItem[] = [];
         misses.forEach((item, i) => {
@@ -399,16 +440,22 @@ export class TranslationPipeline {
 
     let chars = 0;
     let batch: QueueItem[] = [];
+    let batchTerms = new Set<GlossaryEntry>();
     const batches: QueueItem[][] = [];
     for (const item of batchItems) {
+      // A neighboring paragraph must not displace a term this one would get
+      // on its own. Both paths write reusable paragraph translations.
+      const terms = matchedTerms(settings.glossary, [item.text]);
+      const combined = new Set([...batchTerms, ...terms]);
       if (
         batch.length > 0 &&
-        (batch.length >= provider.maxBatchItems || chars + item.text.length > provider.maxBatchChars)
+        (batch.length >= provider.maxBatchItems || chars + item.text.length > provider.maxBatchChars || !glossaryFits([...combined]))
       ) {
         batches.push(batch);
         batch = [];
         chars = 0;
-      }
+        batchTerms = new Set(terms);
+      } else batchTerms = combined;
       batch.push(item);
       chars += item.text.length;
     }
@@ -519,8 +566,8 @@ export class TranslationPipeline {
         throw new ProviderError('aborted', '请求已取消');
       }
       const texts = batch.map((b) => b.text);
-      const ctx = buildContext(settings, providerConfig, batch[0]?.domain, batch[0]?.pageLanguage);
-      const fingerprint = cacheFingerprint(providerConfig);
+      const ctx = itemContext(settings, providerConfig, batch[0], texts);
+      const { fingerprint, tmScope } = reuseIdentity(providerConfig, batch[0]);
       const cacheId = cacheOwnerId ?? providerConfig.id;
       const translated = await instance.translateTexts(texts, ctx, controller.signal);
       const successes: { body: string; cacheText: string; translated: string }[] = [];
@@ -575,6 +622,7 @@ export class TranslationPipeline {
             tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
             settings.glossaryVersion,
+            tmScope,
           );
         } catch {
           /* TM write is best-effort */
@@ -680,8 +728,8 @@ export class TranslationPipeline {
       if (item.signal?.aborted) {
         return { kind: 'aborted', message: '请求已取消' };
       }
-      const ctx = buildContext(settings, providerConfig, item.domain, item.pageLanguage);
-      const fingerprint = cacheFingerprint(providerConfig);
+      const ctx = itemContext(settings, providerConfig, item, [item.text]);
+      const { fingerprint, tmScope } = reuseIdentity(providerConfig, item);
       let full: string;
       const streaming = providerSupportsStreaming(instance);
       // Selection previews wait for a known answer boundary. The existing
@@ -735,6 +783,7 @@ export class TranslationPipeline {
             tmLangPair(ctx.sourceLanguage, ctx.targetLanguage),
             settings.translationMemory.maxEntries,
             settings.glossaryVersion,
+            tmScope,
           );
         } catch {
           /* best-effort */

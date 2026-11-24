@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../src/shared/constants';
+import { effectiveRuleForHost } from '../src/content/rules';
 import { applyFullSettingsSave, normalizeProvider, normalizeSettings, redactSettings, validateImportedSettings } from '../src/storage/settings';
 
 describe('normalizeSettings', () => {
@@ -60,6 +61,7 @@ describe('normalizeProvider', () => {
     expect(p?.supportsStreaming).toBe(true);
     expect(p?.supportsVision).toBe(false);
     expect(p?.supportsAsr).toBe(false);
+    expect(p).not.toHaveProperty('thinkingLevel');
     const on = normalizeProvider({
       id: 'b',
       type: 'openai-compatible',
@@ -67,10 +69,17 @@ describe('normalizeProvider', () => {
       supportsVision: true,
       supportsAsr: true,
       supportsStreaming: false,
+      thinkingLevel: 'none',
     });
     expect(on?.supportsVision).toBe(true);
     expect(on?.supportsAsr).toBe(true);
     expect(on?.supportsStreaming).toBe(false);
+    expect(on?.thinkingLevel).toBe('none');
+  });
+
+  it('ignores an invalid thinking level and omits it for other provider types', () => {
+    expect(normalizeProvider({ id: 'a', type: 'opencode-go', thinkingLevel: 3 })).not.toHaveProperty('thinkingLevel');
+    expect(normalizeProvider({ id: 'b', type: 'deepl', thinkingLevel: 'low' })).not.toHaveProperty('thinkingLevel');
   });
 });
 
@@ -137,6 +146,18 @@ describe('applyFullSettingsSave (M-40)', () => {
 });
 
 describe('built-in site rules (M-64)', () => {
+  it('recognizes the privacy-enhanced YouTube player in fresh and existing settings', () => {
+    const original = { id: 'builtin-youtube', match: ['*.youtube.com'], subtitleSelectors: ['.ytp-caption-segment'] };
+    for (const settings of [defaultSettings(), normalizeSettings({ siteRules: [original] })]) {
+      expect(effectiveRuleForHost('www.youtube-nocookie.com', settings.siteRules).subtitleSelectors)
+        .toEqual(['.ytp-caption-segment']);
+      expect(effectiveRuleForHost('www.youtube-nocookie.com.example.org', settings.siteRules).subtitleSelectors)
+        .toEqual([]);
+    }
+    const disabled = normalizeSettings({ siteRules: [{ ...original, enabled: false }] });
+    expect(effectiveRuleForHost('www.youtube-nocookie.com', disabled.siteRules).subtitleSelectors).toEqual([]);
+  });
+
   it('keeps a disabled built-in after normalize instead of resurrecting a second copy', () => {
     const s = normalizeSettings({
       siteRules: [{ id: 'builtin-wikipedia', match: ['*.wikipedia.org'], enabled: false }],

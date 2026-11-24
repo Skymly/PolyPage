@@ -975,6 +975,19 @@ async function closePage(browserCdp, urlPrefix) {
   await sleep(300);
 }
 
+async function visitReaderPage(viewer, number, selector) {
+  await viewer.eval(`(() => {
+    const field = document.querySelector('#page-number');
+    field.value = '${number}';
+    document.querySelector('#page-jump').requestSubmit();
+  })()`);
+  for (let i = 0; i < 60; i++) {
+    if (await viewer.eval(`!!document.querySelector(${JSON.stringify(`[data-page="${number}"] ${selector}`)})`)) return;
+    await sleep(150);
+  }
+  throw new Error(`Page ${number} did not show ${selector}`);
+}
+
 async function saveSettingsThroughExtension(payload) {
   const res = await ext.eval(
     `chrome.runtime.sendMessage({ type: 'save-settings', settings: ${payload} })`,
@@ -1813,8 +1826,12 @@ try {
   });
   check('same-language guard settings saved', await saveSettingsThroughExtension(sameLangSettings));
   await page.eval(`location.reload()`);
-  await sleep(1500);
-  const guardState = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`));
+  let guardState;
+  for (let i = 0; i < 40; i++) {
+    guardState = await ext.eval(sendToTabWithUrl(pageUrl, `{ type: 'wt:get-state' }`)).catch(() => null);
+    if (guardState?.pageLanguage && guardState.autoSkipped) break;
+    await sleep(250);
+  }
   check(
     'auto-translate skipped when page language == target',
     guardState?.autoSkipped === true && guardState?.active === false,
@@ -2241,9 +2258,11 @@ try {
   const viewerUrl = `chrome-extension://${extensionId}/viewer/pdf-viewer.html?src=${encodeURIComponent(pdfSrc)}`;
   await openPage(browserCdp, viewerUrl);
   const viewer = await pageFor(viewerUrl);
-  // Scroll so lazy pages (incl. the scanned one) enter the observer margin.
   await sleep(800);
-  await viewer.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  await visitReaderPage(viewer, 1, '.dst:not(.pending):not(.error)');
+  await visitReaderPage(viewer, 2, '.dst:not(.pending):not(.error)');
+  await visitReaderPage(viewer, 3, '.dst:not(.pending):not(.error)');
+  await visitReaderPage(viewer, 4, '.ocr-page-btn');
   let pdfDst = [];
   for (let i = 0; i < 60; i++) {
     pdfDst = await viewer.eval(`[...document.querySelectorAll('.para .dst')].map((d) => d.textContent)`);
@@ -2311,7 +2330,9 @@ try {
   await openPage(browserCdp, viewerUrl);
   const viewer2 = await pageFor(viewerUrl);
   await sleep(800);
-  await viewer2.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  await visitReaderPage(viewer2, 1, '.dst:not(.pending):not(.error)');
+  await visitReaderPage(viewer2, 2, '.dst:not(.pending):not(.error)');
+  await visitReaderPage(viewer2, 3, '.dst:not(.pending):not(.error)');
   let pdfDst2 = [];
   for (let i = 0; i < 60; i++) {
     pdfDst2 = await viewer2.eval(`[...document.querySelectorAll('.para .dst')].map((d) => d.textContent)`);
@@ -2381,7 +2402,8 @@ try {
   await openPage(browserCdp, pdfResumeUrl);
   const pdfResumeClient = await pageFor(pdfResumeUrl);
   await sleep(800);
-  await pdfResumeClient.eval(`window.scrollTo(0, document.body.scrollHeight)`);
+  await visitReaderPage(pdfResumeClient, 1, '.dst.pending');
+  await visitReaderPage(pdfResumeClient, 2, '.dst.pending');
   let sawPending = false;
   for (let i = 0; i < 40; i++) {
     const texts = await pdfResumeClient.eval(
@@ -2522,7 +2544,7 @@ try {
           maxTokens: 4096,
           headers: {},
           enabled: true,
-          hostName: 'com.example.not-installed',
+          hostName: 'com.skymly.polypage.smoke.missing',
           backend: '',
           fallbackProviderId: 'mock',
         },

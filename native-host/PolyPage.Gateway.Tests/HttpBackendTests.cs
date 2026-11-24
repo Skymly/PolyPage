@@ -94,14 +94,18 @@ public class HttpBackendTests : IDisposable
             Id = "stub",
             Url = _baseUrl + "translate",
             ApiKey = "k\"ey",
-            BodyTemplate = "{ \"q\": {{texts}}, \"from\": \"{{sourceLanguage}}\", \"to\": \"{{targetLanguage}}\", \"key\": \"{{apiKey}}\" }",
+            BodyTemplate = "{ \"q\": {{texts}}, \"from\": \"{{sourceLanguage}}\", \"to\": \"{{targetLanguage}}\", \"key\": \"{{apiKey}}\", \"title\": \"{{documentTitle}}\", \"section\": \"{{section}}\", \"terms\": \"{{glossary}}\" }",
             ResponsePath = "data.translations",
             TimeoutMs = 5000,
         });
-        await backend.TranslateAsync(new[] { "one" }, new TranslateContext("en\"x", "zh"), CancellationToken.None);
+        await backend.TranslateAsync(new[] { "Use {{section}}." }, new TranslateContext("en\"x", "zh", "Guide", "TCP", "port = 端口"), CancellationToken.None);
         using var doc = JsonDocument.Parse(_lastBody);
         Assert.Equal("en\"x", doc.RootElement.GetProperty("from").GetString());
         Assert.Equal("k\"ey", doc.RootElement.GetProperty("key").GetString());
+        Assert.Equal("Use {{section}}.", doc.RootElement.GetProperty("q")[0].GetString());
+        Assert.Equal("Guide", doc.RootElement.GetProperty("title").GetString());
+        Assert.Equal("TCP", doc.RootElement.GetProperty("section").GetString());
+        Assert.Equal("port = 端口", doc.RootElement.GetProperty("terms").GetString());
     }
 
     [Fact]

@@ -16,6 +16,7 @@ import {
   defaultProvider,
 } from '../shared/constants';
 import { formatPackMegabytes } from '../ocr/packs';
+import { parseThinkingLevel } from '../shared/modelThinking';
 import { supportsProviderModelList, type PdfLayoutPreset } from '../shared/types';
 import { disableOrRemoveSiteRule, normalizeSiteRule } from '../shared/siteRules';
 import type {
@@ -98,6 +99,7 @@ function renderGeneral(): void {
   $<HTMLInputElement>('selection-speak').checked = draft.selectionSpeak;
   $<HTMLInputElement>('default-source').value = draft.defaultSourceLanguage;
   $<HTMLInputElement>('default-target').value = draft.defaultTargetLanguage;
+  $<HTMLInputElement>('draft-target').value = draft.draftTargetLanguage;
   $<HTMLInputElement>('min-text-length').value = String(draft.minTextLength);
   $<HTMLInputElement>('inline-budget').value = String(draft.inlineBudget);
   $<HTMLInputElement>('viewport-budget').value = String(draft.viewportBudget);
@@ -119,6 +121,7 @@ function collectGeneral(): void {
   draft.selectionSpeak = $<HTMLInputElement>('selection-speak').checked;
   draft.defaultSourceLanguage = $<HTMLInputElement>('default-source').value.trim() || 'auto';
   draft.defaultTargetLanguage = $<HTMLInputElement>('default-target').value.trim() || '简体中文';
+  draft.draftTargetLanguage = $<HTMLInputElement>('draft-target').value.trim() || '英语';
   draft.minTextLength = Math.round(num($<HTMLInputElement>('min-text-length').value, draft.minTextLength));
   draft.inlineBudget = Math.round(num($<HTMLInputElement>('inline-budget').value, draft.inlineBudget));
   draft.viewportBudget = Math.round(num($<HTMLInputElement>('viewport-budget').value, draft.viewportBudget));
@@ -344,6 +347,8 @@ async function refreshStats(): Promise<void> {
 
 function renderProviderList(): void {
   if (!draft) return;
+  const active = draft.providers.find((provider) => provider.id === draft!.activeProviderId);
+  if (active) $('glossary-service').textContent = active.name + '（本页配置）' + glossaryUsage(active);
   const list = $<HTMLDivElement>('provider-list');
   list.textContent = '';
   for (const provider of draft.providers) {
@@ -644,6 +649,9 @@ function collectEditor(): boolean {
   provider.baseUrl = $<HTMLInputElement>('f-baseurl').value.trim();
   provider.apiKey = $<HTMLInputElement>('f-apikey').value.trim();
   provider.model = $<HTMLInputElement>('f-model').value.trim();
+  const thinkingLevel = parseThinkingLevel($<HTMLSelectElement>('f-thinking-level').value);
+  if (thinkingLevel && supportsProviderModelList(provider.type)) provider.thinkingLevel = thinkingLevel;
+  else delete provider.thinkingLevel;
   provider.sourceLanguage = $<HTMLInputElement>('f-source').value.trim();
   provider.targetLanguage = $<HTMLInputElement>('f-target').value.trim();
   provider.timeoutMs = num($<HTMLInputElement>('f-timeout').value, provider.timeoutMs);
@@ -723,6 +731,7 @@ function changeProviderType(): void {
     if (!existingGoEndpoint) {
       provider.apiKey = '';
       provider.model = OPENCODE_GO_DEFAULT_MODEL;
+      delete provider.thinkingLevel;
     }
     if (!provider.model) provider.model = OPENCODE_GO_DEFAULT_MODEL;
     if (provider.name === defaultProvider().name || provider.name === 'OpenAI-compatible') provider.name = 'OpenCode Go';
@@ -730,6 +739,7 @@ function changeProviderType(): void {
     provider.baseUrl = DEFAULT_BASE_URLS[provider.type] ?? '';
     provider.apiKey = '';
     provider.model = provider.type === 'openai-compatible' ? defaultProvider().model : '';
+    delete provider.thinkingLevel;
   }
   renderProviderList();
   renderEditor();
@@ -813,6 +823,25 @@ function bumpGlossaryVersion(): void {
   renderGlossary();
 }
 
+function glossaryUsage(provider: ProviderConfig): string {
+  switch (provider.type) {
+    case 'openai-compatible':
+    case 'opencode-go':
+      return '会将文档标题、章节和本批原文命中的术语交给模型。标题和章节各最多 96 字，术语最多 12 条、共 1024 个字符。';
+    case 'deepl':
+      return '会将标题、章节和命中术语作为 context 参数提供给 DeepL，具体用词由 DeepL 决定。';
+    case 'custom-http':
+      if (provider.method === 'GET') return '使用 GET 请求，仅发送原文和语言；术语表未启用。';
+      return /\{\{\s*glossary\s*\}\}/.test(provider.bodyTemplate ?? '')
+        ? '会通过 Body 模板的 {{glossary}} 发送命中术语，译名由接口处理。'
+        : '的 Body 模板未引用术语。在接口支持的字段中加入 {{glossary}} 即可传入命中术语。';
+    case 'native-host':
+      return '将标题、章节和命中术语交给本地网关。更新网关后，Ollama 会将它们用于提示词，HTTP 后端按网关 Body 模板取用。';
+    default:
+      return '的当前适配器仅发送原文和语言。要应用术语，可在服务设置中选用 OpenAI 兼容接口、OpenCode Go 或支持上下文的接口。';
+  }
+}
+
 function renderGlossary(): void {
   if (!draft) return;
   const list = $<HTMLDivElement>('glossary-list');
@@ -820,7 +849,7 @@ function renderGlossary(): void {
   if (draft.glossary.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'hint';
-    empty.textContent = '暂无术语。术语将以「原文 = 译文」注入 System Prompt。';
+    empty.textContent = '暂无术语。添加原词和希望使用的译名即可。';
     list.appendChild(empty);
   }
   draft.glossary.forEach((entry, index) => {
@@ -1549,7 +1578,7 @@ async function init(): Promise<void> {
   document.querySelector('.content')?.addEventListener('input', markDirty);
   $('f-baseurl').addEventListener('input', refreshEndpointHints);
   $('f-apikey').addEventListener('input', refreshEndpointHints);
-  for (const id of ['f-baseurl', 'f-apikey', 'f-model']) {
+  for (const id of ['f-baseurl', 'f-apikey', 'f-model', 'f-thinking-level']) {
     $(id).addEventListener('input', resetProviderTest);
   }
 }

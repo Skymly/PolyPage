@@ -71,6 +71,8 @@ describe('openai-compatible translateTexts', () => {
     expect(captured[0].url).toBe('http://127.0.0.1:9/v1/chat/completions');
     expect(captured[0].body.model).toBe('mock-model');
     expect(captured[0].body.stream).toBe(false);
+    expect(captured[0].body.reasoning_effort).toBeUndefined();
+    expect(captured[0].body.think).toBe(false);
     expect(out).toEqual(['你好，世界']);
   });
 
@@ -105,6 +107,43 @@ describe('openai-compatible translateTexts', () => {
     );
     await minimax.translateTexts(['Hello'], ctx, new AbortController().signal);
     expect(captured[1].thinking).toEqual({ type: 'disabled' });
+  });
+
+  it.each([
+    { model: 'MiniMax-M3', thinkingLevel: 'enabled', options: { thinking: { type: 'adaptive' }, reasoning_split: true } },
+    { model: 'MiniMax-M3.1-Flash', thinkingLevel: undefined, options: {} },
+    { model: 'MiniMax-M3.1-Flash', thinkingLevel: 'low', options: { reasoning_effort: 'low' } },
+  ] as const)('uses the supported thinking controls for $model at $thinkingLevel', async ({ model, thinkingLevel, options }) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(chatJson('你好'));
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createProvider(config({ baseUrl: 'https://api.minimax.io/v1', model, thinkingLevel }));
+    await provider.translateTexts(['Hello'], ctx, new AbortController().signal);
+    const { thinking, reasoning_effort, reasoning_split } = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect({ thinking, reasoning_effort, reasoning_split }).toEqual(options);
+  });
+
+  it('sends the selected effort without the localhost default or unsupported OpenAI parameters', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => chatJson('你好'));
+    vi.stubGlobal('fetch', fetchMock);
+    const signal = new AbortController().signal;
+    const local = createProvider(config({ thinkingLevel: 'none' }));
+    await local.translateTexts(['Hello'], ctx, signal);
+    const localBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(localBody).toMatchObject({ max_tokens: 4096, reasoning_effort: 'none' });
+    expect(localBody).not.toHaveProperty('think');
+
+    const openai = createProvider(config({
+      baseUrl: 'https://api.openai.com/v1', model: 'gpt-5', thinkingLevel: 'low', supportsVision: true,
+    }));
+    await openai.translateTexts(['Hello'], ctx, signal);
+    await openai.translateImage?.('data:image/png;base64,AAA', ctx, signal);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const [, init] of fetchMock.mock.calls.slice(1)) {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({ reasoning_effort: 'low', max_completion_tokens: 4096 });
+      expect(body).not.toHaveProperty('max_tokens');
+      expect(body).not.toHaveProperty('temperature');
+    }
   });
 
   it('rejects non-stream finish_reason=length (M-20)', async () => {

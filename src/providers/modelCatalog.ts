@@ -1,4 +1,5 @@
 import { OPENCODE_GO_URL } from '../shared/constants';
+import { isReasoningEffort, type ReasoningEffort } from '../shared/modelThinking';
 import { supportsProviderModelList, type ProviderConfig, type ProviderModel } from '../shared/types';
 import { assertHttpBaseUrl, ProviderError, providerHttpError, withTimeoutAndRetry } from './provider';
 
@@ -11,9 +12,26 @@ interface CatalogEntry {
   input_modalities?: unknown;
   output_modalities?: unknown;
   architecture?: { input_modalities?: unknown; output_modalities?: unknown };
+  capabilities?: { reasoning?: { supported?: unknown; toggle?: unknown; effort?: unknown } };
+  effort?: { supported_levels?: unknown };
 }
 
 const NON_TEXT_TYPES = new Set(['audio', 'embedding', 'image', 'moderation', 'rerank', 'speech', 'video']);
+
+function modelReasoningEfforts(item: CatalogEntry, host: string): ReasoningEffort[] | undefined {
+  const reasoning = item.capabilities?.reasoning;
+  if (reasoning?.supported === false) return [];
+  if (reasoning?.supported === true) {
+    const efforts = Array.isArray(reasoning.effort) ? reasoning.effort.filter(isReasoningEffort) : [];
+    if (reasoning.toggle === true) efforts.unshift('none');
+    return [...new Set(efforts)];
+  }
+  const levels = item.effort?.supported_levels;
+  if (host === 'api.deepseek.com' && Array.isArray(levels)) {
+    return [...new Set<ReasoningEffort>(['none', ...levels.filter(isReasoningEffort)])];
+  }
+  return undefined;
+}
 
 export async function listProviderModels(config: ProviderConfig): Promise<ProviderModel[]> {
   if (!supportsProviderModelList(config.type)) throw new ProviderError('config', '此服务没有模型列表接口');
@@ -64,7 +82,12 @@ export async function listProviderModels(config: ProviderConfig): Promise<Provid
       if (Array.isArray(input) && !input.includes('text')) continue;
       if (Array.isArray(output) && !output.includes('text')) continue;
       const name = [item.name, item.display_name].find((value) => typeof value === 'string' && value.trim());
-      models.set(id, { id, name: typeof name === 'string' ? name.trim() : id });
+      const reasoningEfforts = modelReasoningEfforts(item, url.hostname);
+      models.set(id, {
+        id,
+        name: typeof name === 'string' ? name.trim() : id,
+        ...(reasoningEfforts ? { reasoningEfforts } : {}),
+      });
     }
     if (models.size === 0) throw new ProviderError('invalid_response', '服务未返回可用的文本模型');
     return [...models.values()].sort((a, b) => a.name.localeCompare(b.name));

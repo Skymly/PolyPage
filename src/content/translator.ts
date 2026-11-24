@@ -32,6 +32,7 @@ import { defaultRuntimeTranslateItems } from './runtimeTranslate';
 import type { TranslateItemsFn } from './runtimeTranslate';
 import { isMenuChrome, scanTranslatableNodesWithRule, sourceTextOf } from './scanner';
 import { Tooltip } from './tooltip';
+import { pageContextReader } from './documentContext';
 
 /** Items per runtime message: small enough for progressive updates. */
 const CHUNK_SIZE = 8;
@@ -209,6 +210,10 @@ export class PageTranslator {
 
   private findEntryByEl(el: Element): NodeEntry | null {
     return this.elIndex.get(el) ?? null;
+  }
+
+  private readPageContext() {
+    return pageContextReader(this.config.rule, (heading) => this.elIndex.get(heading)?.originalText ?? sourceTextOf(heading));
   }
 
   /* ------------------------------ public actions ----------------------------- */
@@ -502,9 +507,12 @@ export class PageTranslator {
     tasks: { entry: NodeEntry; segment: InlineSegmentState }[],
   ): Promise<void> {
     const epoch = this._modeEpoch;
+    const contextFor = this.readPageContext();
     for (let i = 0; i < tasks.length; i += CHUNK_SIZE) {
       const chunk = tasks.slice(i, i + CHUNK_SIZE);
-      const items: TranslationItem[] = chunk.map((t) => ({ key: t.segment.key, text: t.segment.text }));
+      const items: TranslationItem[] = chunk.map(({ entry, segment }) => ({
+        key: segment.key, text: segment.text, documentContext: contextFor(entry.el),
+      }));
       try {
         const response = await this.translateItems(items, {
           domain: typeof location !== 'undefined' ? location.hostname : undefined,
@@ -575,6 +583,7 @@ export class PageTranslator {
 
   private async fetchTranslations(targets: NodeEntry[]): Promise<void> {
     const epoch = this._modeEpoch;
+    const contextFor = this.readPageContext();
     for (const entry of targets) {
       entry.status = 'pending';
       entry.error = null;
@@ -583,7 +592,9 @@ export class PageTranslator {
 
     for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
       const chunk = targets.slice(i, i + CHUNK_SIZE);
-      const items: TranslationItem[] = chunk.map((e) => ({ key: e.id, text: e.originalText }));
+      const items: TranslationItem[] = chunk.map((entry) => ({
+        key: entry.id, text: entry.originalText, documentContext: contextFor(entry.el),
+      }));
       try {
         const response = await this.translateItems(items, {
           domain: typeof location !== 'undefined' ? location.hostname : undefined,
@@ -629,7 +640,7 @@ export class PageTranslator {
     this.renderEntries([entry]);
     this.report();
     let accumulated = '';
-    void this.translateItems([{ key: entry.id, text: entry.originalText }], {
+    void this.translateItems([{ key: entry.id, text: entry.originalText, documentContext: this.readPageContext()(entry.el) }], {
       domain: typeof location !== 'undefined' ? location.hostname : undefined,
       pageLanguage: this.config.pageLanguage,
       onDelta: (_key, delta) => {

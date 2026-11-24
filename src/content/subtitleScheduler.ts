@@ -63,7 +63,11 @@ export class CueScheduler {
 
   /** Decide what the renderer should do for the cue active at `time`. */
   decide(cues: CueLike[], time: number): CueAction {
-    const text = activeCueText(cues, time);
+    return this.decideText(activeCueText(cues, time));
+  }
+
+  /** A player-drawn caption already supplies its active text. */
+  decideText(text: string | null): CueAction {
     if (text === null) {
       this.current = null;
       return { kind: 'none' };

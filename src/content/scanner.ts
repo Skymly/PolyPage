@@ -61,6 +61,7 @@ function isSkippedSubtreeRoot(el: Element): boolean {
   if (el instanceof HTMLElement && el.isContentEditable) return true;
   if (el.classList?.contains(BILINGUAL_CLASS)) return true;
   if (el.classList?.contains('wt-ocr-overlay-host')) return true;
+  if (el.classList?.contains('wt-draft-host')) return true;
   if (el.getAttribute('aria-hidden') === 'true') return true;
   if (SKIP_MATH_CLASSES.has(el.tagName.toLowerCase())) return true;
   for (const cls of SKIP_MATH_CLASSES) {
@@ -184,6 +185,15 @@ export function scanTranslatableNodes(root: ParentNode, minTextLength: number): 
   return scanTranslatableNodesWithRule(root, { minTextLength, rule: null });
 }
 
+/** Site boundaries and visible page content apply to both source paragraphs and
+ * reference headings. Short headings can still label longer paragraphs. */
+export function isReadableRegion(el: HTMLElement, rule: EffectiveRule | null): boolean {
+  if (insideSkippedSubtree(el)) return false;
+  if (rule?.includeSelectors.length && !rule.includeSelectors.some(s => elementMatchesWithin(el, s))) return false;
+  if (rule?.excludeSelectors.some(s => elementMatchesWithin(el, s))) return false;
+  return !isHidden(el);
+}
+
 export function scanTranslatableNodesWithRule(root: ParentNode, options: ScanOptions): HTMLElement[] {
   const found: HTMLElement[] = [];
   if (!(root instanceof Element) && !(root instanceof Document)) return found;
@@ -191,18 +201,8 @@ export function scanTranslatableNodesWithRule(root: ParentNode, options: ScanOpt
   const rule = options.rule ?? null;
   for (const node of candidates) {
     const el = node as HTMLElement;
-    // Never translate our own inserted bilingual blocks.
-    if (el.closest(`.${BILINGUAL_CLASS}`)) continue;
-    if (insideSkippedSubtree(el)) continue;
+    if (!isReadableRegion(el, rule)) continue;
     if (CONTAINER_TAGS.has(el.tagName) && hasCandidateDescendantWithText(el)) continue;
-    if (rule) {
-      if (rule.includeSelectors.length > 0) {
-        const inside = rule.includeSelectors.some((s) => elementMatchesWithin(el, s));
-        if (!inside) continue;
-      }
-      if (rule.excludeSelectors.some((s) => elementMatchesWithin(el, s))) continue;
-    }
-    if (isHidden(el)) continue;
     const text = sourceTextOf(el);
     const minLen = isMenuChrome(el) ? Math.min(options.minTextLength, NAV_MIN_TEXT_LENGTH) : options.minTextLength;
     if (filterText(text, minLen).skip) continue;

@@ -113,6 +113,107 @@ afterEach(() => {
 });
 
 describe('TranslationPipeline', () => {
+  it('isolates writing and reading language pairs in the same flush and on cache hits', async () => {
+    const s = settings({ draftTargetLanguage: 'Japanese' });
+    const calls: string[] = [];
+    const p = makePipeline(s, {}, { createProvider: config => ({
+      config, translateTexts: async (texts, ctx) => {
+        calls.push(ctx.sourceLanguage + '→' + ctx.targetLanguage);
+        return texts.map(() => ctx.targetLanguage);
+      },
+    }) });
+    const read = { key: 'same', text: 'A shared draft.' };
+    const reply = { ...read, draft: true };
+    const pair = await Promise.all([p.translate([read]), p.translate([reply])]);
+    expect(pair.map(r => r.results.same)).toEqual(['简体中文', 'Japanese']);
+    expect((await p.translate([reply], { immediate: true })).results.same).toBe('Japanese');
+    expect(calls.sort()).toEqual(['English→简体中文', 'auto→Japanese']);
+  });
+  it.each([true, false])('isolates identical sentences by section using cache=%s or sentence memory alone', async (cacheEnabled) => {
+    const s = settings({ cacheEnabled, translationMemory: { enabled: !cacheEnabled, maxEntries: 50 } });
+    const seen: string[] = [];
+    const pipeline = makePipeline(s, {}, {
+      createProvider: (config) => ({
+        config,
+        translateTexts: async (texts, ctx) => {
+          const section = ctx.documentContext?.section ?? 'missing';
+          seen.push(section);
+          return texts.map(() => section);
+        },
+      }),
+    });
+    const read = async (section: string) => (await pipeline.translate([{
+      key: 'p', text: 'The port is closed.', documentContext: { title: 'Manual', section },
+    }], { immediate: true })).results.p;
+    expect(await read('Networking')).toBe('Networking');
+    expect(await read('Harbors')).toBe('Harbors');
+    expect(await read('Networking')).toBe('Networking');
+    expect(seen).toEqual(['Networking', 'Harbors']);
+  });
+
+  it('keeps concurrent chapters apart, batches neighboring paragraphs, and retranslates an imported glossary revision', async () => {
+    const s = settings({ translationMemory: { enabled: true, maxEntries: 50 } });
+    s.glossary = [{ source: 'Atlas', target: '星图引擎' }, { source: 'port', target: '端口' }];
+    const seen: string[][] = [];
+    const pipeline = makePipeline(s, {}, {
+      createProvider: (config) => ({
+        config,
+        translateTexts: async (texts, ctx) => {
+          seen.push(texts);
+          return texts.map(() => ctx.documentContext?.section + ' ' + ctx.glossary);
+        },
+      }),
+    });
+    const work = [
+      { key: 'a', text: 'Atlas is running.', documentContext: { section: 'Setup' } },
+      { key: 'b', text: 'Restart Atlas for support.', documentContext: { section: 'Setup' } },
+      { key: 'a', text: 'Atlas is running.', documentContext: { section: 'Appendix' } },
+    ];
+    const [setup, appendix] = await Promise.all([pipeline.translate(work.slice(0, 2)), pipeline.translate(work.slice(2))]);
+    expect(seen).toEqual([['Atlas is running.', 'Restart Atlas for support.'], ['Atlas is running.']]);
+    expect(setup.results.a).toContain('Setup');
+    expect(setup.results.a).toContain('Atlas = 星图引擎');
+    expect(setup.results.b).not.toContain('端口');
+    expect(appendix.results.a).toContain('Appendix');
+    s.glossary[0].target = '星图系统'; // import can keep the same version counter
+    const revised = await pipeline.translate([work[0]], { immediate: true });
+    expect(revised.results.a).toContain('Atlas = 星图系统');
+    expect(seen).toHaveLength(3);
+  });
+
+  it('splits a batch when preceding paragraphs would crowd out a later user term', async () => {
+    const glossary = Array.from({ length: 13 }, (_, i) => ({ source: 'term' + i, target: '译名' + i }));
+    const s = settings({ glossary });
+    const requests: string[][] = [];
+    const pipeline = makePipeline(s, {}, { createProvider: config => ({
+      config, translateTexts: async (texts, ctx) => {
+        requests.push(texts);
+        return texts.map(() => ctx.glossary!);
+      },
+    }) });
+    const items = [{ key: 'a', text: glossary.slice(0, 12).map(g => g.source).join(' ') }, { key: 'b', text: 'Use term12' }];
+    const first = await pipeline.translate(items, { immediate: true });
+    expect(first.results.b).toContain('term12 = 译名12');
+    expect(requests).toEqual([[items[0].text], [items[1].text]]);
+    expect((await pipeline.translate([items[1]], { immediate: true })).results.b).toBe(first.results.b);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('rechecks contextual results when the custom backend starts accepting glossary data', async () => {
+    const s = settings({ translationMemory: { enabled: true, maxEntries: 50 } });
+    const active = s.providers[0];
+    active.type = 'custom-http';
+    const pipeline = makePipeline(s, {}, {
+      createProvider: config => ({
+        config, translateTexts: async texts => texts.map(() => config.bodyTemplate?.includes('{{glossary}}') ? '星图引擎' : 'Atlas'),
+      }),
+    });
+    const item = { key: 'x', text: 'Restart Atlas.', documentContext: { title: 'Manual' } };
+    expect((await pipeline.translate([item], { immediate: true })).results.x).toBe('Atlas');
+    active.bodyTemplate = '{"q": {{texts}}, "terms": "{{glossary}}"}';
+    expect((await pipeline.translate([item], { immediate: true })).results.x).toBe('星图引擎');
+  });
+
   it('returns cache hits without calling the Provider', async () => {
     const cache = new MemoryTranslationCache();
     const s = settings();
@@ -638,11 +739,11 @@ describe('TranslationPipeline', () => {
     expect(done).toEqual([{ keys: ['k1'], frameId: 3 }]);
   });
 
-  it('cache key includes model fingerprint so a model change misses (M-24)', async () => {
+  it.each([{ model: 'other-model' }, { thinkingLevel: 'low' as const }])('cache misses after changing model settings to %j (M-24)', async (change) => {
     const cache = new MemoryTranslationCache();
     const s = settings();
     await seed(cache, s, 'Hello', '你好');
-    const next = settings({}, [{ ...s.providers[0], model: 'other-model' }]);
+    const next = settings({}, [{ ...s.providers[0], ...change }]);
     const calls: string[][] = [];
     const pipeline = makePipeline(
       next,

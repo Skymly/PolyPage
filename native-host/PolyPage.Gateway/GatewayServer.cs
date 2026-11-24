@@ -289,18 +289,25 @@ public sealed class GatewayServer
         return backend;
     }
 
+    private static TranslateContext TextContext(JsonElement? parameters)
+    {
+        return new TranslateContext(
+            GetString(parameters, "source") ?? "auto",
+            GetString(parameters, "target") ?? "zh-CN",
+            GetString(parameters, "documentTitle") ?? "",
+            GetString(parameters, "section") ?? "",
+            GetString(parameters, "glossary") ?? "");
+    }
+
     private async Task<JsonRpcResponse> HandleTranslateAsync(
         JsonRpcRequest request, long requestId, Stream output, CancellationToken ct)
     {
         var backend = ResolveBackend(request.Params);
         var texts = GetStringArray(request.Params, "texts")
             ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "translate 需要 texts 数组");
-        var source = GetString(request.Params, "source") ?? "auto";
-        var target = GetString(request.Params, "target") ?? "zh-CN";
-
         ValidateBatch(backend, texts);
 
-        var ctx = new TranslateContext(source, target);
+        var ctx = TextContext(request.Params);
         var translated = await backend.TranslateAsync(texts, ctx, ct);
         return JsonRpc.Ok(request.Id, new { translations = translated, backend = backend.Id });
     }
@@ -311,10 +318,7 @@ public sealed class GatewayServer
         var backend = ResolveBackend(request.Params);
         var text = GetString(request.Params, "text")
             ?? throw new GatewayBackendException(JsonRpc.InvalidParams, "translate.stream 需要 text");
-        var source = GetString(request.Params, "source") ?? "auto";
-        var target = GetString(request.Params, "target") ?? "zh-CN";
-
-        var ctx = new TranslateContext(source, target);
+        var ctx = TextContext(request.Params);
         var stream = backend.StreamAsync(text, ctx, ct);
         if (stream is null)
         {

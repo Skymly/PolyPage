@@ -65,6 +65,20 @@ describe('custom-http translateTexts', () => {
     expect(out).toEqual(['[gw] Hello', '[gw] Second']);
   });
 
+  it('passes labels and matched terms as escaped template data', async () => {
+    const stub = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: { translations: ['译文'] } }));
+    vi.stubGlobal('fetch', stub);
+    const provider = createProvider(config({
+      bodyTemplate: '{"q":{{texts}},"title":"{{documentTitle}}","section":"{{section}}","terms":"{{glossary}}"}',
+    }));
+    await provider.translateTexts(['Use {{section}}.'], {
+      ...ctx, documentContext: { title: '"Atlas"', section: 'Setup' }, glossary: 'Atlas = 星图',
+    }, new AbortController().signal);
+    expect(JSON.parse(String(stub.mock.calls[0][1]?.body))).toEqual({
+      q: ['Use {{section}}.'], title: '"Atlas"', section: 'Setup', terms: 'Atlas = 星图',
+    });
+  });
+
   it('puts text/q/source/target on the query string for GET (M-77)', async () => {
     const captured: { url: string; method: string | undefined; body: unknown }[] = [];
     vi.stubGlobal(

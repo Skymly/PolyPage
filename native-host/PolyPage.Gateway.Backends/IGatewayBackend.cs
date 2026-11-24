@@ -1,7 +1,7 @@
 namespace PolyPage.Gateway.Backends;
 
 /// <summary>Translation language context passed from the extension.</summary>
-public sealed record TranslateContext(string Source, string Target);
+public sealed record TranslateContext(string Source, string Target, string DocumentTitle = "", string Section = "", string Glossary = "");
 
 /// <summary>Capabilities a backend advertises.</summary>
 public sealed record BackendCapabilities(

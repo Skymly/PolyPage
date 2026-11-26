@@ -32,11 +32,17 @@ describe('version and count hygiene (M-66)', () => {
 
   it('does not freeze live test or smoke counts in README', () => {
     const readme = readFileSync(resolve('README.md'), 'utf8');
-    expect(readme).not.toMatch(/vitest 单元测试（\d+）/);
-    expect(readme).not.toMatch(/冒烟（\d+ 项断言）/);
-    expect(readme).not.toMatch(/\*\*\d+ 个单元测试\*\*/);
-    expect(readme).not.toMatch(/\*\*\d+ 项端到端断言\*\*/);
-    expect(readme).toContain('见 `npm run test` 输出');
-    expect(readme).toContain('见 `npm run smoke` 输出');
+    expect(readme).not.toMatch(/\b\d+ (?:unit )?tests\b/i);
+    expect(readme).not.toMatch(/\b\d+ (?:E2E )?assertions\b/i);
+    expect(readme).toContain('see `npm run test` output');
+    expect(readme).toContain('see `npm run smoke` output');
+
+    const readmeZh = readFileSync(resolve('README.zh-CN.md'), 'utf8');
+    expect(readmeZh).not.toMatch(/vitest 单元测试（\d+）/);
+    expect(readmeZh).not.toMatch(/冒烟（\d+ 项断言）/);
+    expect(readmeZh).not.toMatch(/\*\*\d+ 个单元测试\*\*/);
+    expect(readmeZh).not.toMatch(/\*\*\d+ 项端到端断言\*\*/);
+    expect(readmeZh).toContain('见 `npm run test` 输出');
+    expect(readmeZh).toContain('见 `npm run smoke` 输出');
   });
 });

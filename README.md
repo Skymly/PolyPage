@@ -1,206 +1,186 @@
 # PolyPage — Web Translator Extension
 
-网页翻译浏览器插件 **4.2.1**（Chrome / Edge 发行主线，Firefox MV3 可加载 MVP；Manifest V3，TypeScript + C#/.NET 本地网关）。
+**English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
-接入你自己的 **LLM / 翻译 API / 本地模型**，在网页、PDF、图片、视频字幕和无字幕音视频上获得翻译：
+Web translation browser extension **4.2.1** (Chrome / Edge release mainline, Firefox MV3 temporarily loadable MVP; Manifest V3, TypeScript + C#/.NET local gateway).
 
-- 原文 / 译文 / 双语对照 / **段内 inline 对照** 等六种网页显示模式；
-- **PDF 双语阅读器**：扩展内阅读器页（本地 pdf.js），逐页文本聚类、按页惰性翻译、
-  文档指纹缓存（重复打开零 API 调用）、扫描页可按当前 OCR 引擎识别；
-- **图片文字翻译（OCR）**：右键 / 悬停按钮触发；多模态视觉一步翻译，或
-  **tesseract-wasm 本地识别后再走文本管线**；Shadow DOM 结果面板；
-- **视频字幕翻译**：接管 `<track>` 字幕，自绘双语字幕层；`subtitleSelectors`
-  站点规则适配自绘字幕站点（如 YouTube）；
-- **无字幕视频 / 音频 ASR**：用户点击后从当前播放位置采集有限窗口，转写成内存 cue，
-  复用同一字幕层翻译与还原（默认不自动转写整段）；
-- **划词翻译 + 朗读**、Alt+Q 重复上次划词、**标记坏句反馈日志**（CSV/JSON 导出）；
-- **页面语言自动检测**（本地零依赖 12 语言）：auto 源语言填充 + 同语言自动翻译守护；
-- **续译**：后台任务表持久化（IndexedDB），SW 重启后按 tab 恢复在途任务（缓存幂等）；
-- **Shadow DOM / iframe（同源+跨源）/ 站点规则 / 虚拟列表视口翻译** 兼容；
-- **DeepL / Azure Translator / Google Translate / Ollama / Whisper 网关** 预设与故障转移链；
-- **本地 .NET 网关（Native Messaging Host）**：可选依赖，协议 v2 支持图片 / 转写 / 分块；
-- 术语表、双语导出、翻译缓存、批量合并、超时/重试、错误分类与日志。
+Bring your own **LLM / translation API / local model** to translate web pages, PDFs, images, video subtitles, and subtitle-free audio/video:
 
-> 当前规格以 `PolyPage-4.2.md` 与 `docs/VALIDATION-4.2.md` 为准。已完成的 1.0–4.1 规划与
-> 验证记录在 `docs/history/`。Firefox 差异见 `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
+- Six web display modes, including original / translated / bilingual / **in-paragraph inline comparison**;
+- **Bilingual PDF reader**: in-extension reader page (local pdf.js), per-page text clustering, lazy per-page translation, document fingerprint caching (zero API calls when reopening), and OCR support on scanned pages via the active OCR engine;
+- **Image text translation (OCR)**: triggered via context menu / hover button; one-step multimodal vision translation, or **local `tesseract-wasm` recognition followed by the text pipeline**; Shadow DOM result panel;
+- **Video subtitle translation**: takes over `<track>` subtitles with a custom bilingual subtitle overlay; `subtitleSelectors` site rules adapt custom-rendered subtitle sites (such as YouTube);
+- **Subtitle-free video / audio ASR**: after the user clicks, captures a finite window from the current playback position, transcribes it into in-memory cues, and reuses the same subtitle overlay for translation and restore (never auto-transcribes full media by default);
+- **Selection translation + speech synthesis**, `Alt+Q` to repeat the last selection, and **flag-bad-translation feedback log** (CSV/JSON export);
+- **Automatic page language detection** (zero-dependency local 12-language detector): populates `auto` source language + same-language auto-translate guard;
+- **Resume translation**: persistent background task table (IndexedDB) restores in-flight tasks by tab after Service Worker restarts (cache-idempotent);
+- Compatible with **Shadow DOM / iframes (same-origin + cross-origin) / site rules / virtual list viewport translation**;
+- Presets and failover chains for **DeepL / Azure Translator / Google Translate / Ollama / Whisper gateway**;
+- **Local .NET gateway (Native Messaging Host)**: optional dependency; protocol v2 supports image / transcription / chunking;
+- Glossary, bilingual export, translation cache, batch merging, timeout/retry, error classification, and logging.
+
+> Current specification follows `PolyPage-4.2.md` and `docs/VALIDATION-4.2.md`. Completed 1.0–4.1 plans and verification records live in `docs/history/`. See `docs/FIREFOX-MV3.md` for Firefox differences and `docs/store/` for store submission materials.
 
 ---
 
-## 4.2 新特性（对照 PolyPage-4.2.md）
+## What's new in 4.2 (per PolyPage-4.2.md)
 
-4.1 能力全部保留。4.2 不另开大功能，把译文洗干净、把 Firefox 网关最后一公里走完，并把 4.1 允许顺延的精修做实：
+All 4.1 capabilities are retained. 4.2 introduces no major new features; it focuses on cleaning up translated output, finishing the Firefox gateway last mile, and completing deferred 4.1 polish:
 
-| 支柱 | 能力 |
+| Pillar | Capabilities |
 |---|---|
-| P 译文卫生 | 统一剥离 `<think>` / qwen3 残片；剥空视为失败不写缓存/TM；Options 可关；MiniMax Token Plan 误指 `.io` 时提示换 `api.minimax.chat` |
-| Q Firefox 网关 | 隔离 profile + Marionette 临时加载 `dist-firefox/` 后探测 `host-status` 与一笔 native-host 翻译；失败则明确降级 |
-| R 流式/覆盖/版面 | 有 `transcribeStream` 才真注入 cue；覆盖随滚动重算；PDF 表格夹具 |
+| P Translation hygiene | Unified stripping of `<think>` / qwen3 fragments; treats empty post-strip results as failures without writing cache/TM; toggleable in Options; hints switching to `api.minimax.chat` when MiniMax Token Plan mistakenly points to `.io` |
+| Q Firefox gateway | Loads `dist-firefox/` temporarily via isolated profile + Marionette, then probes `host-status` and one native-host translation; degrades cleanly with an explicit reason on failure |
+| R Streaming / overlay / layout | Injects cues only when `transcribeStream` is actually implemented; recalculates overlays on scroll; PDF table fixtures |
 
-设置 `schemaVersion: 6`。消息协议标记 `v: 6`。网关 `4.2.1`，`ProtocolVersion = 2`。
+Settings `schemaVersion: 6`. Message protocol marker `v: 6`. Gateway `4.2.1`, `ProtocolVersion = 2`.
 
-## 4.1 新特性（对照 docs/history/PolyPage-4.1.md）
+## What's new in 4.1 (per docs/history/PolyPage-4.1.md)
 
-4.0 能力全部保留。4.1 兑现欠账：
+All 4.0 capabilities are retained. 4.1 fulfills remaining items:
 
-| 支柱 | 能力 |
+| Pillar | Capabilities |
 |---|---|
-| M 句子 TM | 独立 IndexedDB；默认关；归一化精确匹配跳过 Provider；环形 5000；Options 可清空；导出不含 TM |
-| N OCR 语言包 | Options 下载 jpn/kor/fra/deu（tessdata_fast + 哈希）；识别时与 eng/chi_sim 一并交给 tesseract |
-| O Firefox 网关 | 临时加载 `dist-firefox/` 后 `connectNative` ping + 一笔翻译，或失败 failover 并说明原因 |
-| P1/P2 | 流式 cue 有能力才启用；图片原位覆盖默认关；PDF 单栏/双栏/表格预设 |
+| M Sentence TM | Dedicated IndexedDB; off by default; normalized exact match skips Provider; 5000-entry ring buffer; clearable in Options; omitted from exports |
+| N OCR language packs | Download `jpn`/`kor`/`fra`/`deu` (`tessdata_fast` + hash verification) in Options; passed to Tesseract alongside `eng`/`chi_sim` during recognition |
+| O Firefox gateway | Loads `dist-firefox/` temporarily, then performs `connectNative` ping + one translation, or fails over with an explicit reason |
+| P1/P2 | Streaming cues enabled only when supported; in-place image overlay off by default; PDF single-column/two-column/table presets |
 
-设置 `schemaVersion: 5`。消息协议标记 `v: 5`。网关 `4.1.0`，`ProtocolVersion = 2`。
+Settings `schemaVersion: 5`. Message protocol marker `v: 5`. Gateway `4.1.0`, `ProtocolVersion = 2`.
 
-## 4.0 新特性（对照 docs/history/PolyPage-4.0.md）
+## What's new in 4.0 (per docs/history/PolyPage-4.0.md)
 
-3.0 的网页六模式、PDF / 图片 / 有字幕视频与体验收口全部保留。4.0 增量：
+All 3.0 capabilities — six web modes, PDF / image / subtitled video, and UX polish — are retained. 4.0 additions:
 
-| 支柱 | 能力 |
+| Pillar | Capabilities |
 |---|---|
-| I 语音与无字幕视频 | 用户触发采集（默认 90 秒窗口，整段二次确认）；`Provider.transcribe` 或网关 Whisper；结果切成内存 cue，复用 3.0 字幕层；有 `<track>` 的视频不默认走 ASR |
-| J 网关多模态 | 协议 v2（只增不改）：`translate.image` / `transcribe` / `binary.chunk`；capabilities 增加 `supportsVision` / `supportsAsr`；`WhisperBackend` 编排用户自装的 whisper.cpp / faster-whisper，不内嵌权重 |
-| K 离线与质量 | 真实 tesseract-wasm（eng + chi_sim 本地打包）；扫描 PDF「识别本页」走当前 `OcrEngine`；字幕上下对调 / 背景 / 垂直位置；schema v4（v3→v4 只补默认值） |
-| L 可分发 | `dist-firefox/` 可临时加载；安装器写 Mozilla Native Messaging 键；`docs/store` 隐私 / 权限 / listing 草稿。AMO 上架不是 4.0 退出条件 |
+| I Speech & subtitle-free video | User-triggered capture (90-second default window; secondary confirmation for full media); `Provider.transcribe` or gateway Whisper; results segmented into in-memory cues reusing the 3.0 subtitle overlay; videos with `<track>` do not route through ASR by default |
+| J Gateway multimodal | Protocol v2 (additive only): `translate.image` / `transcribe` / `binary.chunk`; capabilities add `supportsVision` / `supportsAsr`; `WhisperBackend` orchestrates user-installed `whisper.cpp` / `faster-whisper` without bundling weights |
+| K Offline & quality | Real `tesseract-wasm` (`eng` + `chi_sim` bundled locally); "Recognize this page" on scanned PDFs runs through the active `OcrEngine`; subtitle top/bottom swap / background / vertical position; schema v4 (v3→v4 fills defaults only) |
+| L Distributable | `dist-firefox/` is temporarily loadable; installer writes Mozilla Native Messaging keys; `docs/store` privacy / permissions / listing drafts. AMO publishing is not a 4.0 exit gate |
 
-消息协议标记 `v: 4`（v1–v3 兼容）。设置 `schemaVersion: 4`。网关 `4.0.0`，`ProtocolVersion = 2`。
+Message protocol marker `v: 4` (v1–v3 compatible). Settings `schemaVersion: 4`. Gateway `4.0.0`, `ProtocolVersion = 2`.
 
-4.1 规划见 `docs/history/PolyPage-4.1.md`。4.2 规划见 `PolyPage-4.2.md`（消化 `docs/history/VALIDATION-4.1.md` §4：译文卫生、Firefox 进程内网关为 P0；流式 cue / 覆盖精修为 P1；表格夹具为 P2）。
+See `docs/history/PolyPage-4.1.md` for the 4.1 plan and `PolyPage-4.2.md` for the 4.2 plan (incorporating `docs/history/VALIDATION-4.1.md` §4: translation hygiene and Firefox in-process gateway as P0; streaming cues / overlay polish as P1; table fixtures as P2).
 
-## 目录结构
+## Directory layout
 
 ```text
 ├── public/
-│   ├── icons/                  # 构建脚本生成的图标
-│   └── manifest.json           # MV3 清单 4.2.1（可选 webNavigation，无麦克风）
+│   ├── icons/                  # Icons generated by the build script
+│   └── manifest.json           # MV3 manifest 4.2.1 (optional webNavigation, no microphone)
 ├── src/
-│   ├── background/             # service-worker + nativePort（队列/failover/OCR/ASR/续译）
-│   ├── content/                # 网页翻译 + 字幕层 + 划词 + 图片按钮 + ASR 采集
-│   ├── asr/                    # ★ 转写切段（有 segments / 纯文本均分）
-│   ├── viewer/                 # PDF 双语阅读器（含扫描页 OCR）
-│   ├── ocr/                    # OcrEngine + llm-vision + tesseract-wasm + 结果面板
-│   ├── popup/                  # 六模式、PDF/字幕/ASR 入口
-│   ├── options/                # 常规/服务/术语表/站点规则/PDF/图片/字幕/ASR/网关/反馈…
-│   ├── providers/              # 可选 translateStream / translateImage / transcribe
-│   ├── storage/                # settings schema v6 + 迁移 + cache + feedback + taskTable
-│   ├── messaging/messages.ts   # 协议 v6（全量类型化，旧消息兼容）
+│   ├── background/             # service-worker + nativePort (queue/failover/OCR/ASR/resume)
+│   ├── content/                # Web translation + subtitle overlay + selection + image button + ASR capture
+│   ├── asr/                    # ★ Transcript segmentation (using segments or even plain-text split)
+│   ├── viewer/                 # Bilingual PDF reader (with scanned-page OCR)
+│   ├── ocr/                    # OcrEngine + llm-vision + tesseract-wasm + result panel
+│   ├── popup/                  # Six modes, PDF/subtitle/ASR entry points
+│   ├── options/                # General/Services/Glossary/Site rules/PDF/Image/Subtitle/ASR/Gateway/Feedback…
+│   ├── providers/              # Optional translateStream / translateImage / transcribe
+│   ├── storage/                # settings schema v6 + migrations + cache + feedback + taskTable
+│   ├── messaging/messages.ts   # Protocol v6 (fully typed, backward-compatible with legacy messages)
 │   ├── shared/                 # types/constants/binaryChunk/languageDetect/…
 │   └── styles/
-├── vendor/                     # pdf.js + tesseract.js + tessdata（构建期 SHA-256 校验）
-├── native-host/                # C#/.NET 网关 4.2.1 / 协议 v2（Ollama / HTTP / Whisper）
+├── vendor/                     # pdf.js + tesseract.js + tessdata (SHA-256 verified at build time)
+├── native-host/                # C#/.NET gateway 4.2.1 / protocol v2 (Ollama / HTTP / Whisper)
 ├── scripts/
 │   ├── build.mjs               # Chrome/Edge dist/ + Firefox dist-firefox/
-│   ├── manifest-firefox.mjs    # gecko.id + background.scripts 事件页
-│   ├── smoke-test.mjs          # 无头 Edge 端到端冒烟（见 `npm run smoke` 输出）
+│   ├── manifest-firefox.mjs    # gecko.id + background.scripts event page
+│   ├── smoke-test.mjs          # Headless Edge E2E smoke test (see `npm run smoke` output)
 │   ├── gateway-contract-test.mjs
 │   ├── gateway-ollama-check.mjs
-│   └── load-edge-ollama.mjs    # headed Edge + 本地 Ollama 手动联调
-├── tests/                      # vitest 单元测试（见 `npm run test` 输出）
-└── docs/                       # VALIDATION-4.2、history/、FIREFOX-MV3、store/
+│   └── load-edge-ollama.mjs    # Headed Edge + local Ollama manual integration script
+├── tests/                      # vitest unit tests (see `npm run test` output)
+└── docs/                       # VALIDATION-4.2, history/, FIREFOX-MV3, store/
 ```
 
-## 开发
+## Development
 
-推荐 Node.js 24（支持范围见 `package.json` 的 `engines`）。运行完整网关验证需要 Windows、
-.NET 10 SDK 与 .NET 8 运行时（网关测试目标为 `net8.0`）。
+Node.js 24 is recommended (see `engines` in `package.json` for supported ranges). Running full gateway verification requires Windows, the .NET 10 SDK, and the .NET 8 runtime (gateway tests target `net8.0`).
 
 ```bash
 npm ci
-npm run build        # 产出 dist/ 与 dist-firefox/
-npm run typecheck    # tsc --noEmit（strict）
-npm run test         # vitest（见命令输出）
-npm run smoke        # 无头 Edge 端到端冒烟（需已构建；含网关安装/卸载）
-npm run verify       # typecheck + test + build + 网关 xUnit
-npm run test:contract # 当前提交的网关 stdio 契约
-npm run verify:all   # verify + stdio 契约 + Edge smoke（不含 Firefox）
+npm run build        # Produces dist/ and dist-firefox/
+npm run typecheck    # tsc --noEmit (strict)
+npm run test         # vitest (see `npm run test` output)
+npm run smoke        # Headless Edge E2E smoke test (requires build; includes gateway install/uninstall)
+npm run verify       # typecheck + test + build + gateway xUnit
+npm run test:contract # Gateway stdio contract against the current commit
+npm run verify:all   # verify + stdio contract + Edge smoke (excludes Firefox)
 
-# 网关
+# Gateway
 dotnet build native-host/PolyPage.slnx
-dotnet test  native-host/PolyPage.slnx                     # 见命令输出
+dotnet test  native-host/PolyPage.slnx                     # see command output
 ```
 
-加载扩展：
+Load the extension:
 
-- Chrome / Edge：`chrome://extensions`（Edge 为 `edge://extensions`）→ 开发者模式 →
-  「加载已解压的扩展」选择 `dist/`。
-- Firefox：`about:debugging` → 此 Firefox → 临时载入附加组件 → 选择
-  `dist-firefox/manifest.json`。能力降级见 `docs/FIREFOX-MV3.md`。
+- Chrome / Edge: `chrome://extensions` (`edge://extensions` on Edge) → Developer mode → **Load unpacked** → select `dist/`.
+- Firefox: `about:debugging` → This Firefox → **Load Temporary Add-on…** → select `dist-firefox/manifest.json`. See `docs/FIREFOX-MV3.md` for capability differences.
 
-> 正版 Chrome 的无头模式忽略 `--load-extension`，因此冒烟测试使用 Edge。
-> 直连本地 Ollama 时请设置 `OLLAMA_ORIGINS=*`（或 `chrome-extension://*` /
-> `moz-extension://*`）后从托盘退出并重启 Ollama；否则扩展 Origin 会得到 HTTP 403。
+> Official Chrome's headless mode ignores `--load-extension`, so smoke tests run against Edge.  
+> When connecting directly to a local Ollama instance, set `OLLAMA_ORIGINS=*` (or `chrome-extension://*` / `moz-extension://*`), then quit Ollama from the system tray and restart it; otherwise requests from the extension Origin return HTTP 403.
 
-## 配置翻译服务
+## Configuring translation services
 
-设置页 → 「翻译服务」→ 「添加服务」，选择预设会自动填入服务地址。支持模型列表的服务可填入 API Key 后点「获取模型列表」，再选模型并保存。也可手动输入模型 ID，或添加自定义 OpenAI 兼容接口。多个 Provider 可共存，可选择当前服务并配置**故障转移链**。
+Options → **Translation Services** → **Add Service**; choosing a preset populates the service endpoint automatically. Services that expose a model list allow entering your API Key and clicking **Fetch Models**, then selecting a model and saving. You can also enter a model ID manually or add a custom OpenAI-compatible endpoint. Multiple providers can coexist, and you can select an active provider and configure a **failover chain**.
 
-- **openai-compatible**：`POST {baseUrl}/chat/completions`，支持 SSE 流式、MiniMax Token Plan（`api.minimax.chat` / MiniMax-M3 视觉）、
+- **openai-compatible**: `POST {baseUrl}/chat/completions`, supports SSE streaming, MiniMax Token Plan (`api.minimax.chat` / MiniMax-M3 vision), **vision translation (`image_url`)**, and **`/audio/transcriptions` transcription**; local endpoints do not require an API Key.
+- **OpenCode Go**: uses a personal API Key from a subscribed workspace. Quota displays remaining 5-hour, weekly, and monthly percentages with reset times, and can be queried manually or refreshed automatically every 15 minutes while the browser is running. OpenCode Go primarily targets coding clients; translation compatibility should be verified via the connection test. [OpenCode Go documentation](https://opencode.ai/docs/console/go/#where-can-i-use-it)
+- **deepl / azure-translator / google-translate**: uses each provider's official endpoint and authentication.
+- **custom-http**: configurable body template + response path.
+- **native-host**: routes to Ollama / HTTP / Whisper through the local .NET gateway. Legacy protocol 1 gateways gray out vision and ASR instead of throwing.
 
-  **视觉翻译（image_url）** 与 **`/audio/transcriptions` 转写**；本地端点免 API Key。
-- **OpenCode Go** 使用已订阅工作区的个人 API Key。订阅额度显示 5 小时、每周和每月的剩余百分比及重置时间，可立即查询，也可在浏览器运行期间每 15 分钟自动刷新。OpenCode Go 官方主要面向编程客户端，翻译请求的可用性以连接测试为准。[OpenCode Go 官方说明](https://opencode.ai/docs/console/go/#where-can-i-use-it)
-- **deepl / azure-translator / google-translate**：各自官方端点与鉴权。
-- **custom-http**：Body 模板 + 响应路径。
-- **native-host**：经本地 .NET 网关路由到 Ollama / HTTP / Whisper。协议 1 旧网关
-  会置灰视觉与 ASR，不抛错。
+If a Provider does not support an optional capability, its corresponding UI entry point is disabled with a clear reason rather than falling back silently through an alternative path.
 
-不支持某项可选能力的 Provider，对应入口置灰并给出原因，不另开旁路。
+Prompt template variables: `{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} {{domain}} {{glossary}}`.
 
-Prompt 模板变量：`{{sourceLanguage}} {{targetLanguage}} {{text}} {{texts}} {{domain}} {{glossary}}`。
+## Entry points
 
-## 使用入口
+- **PDF**: Popup **Open Bilingual Reader** (shown when a PDF is detected) / context menu **Open Bilingual Reader with PolyPage** / link context menu; Options can enable **Auto-open when visiting PDF links** (requires granting `webNavigation`). Scanned pages show a **Recognize this page** action beside the notice (runs through the active OCR engine).
+- **Images**: Image context menu **Translate Image Text**, or hover over large images to click the **Translate Image** button in the top-right corner. `llm-vision` requires a vision Provider; `tesseract-wasm` lets text-only models recognize text first and then translate it.
+- **Subtitles**: On video pages with `<track>`, toggle **Subtitle Translation** in the Popup; toggle again to restore original subtitles.
+- **Subtitle-free media**: Popup / context menu **Transcribe & Translate**; captures a finite window from the current playback position by default, with secondary confirmation for full-media transcription. In-memory cues are discarded on close. Does not request microphone permission.
+- **Text selection**: Selecting text shows a floating button; the panel supports read-aloud (`Alt+Click` reads source text), flagging bad sentences, and copying; `Alt+Q` repeats the last selection.
+- **Feedback**: Hover a bilingual block / subtitle cue / PDF block and click **Flag bad sentence**; export from Options → **Feedback Log**.
 
-- **PDF**：Popup「打开双语阅读器」（检测到 PDF 时出现）/ 右键「用 PolyPage 打开双语阅读器」/
-  链接右键；设置可开「访问 PDF 链接自动打开」（需授予 webNavigation）。扫描页提示旁可
-  「识别本页」（走当前 OCR 引擎）。
-- **图片**：图片右键「翻译图片文字」或悬停大图右上角「译图」按钮。`llm-vision` 需要
-  视觉 Provider；`tesseract-wasm` 可在纯文本模型上先识别再翻译。
-- **字幕**：带 `<track>` 的视频页，Popup「字幕翻译」开关；再按一次还原原字幕。
-- **无字幕媒体**：Popup / 右键「转写并翻译」；默认从当前播放位置起有限窗口，整段需二次确认。
-  关闭即丢弃内存 cue。不申请麦克风。
-- **划词**：选中文字出悬浮按钮；面板支持朗读（Alt+点击读原文）、标记坏句、复制；
-  Alt+Q 重复上一次划词。
-- **反馈**：双语块 / 字幕层 / PDF 块悬停「标记坏句」；Options →「反馈日志」导出。
+## Architecture highlights
 
-## 架构要点
+- **Unified background pipeline**: Web pages, PDFs, image OCR, subtitle cues, and ASR output all share the same queue / batching / cache / failover / error-classification pipeline; content scripts and viewer pages have zero direct API contact.
+- **User-triggered first**: Automatic full-video transcription is prohibited; images and scanned pages only react to user clicks. Lazy per-page PDF translation after opening the reader is bounded by viewport and concurrency limits.
+- **Non-destructive**: Never modifies source PDFs, source video/subtitle files, or writes back to SRT/VTT. Restoring web pages is reversible at the text/markup structure level (removing translated chrome and `data-wt-id`), not byte-identical DOM equality; `inline` mode stores originals via `cloneNode`, so restore does not reattach event listeners or framework bindings.
+- **Message protocol v6** (`src/messaging/messages.ts`): legacy messages remain supported.
+- **Resume**: Task table tracks in-flight web/PDF tasks; ASR never enters the 3.0 resume table and is cleaned up when the tab closes.
+- **Sensitive data**: API Keys live only in background storage or the local gateway; no additional mandatory permissions and no microphone permission.
 
-- **统一后台管线**：网页、PDF、图片 OCR、字幕 cue 与 ASR 产物全部复用同一
-  队列 / 批量 / 缓存 / failover / 错误分类管线；内容脚本与视图页零 API 接触。
-- **用户触发优先**：禁止自动转写整页视频；图片 / 扫描页只响应用户点击。
-  PDF 阅读器打开后的按页惰性翻译受视口与并发限制。
-- **不破坏原始内容**：不改 PDF 源文件、不改视频源与字幕文件、不写回 SRT/VTT。
-  网页翻译的还原是文本/标记结构级可逆（卸掉译文 chrome 与 `data-wt-id`），不是逐字节 DOM 等价；inline 模式用 `cloneNode` 保存原文，还原不恢复事件监听与框架绑定。
-- **消息协议 v6**（`src/messaging/messages.ts`）：旧消息仍可处理。
-- **续译**：任务表记录在途网页/PDF 任务；ASR 不入 3.0 续译表。tab 关闭即清理。
-- **敏感信息**：API Key 只存后台或本机网关；无新增必选权限，不申请麦克风。
+## Verification
 
-## 验证
+- Regular CI runs `npm ci`, `npm run verify`, and `npm run test:contract` on Windows.
+- Before release, manually trigger [Browser validation](.github/workflows/browser-validation.yml) in GitHub Actions. Confirm both jobs run against the exact release candidate commit: Edge executes the full E2E smoke test, while Firefox temporarily loads the extension and completes a local stub translation through the gateway built from the same commit. Both jobs run on clean hosted runners without real providers, keys, or Whisper weights.
+- Running `npm run smoke` locally temporarily registers and unregisters the test gateway; full Windows browser validation should prefer the hosted runners above.
+- See [4.2 sign-off notes](docs/VALIDATION-4.2.md) for historical release validation and known gaps.
 
-- 常规 CI 在 Windows 跑 `npm ci`、`npm run verify` 和 `npm run test:contract`。
-- 发布前在 GitHub Actions 手动运行 [Browser validation](.github/workflows/browser-validation.yml)。
-  核对两个任务都运行在待发布提交：Edge 跑完整冒烟，Firefox 临时加载扩展，并通过同一提交编译的网关完成一次本地桩翻译。
-  两个任务各用独立托管 runner，不需要真实 Provider、密钥或 Whisper 权重。
-- 本机 `npm run smoke` 会临时注册和卸载测试网关；完整 Windows 浏览器验证优先放在上述托管 runner。
-- 历史发布验证与已知缺口见 [4.2 收口记录](docs/VALIDATION-4.2.md)。
+## Known limitations
 
-## 已知限制
+- Two-column / table clustering in PDFs remains heuristic and does not guarantee perfect layout preservation;
+- No Provider currently implements `transcribeStream`, so ASR injects subtitles in one batch after transcription completes; in-memory cues are discarded on close and are not exported as SRT/VTT;
+- DRM or media unable to use `captureStream` raises an error and refuses to download the full file; entry points are not pre-disabled by DRM detection, and neither `tabCapture` nor microphone permissions are requested;
+- `subtitleSelectors` are rule-driven and break when sites change their DOM (built-in YouTube rules update with extension releases);
+- `tesseract` bundles `eng` + `chi_sim` by default; extra language packs can be downloaded in Options;
+- **Translated-only mode** replaces paragraphs with plain text (bilingual / inline modes preserve markup structure);
+- Closed Shadow DOMs cannot be traversed (browser restriction);
+- Firefox runs as a temporary loadable add-on and degrades cleanly when the Native Host is unavailable. Safari, mobile browsers, and AMO store publishing are outside the 4.2 scope.
 
-- PDF 双栏 / 表格聚类仍为启发式，不承诺完美版面；
-- 目前没有 Provider 实现 `transcribeStream`，ASR 在转写结束后一次性注入字幕；关闭即丢内存 cue，不导出 SRT/VTT；
-- DRM / 无法 `captureStream` 时报错并拒绝下载整段文件；不按 DRM 预先置灰入口，也不申请 tabCapture 或麦克风；
-- `subtitleSelectors` 为规则驱动，站点改版即失效（内置 YouTube 规则随版本更新）；
-- tesseract 默认只打包 `eng` + `chi_sim`；附加语言包可在 Options 下载；
-- 「译文模式」段落整体替换为纯文本（双语/段内模式保留标记结构）；
-- closed Shadow DOM 无法进入（浏览器限制）；
-- Firefox 可临时加载，Native Host 不可用时降级。Safari、移动端和 AMO 上架不在 4.2 范围。
+## 4.3 candidate roadmap
 
-## 4.3 候选路线
+Proceed in the order below only after 4.2 release verification passes. All items below are pending work items, not 4.2 delivery commitments.
 
-先通过 4.2 发布验证，再按下列顺序推进。以下均为待实施事项，不是 4.2 的交付承诺。
-
-| 顺序 | 范围 | 验收条件 |
+| Order | Scope | Acceptance criteria |
 |---|---|---|
-| 1 | 真实 Whisper 联调 | 使用固定短音频、用户自装权重和 Windows 网关；记录后端、模型版本和命令，用真实转写验证时间戳、双语 cue 与关闭后的清理。无权重时明确标记未验证，不能用桩替代。 |
-| 2 | 纯 `<audio>` 字幕条 | 复用现有 cue 调度；覆盖播放、跳转、关闭和切换音源，并验证已有视频字幕不回退。 |
-| 3 | SRT 导出 | 仅导出用户主动触发的当前 cue；验证时间顺序、Unicode 与格式，不改写媒体或源字幕。 |
-| 4 | PDF 复杂版面 | 先补真实表格与双栏夹具；验证不跨单元格串段，并保留按行回退。 |
+| 1 | Real Whisper integration | Use a fixed short audio clip, user-installed weights, and the Windows gateway; record backend, model version, and commands, and verify timestamps, bilingual cues, and cleanup after close using real transcription. If weights are unavailable, mark explicitly as unverified rather than substituting stubs. |
+| 2 | `<audio>`-only subtitle bar | Reuse the existing cue scheduler; cover play, seek, close, and switching media sources, and verify no regression on existing video subtitles. |
+| 3 | SRT export | Export only current cues explicitly triggered by the user; verify timestamp ordering, Unicode, and formatting without modifying source media or subtitles. |
+| 4 | Complex PDF layouts | Add real table and two-column fixtures first; verify segments do not bleed across cells while retaining line-level fallback. |
 
-流式 ASR 等实际后端提供 `transcribeStream` 后再立项；继续保留用户触发、不申请麦克风、不随扩展分发 Whisper 权重的约束。
+Streaming ASR will be scoped only after an actual backend provides `transcribeStream`, preserving user-triggered capture, no microphone permissions, and not bundling Whisper weights with the extension.

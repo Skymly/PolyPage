@@ -17,3 +17,8 @@ native-host/**/obj/
 TestResults/
 coverage/
 nul
+
+# Local scratch directories
+.scratch/
+.Local/
+.Temp/

@@ -2,7 +2,10 @@
 
 [English](README.md) | **简体中文** | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
-网页翻译浏览器插件 **4.2.1**（Chrome / Edge 发行主线，Firefox MV3 可加载 MVP；Manifest V3，TypeScript + C#/.NET 本地网关）。
+[![CI](https://github.com/Skymly/PolyPage/actions/workflows/ci.yml/badge.svg)](https://github.com/Skymly/PolyPage/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/Skymly/PolyPage?label=Release)](https://github.com/Skymly/PolyPage/releases)
+
+支持 Chrome、Edge 与 Firefox 的 Manifest V3 双语网页翻译浏览器扩展（TypeScript + 可选 C#/.NET 本地网关）。
 
 接入你自己的 **LLM / 翻译 API / 本地模型**，在网页、PDF、图片、视频字幕和无字幕音视频上获得翻译：
 
@@ -23,50 +26,16 @@
 - **本地 .NET 网关（Native Messaging Host）**：可选依赖，协议 v2 支持图片 / 转写 / 分块；
 - 术语表、双语导出、翻译缓存、批量合并、超时/重试、错误分类与日志。
 
-> 当前规格以 `PolyPage-4.2.md` 与 `docs/VALIDATION-4.2.md` 为准。已完成的 1.0–4.1 规划与
-> 验证记录在 `docs/history/`。Firefox 差异见 `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
+> 当前规格以 `PolyPage-4.2.md` 与 `docs/VALIDATION-4.2.md` 为准。已完成的 1.0–4.1 规划与验证记录在 `docs/history/`。Firefox 差异见 `docs/FIREFOX-MV3.md`；商店材料在 `docs/store/`。
 
----
+<details>
+<summary>版本演进要点（4.0 – 4.2）</summary>
 
-## 4.2 新特性（对照 PolyPage-4.2.md）
+- **4.2**（`PolyPage-4.2.md`）：统一剥离 `<think>` / qwen3 残片（剥空视为失败不写缓存/TM）、隔离 profile + Marionette 验证 Firefox `host-status` 与 native-host 翻译、按实际能力门控流式 cue、滚动重算覆盖层及 PDF 表格夹具。设置 `schemaVersion: 6`，协议 `v: 6`，网关 `4.2.1`（`ProtocolVersion = 2`）。
+- **4.1**（`docs/history/PolyPage-4.1.md`）：默认关闭的独立 IndexedDB 句子 TM（5000 条环形缓冲）、Options 下载 `tessdata_fast` OCR 语言包（`jpn`/`kor`/`fra`/`deu`）、Firefox `connectNative` ping 与翻译探测、PDF 单栏/双栏/表格预设（`schemaVersion: 5`）。
+- **4.0**（`docs/history/PolyPage-4.0.md`）：用户触发的无字幕音视频采集（默认 90 秒窗口）与网关 Whisper 编排、多模态 `translate.image` / `transcribe` / `binary.chunk` 协议 v2、内置 `tesseract-wasm`（`eng` + `chi_sim`）及 `dist-firefox/` MVP（`schemaVersion: 4`）。
 
-4.1 能力全部保留。4.2 不另开大功能，把译文洗干净、把 Firefox 网关最后一公里走完，并把 4.1 允许顺延的精修做实：
-
-| 支柱 | 能力 |
-|---|---|
-| P 译文卫生 | 统一剥离 `<think>` / qwen3 残片；剥空视为失败不写缓存/TM；Options 可关；MiniMax Token Plan 误指 `.io` 时提示换 `api.minimax.chat` |
-| Q Firefox 网关 | 隔离 profile + Marionette 临时加载 `dist-firefox/` 后探测 `host-status` 与一笔 native-host 翻译；失败则明确降级 |
-| R 流式/覆盖/版面 | 有 `transcribeStream` 才真注入 cue；覆盖随滚动重算；PDF 表格夹具 |
-
-设置 `schemaVersion: 6`。消息协议标记 `v: 6`。网关 `4.2.1`，`ProtocolVersion = 2`。
-
-## 4.1 新特性（对照 docs/history/PolyPage-4.1.md）
-
-4.0 能力全部保留。4.1 兑现欠账：
-
-| 支柱 | 能力 |
-|---|---|
-| M 句子 TM | 独立 IndexedDB；默认关；归一化精确匹配跳过 Provider；环形 5000；Options 可清空；导出不含 TM |
-| N OCR 语言包 | Options 下载 jpn/kor/fra/deu（tessdata_fast + 哈希）；识别时与 eng/chi_sim 一并交给 tesseract |
-| O Firefox 网关 | 临时加载 `dist-firefox/` 后 `connectNative` ping + 一笔翻译，或失败 failover 并说明原因 |
-| P1/P2 | 流式 cue 有能力才启用；图片原位覆盖默认关；PDF 单栏/双栏/表格预设 |
-
-设置 `schemaVersion: 5`。消息协议标记 `v: 5`。网关 `4.1.0`，`ProtocolVersion = 2`。
-
-## 4.0 新特性（对照 docs/history/PolyPage-4.0.md）
-
-3.0 的网页六模式、PDF / 图片 / 有字幕视频与体验收口全部保留。4.0 增量：
-
-| 支柱 | 能力 |
-|---|---|
-| I 语音与无字幕视频 | 用户触发采集（默认 90 秒窗口，整段二次确认）；`Provider.transcribe` 或网关 Whisper；结果切成内存 cue，复用 3.0 字幕层；有 `<track>` 的视频不默认走 ASR |
-| J 网关多模态 | 协议 v2（只增不改）：`translate.image` / `transcribe` / `binary.chunk`；capabilities 增加 `supportsVision` / `supportsAsr`；`WhisperBackend` 编排用户自装的 whisper.cpp / faster-whisper，不内嵌权重 |
-| K 离线与质量 | 真实 tesseract-wasm（eng + chi_sim 本地打包）；扫描 PDF「识别本页」走当前 `OcrEngine`；字幕上下对调 / 背景 / 垂直位置；schema v4（v3→v4 只补默认值） |
-| L 可分发 | `dist-firefox/` 可临时加载；安装器写 Mozilla Native Messaging 键；`docs/store` 隐私 / 权限 / listing 草稿。AMO 上架不是 4.0 退出条件 |
-
-消息协议标记 `v: 4`（v1–v3 兼容）。设置 `schemaVersion: 4`。网关 `4.0.0`，`ProtocolVersion = 2`。
-
-4.1 规划见 `docs/history/PolyPage-4.1.md`。4.2 规划见 `PolyPage-4.2.md`（消化 `docs/history/VALIDATION-4.1.md` §4：译文卫生、Firefox 进程内网关为 P0；流式 cue / 覆盖精修为 P1；表格夹具为 P2）。
+</details>
 
 ## 目录结构
 

@@ -2,7 +2,10 @@
 
 **English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
-Web translation browser extension **4.2.1** (Chrome / Edge release mainline, Firefox MV3 temporarily loadable MVP; Manifest V3, TypeScript + C#/.NET local gateway).
+[![CI](https://github.com/Skymly/PolyPage/actions/workflows/ci.yml/badge.svg)](https://github.com/Skymly/PolyPage/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/Skymly/PolyPage?label=Release)](https://github.com/Skymly/PolyPage/releases)
+
+Manifest V3 bilingual browser extension for Chrome, Edge, and Firefox (TypeScript + optional C#/.NET local gateway).
 
 Bring your own **LLM / translation API / local model** to translate web pages, PDFs, images, video subtitles, and subtitle-free audio/video:
 
@@ -21,47 +24,14 @@ Bring your own **LLM / translation API / local model** to translate web pages, P
 
 > Current specification follows `PolyPage-4.2.md` and `docs/VALIDATION-4.2.md`. Completed 1.0–4.1 plans and verification records live in `docs/history/`. See `docs/FIREFOX-MV3.md` for Firefox differences and `docs/store/` for store submission materials.
 
----
+<details>
+<summary>Release highlights (4.0 – 4.2)</summary>
 
-## What's new in 4.2 (per PolyPage-4.2.md)
+- **4.2** (`PolyPage-4.2.md`): unified stripping of `<think>` / qwen3 fragments (empty post-strip treated as failure without writing cache/TM), Firefox gateway `host-status` + native-host probe via Marionette, stream-cue gating, scroll overlay recalculation, and PDF table fixtures. Settings `schemaVersion: 6`, protocol `v: 6`, Gateway `4.2.1` (`ProtocolVersion = 2`).
+- **4.1** (`docs/history/PolyPage-4.1.md`): opt-in IndexedDB sentence TM (5000-entry ring buffer), downloadable `tessdata_fast` OCR packs (`jpn`/`kor`/`fra`/`deu`), Firefox `connectNative` ping + translation probe, and PDF column/table presets (`schemaVersion: 5`).
+- **4.0** (`docs/history/PolyPage-4.0.md`): user-triggered ASR capture (90s default window) + gateway Whisper orchestration, multimodal `translate.image` / `transcribe` / `binary.chunk` protocol v2, bundled `tesseract-wasm` (`eng` + `chi_sim`), and `dist-firefox/` MVP (`schemaVersion: 4`).
 
-All 4.1 capabilities are retained. 4.2 introduces no major new features; it focuses on cleaning up translated output, finishing the Firefox gateway last mile, and completing deferred 4.1 polish:
-
-| Pillar | Capabilities |
-|---|---|
-| P Translation hygiene | Unified stripping of `<think>` / qwen3 fragments; treats empty post-strip results as failures without writing cache/TM; toggleable in Options; hints switching to `api.minimax.chat` when MiniMax Token Plan mistakenly points to `.io` |
-| Q Firefox gateway | Loads `dist-firefox/` temporarily via isolated profile + Marionette, then probes `host-status` and one native-host translation; degrades cleanly with an explicit reason on failure |
-| R Streaming / overlay / layout | Injects cues only when `transcribeStream` is actually implemented; recalculates overlays on scroll; PDF table fixtures |
-
-Settings `schemaVersion: 6`. Message protocol marker `v: 6`. Gateway `4.2.1`, `ProtocolVersion = 2`.
-
-## What's new in 4.1 (per docs/history/PolyPage-4.1.md)
-
-All 4.0 capabilities are retained. 4.1 fulfills remaining items:
-
-| Pillar | Capabilities |
-|---|---|
-| M Sentence TM | Dedicated IndexedDB; off by default; normalized exact match skips Provider; 5000-entry ring buffer; clearable in Options; omitted from exports |
-| N OCR language packs | Download `jpn`/`kor`/`fra`/`deu` (`tessdata_fast` + hash verification) in Options; passed to Tesseract alongside `eng`/`chi_sim` during recognition |
-| O Firefox gateway | Loads `dist-firefox/` temporarily, then performs `connectNative` ping + one translation, or fails over with an explicit reason |
-| P1/P2 | Streaming cues enabled only when supported; in-place image overlay off by default; PDF single-column/two-column/table presets |
-
-Settings `schemaVersion: 5`. Message protocol marker `v: 5`. Gateway `4.1.0`, `ProtocolVersion = 2`.
-
-## What's new in 4.0 (per docs/history/PolyPage-4.0.md)
-
-All 3.0 capabilities — six web modes, PDF / image / subtitled video, and UX polish — are retained. 4.0 additions:
-
-| Pillar | Capabilities |
-|---|---|
-| I Speech & subtitle-free video | User-triggered capture (90-second default window; secondary confirmation for full media); `Provider.transcribe` or gateway Whisper; results segmented into in-memory cues reusing the 3.0 subtitle overlay; videos with `<track>` do not route through ASR by default |
-| J Gateway multimodal | Protocol v2 (additive only): `translate.image` / `transcribe` / `binary.chunk`; capabilities add `supportsVision` / `supportsAsr`; `WhisperBackend` orchestrates user-installed `whisper.cpp` / `faster-whisper` without bundling weights |
-| K Offline & quality | Real `tesseract-wasm` (`eng` + `chi_sim` bundled locally); "Recognize this page" on scanned PDFs runs through the active `OcrEngine`; subtitle top/bottom swap / background / vertical position; schema v4 (v3→v4 fills defaults only) |
-| L Distributable | `dist-firefox/` is temporarily loadable; installer writes Mozilla Native Messaging keys; `docs/store` privacy / permissions / listing drafts. AMO publishing is not a 4.0 exit gate |
-
-Message protocol marker `v: 4` (v1–v3 compatible). Settings `schemaVersion: 4`. Gateway `4.0.0`, `ProtocolVersion = 2`.
-
-See `docs/history/PolyPage-4.1.md` for the 4.1 plan and `PolyPage-4.2.md` for the 4.2 plan (incorporating `docs/history/VALIDATION-4.1.md` §4: translation hygiene and Firefox in-process gateway as P0; streaming cues / overlay polish as P1; table fixtures as P2).
+</details>
 
 ## Directory layout
 

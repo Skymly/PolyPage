@@ -2,7 +2,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **日本語**
 
-Web 翻訳ブラウザ拡張機能 **4.2.1**（Chrome / Edge リリース本線、Firefox MV3 一時読み込み MVP；Manifest V3、TypeScript + C#/.NET ローカルゲートウェイ）。
+[![CI](https://github.com/Skymly/PolyPage/actions/workflows/ci.yml/badge.svg)](https://github.com/Skymly/PolyPage/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/Skymly/PolyPage?label=Release)](https://github.com/Skymly/PolyPage/releases)
+
+Chrome・Edge・Firefox 向けの Manifest V3 バイリンガル翻訳ブラウザ拡張機能（TypeScript + 任意の C#/.NET ローカルゲートウェイ）。
 
 ご自身の **LLM / 翻訳 API / ローカルモデル** を接続し、Web ページ、PDF、画像、動画字幕、字幕なし動画／音声を翻訳できます：
 
@@ -21,47 +24,14 @@ Web 翻訳ブラウザ拡張機能 **4.2.1**（Chrome / Edge リリース本線�
 
 > 現在の仕様は `PolyPage-4.2.md` と `docs/VALIDATION-4.2.md` に準拠します。完了済みの 1.0–4.1 の計画と検証記録は `docs/history/`、Firefox の差異は `docs/FIREFOX-MV3.md`、ストア申請資料は `docs/store/` を参照してください。
 
----
+<details>
+<summary>リリースハイライト（4.0 – 4.2）</summary>
 
-## 4.2 の新機能（PolyPage-4.2.md 準拠）
+- **4.2**（`PolyPage-4.2.md`）：`<think>` / qwen3 断片の統一除去（空結果は失敗扱いとしてキャッシュ/TM 非書き込み）、隔離プロファイル + Marionette による Firefox `host-status`・native-host 翻訳検証、実装有無に応じたストリーミング cue 制御、スクロール時のオーバーレイ再計算、PDF テーブルフィクスチャ。設定 `schemaVersion: 6`、プロトコル `v: 6`、ゲートウェイ `4.2.1`（`ProtocolVersion = 2`）。
+- **4.1**（`docs/history/PolyPage-4.1.md`）：既定オフの独立 IndexedDB 文単位 TM（5000 件リングバッファ）、Options からの `tessdata_fast` OCR 言語パック（`jpn`/`kor`/`fra`/`deu`）ダウンロード、Firefox `connectNative` ping・翻訳プローブ、PDF 単段組み/二段組み/テーブルプリセット（`schemaVersion: 5`）。
+- **4.0**（`docs/history/PolyPage-4.0.md`）：ユーザー起動の字幕なし動画/音声キャプチャ（既定 90 秒ウィンドウ）およびゲートウェイ Whisper 連携、マルチモーダル `translate.image` / `transcribe` / `binary.chunk` プロトコル v2、ローカル同梱 `tesseract-wasm`（`eng` + `chi_sim`）、`dist-firefox/` MVP（`schemaVersion: 4`）。
 
-4.1 の機能はすべて維持されます。4.2 では大規模な新機能を追加せず、訳文のクレンジング、Firefox ゲートウェイの最終仕上げ、および 4.1 から繰り越されたブラッシュアップを完了させています：
-
-| 柱 | 機能 |
-|---|---|
-| P 訳文衛生 | `<think>` / qwen3 断片の統一除去；除去後に空になった場合は失敗扱いとしてキャッシュ/TM に書き込まない；Options で無効化可能；MiniMax Token Plan が誤って `.io` を指している場合に `api.minimax.chat` への変更を案内 |
-| Q Firefox ゲートウェイ | 隔離プロファイル + Marionette で `dist-firefox/` を一時読み込みし、`host-status` と 1 件の native-host 翻訳をプローブ；失敗時は明確な理由とともにフォールバック |
-| R ストリーミング/オーバーレイ/レイアウト | `transcribeStream` 実装時のみ真に cue を注入；スクロールに応じたオーバーレイ再計算；PDF テーブルフィクスチャ |
-
-設定 `schemaVersion: 6`。メッセージプロトコル識別子 `v: 6`。ゲートウェイ `4.2.1`、`ProtocolVersion = 2`。
-
-## 4.1 の新機能（docs/history/PolyPage-4.1.md 準拠）
-
-4.0 の機能はすべて維持されます。4.1 の実装内容：
-
-| 支柱 | 機能 |
-|---|---|
-| M 文単位 TM | 独立 IndexedDB；既定オフ；正規化完全一致で Provider をスキップ；リングバッファ 5000 件；Options から消去可能；エクスポートには含めない |
-| N OCR 言語パック | Options から jpn/kor/fra/deu（tessdata_fast + ハッシュ検証）をダウンロード；認識時に eng/chi_sim と併せて tesseract へ渡す |
-| O Firefox ゲートウェイ | `dist-firefox/` を一時読み込み後、`connectNative` ping + 1 件の翻訳を実行、失敗時は理由を示してフェイルオーバー |
-| P1/P2 | ストリーミング cue は対応時のみ有効；画像その場オーバーレイは既定オフ；PDF 単段組み/二段組み/テーブルプリセット |
-
-設定 `schemaVersion: 5`。メッセージプロトコル識別子 `v: 5`。ゲートウェイ `4.1.0`、`ProtocolVersion = 2`。
-
-## 4.0 の新機能（docs/history/PolyPage-4.0.md 準拠）
-
-3.0 の Web 6 モード、PDF / 画像 / 字幕付き動画、UX 仕上げはすべて維持されます。4.0 の追加内容：
-
-| 支柱 | 機能 |
-|---|---|
-| I 音声と字幕なし動画 | ユーザー起動のキャプチャ（既定 90 秒ウィンドウ、全体文字起こしは二次確認）；`Provider.transcribe` またはゲートウェイ Whisper；結果をインメモリ cue に分割し 3.0 字幕レイヤーを再利用；`<track>` 付き動画は既定で ASR を通さない |
-| J ゲートウェイマルチモーダル | プロトコル v2（後方互換の追加のみ）：`translate.image` / `transcribe` / `binary.chunk`；capabilities に `supportsVision` / `supportsAsr` を追加；`WhisperBackend` はユーザーが用意した whisper.cpp / faster-whisper を統括（重みは同梱しない） |
-| K オフラインと品質 | 実 `tesseract-wasm`（`eng` + `chi_sim` をローカル同梱）；スキャン PDF の「このページを認識」で現在の `OcrEngine` を使用；字幕上下入れ替え / 背景 / 垂直位置；schema v4（v3→v4 は既定値の補完のみ） |
-| L 配布可能性 | `dist-firefox/` が一時読み込み可能；インストーラーが Mozilla Native Messaging キーを書き込み；`docs/store` にプライバシー / 権限 / listing 下書き。AMO 公開は 4.0 の終了ゲートではない |
-
-メッセージプロトコル識別子 `v: 4`（v1–v3 互換）。設定 `schemaVersion: 4`。ゲートウェイ `4.0.0`、`ProtocolVersion = 2`。
-
-4.1 の計画は `docs/history/PolyPage-4.1.md`、4.2 の計画は `PolyPage-4.2.md` を参照してください（`docs/history/VALIDATION-4.1.md` §4 を反映：訳文衛生と Firefox インプロセスゲートウェイを P0、ストリーミング cue / オーバーレイ仕上げを P1、テーブルフィクスチャを P2 としています）。
+</details>
 
 ## ディレクトリ構成
 
